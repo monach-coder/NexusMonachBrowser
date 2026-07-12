@@ -21,8 +21,9 @@ jobs:
           Expand-Archive $archive $temporary -Force
           Get-ChildItem $temporary -Force | Copy-Item -Destination . -Recurse -Force
           Remove-Item $archive -Force
-          Remove-Item '.github/workflows/bootstrap.yml' -Force -ErrorAction SilentlyContinue
+          Remove-Item '.github/workflows' -Recurse -Force -ErrorAction SilentlyContinue
           Remove-Item 'BOOTSTRAP_WORKFLOW.yml' -Force -ErrorAction SilentlyContinue
+          Get-ChildItem 'src/NexusMonach' -Filter '*_wpftmp.csproj' -File -ErrorAction SilentlyContinue | Remove-Item -Force
           git config user.name 'Nexus Monach Builder'
           git config user.email 'actions@users.noreply.github.com'
           git add -A
