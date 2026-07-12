@@ -92,7 +92,7 @@ jobs:
           Includes pinned local Qwen3 0.6B, Whisper base q5_1, SmolVLM 500M and multilingual-e5-small.
           Model hashes are verified before every build. No model is downloaded while the browser is running.
           '@
-          gh release view $env:TAG 2>$null
+          cmd.exe /d /c "gh release view %TAG% >nul 2>nul"
           if ($LASTEXITCODE -eq 0) {
             gh release upload $env:TAG NexusMonach-AI-Pack-win-x64.zip dist/NexusMonach-Portable-win-x64.zip --clobber
           } else {
