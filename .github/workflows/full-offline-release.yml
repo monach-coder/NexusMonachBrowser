@@ -1,0 +1,100 @@
+name: Build Full Offline Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag
+        required: true
+        default: v2.6.1
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.17.0
+
+      - name: Download pinned offline AI payload
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ai = 'src/NexusMonach/AI'
+          New-Item -ItemType Directory -Force "$ai/llama","$ai/whisper","$ai/node","$ai/models/qwen3-0.6b","$ai/models/whisper","$ai/models/smolvlm-500m","$ai/models/multilingual-e5-small/onnx" | Out-Null
+          function Get-Asset($Url, $Out) { curl.exe -L --fail --retry 5 --retry-delay 3 $Url -o $Out; if ($LASTEXITCODE) { throw "Download failed: $Url" } }
+
+          Get-Asset 'https://github.com/ggml-org/llama.cpp/releases/download/b9966/llama-b9966-bin-win-cpu-x64.zip' "$env:TEMP/llama.zip"
+          Get-Asset 'https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.1/whisper-bin-x64.zip' "$env:TEMP/whisper.zip"
+          Expand-Archive "$env:TEMP/llama.zip" "$ai/llama" -Force
+          Expand-Archive "$env:TEMP/whisper.zip" "$ai/whisper" -Force
+          Copy-Item (Get-Command node).Source "$ai/node/node.exe"
+
+          Get-Asset 'https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf?download=true' "$ai/models/qwen3-0.6b/Qwen3-0.6B-Q8_0.gguf"
+          Get-Asset 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin?download=true' "$ai/models/whisper/ggml-base-q5_1.bin"
+          Get-Asset 'https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF/resolve/main/SmolVLM-500M-Instruct-Q8_0.gguf?download=true' "$ai/models/smolvlm-500m/SmolVLM-500M-Instruct-Q8_0.gguf"
+          Get-Asset 'https://huggingface.co/ggml-org/SmolVLM-500M-Instruct-GGUF/resolve/main/mmproj-SmolVLM-500M-Instruct-Q8_0.gguf?download=true' "$ai/models/smolvlm-500m/mmproj-SmolVLM-500M-Instruct-Q8_0.gguf"
+
+          $e5 = 'https://huggingface.co/intfloat/multilingual-e5-small/resolve/main/'
+          Get-Asset ($e5 + 'onnx/model_qint8_avx512_vnni.onnx?download=true') "$ai/models/multilingual-e5-small/onnx/model.onnx"
+          foreach ($file in 'config.json','tokenizer.json','tokenizer_config.json','special_tokens_map.json','sentencepiece.bpe.model') {
+            Get-Asset ($e5 + $file + '?download=true') "$ai/models/multilingual-e5-small/$file"
+          }
+
+          $expected = @{
+            "$ai/models/qwen3-0.6b/Qwen3-0.6B-Q8_0.gguf"='9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031'
+            "$ai/models/whisper/ggml-base-q5_1.bin"='422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898'
+            "$ai/models/smolvlm-500m/SmolVLM-500M-Instruct-Q8_0.gguf"='9d4612de6a42214499e301494a3ecc2be0abdd9de44e663bda63f1152fad1bf4'
+            "$ai/models/smolvlm-500m/mmproj-SmolVLM-500M-Instruct-Q8_0.gguf"='d1eb8b6b23979205fdf63703ed10f788131a3f812c7b1f72e0119d5d81295150'
+            "$ai/models/multilingual-e5-small/onnx/model.onnx"='dd476dd0c2514e9b9be83aeb3853fac0763e0bdf4a71645407587d77c48a2d88'
+          }
+          foreach ($path in $expected.Keys) {
+            $actual = (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected[$path]) { throw "SHA-256 mismatch: $path" }
+          }
+
+          Push-Location $ai
+          npm install --no-audit --no-fund
+          Pop-Location
+
+      - name: Create verified AI pack
+        shell: powershell
+        run: |
+          $ai = 'src/NexusMonach/AI'
+          Get-ChildItem $ai -File -Recurse | ForEach-Object {
+            $relative = $_.FullName.Substring((Resolve-Path $ai).Path.Length + 1).Replace('\','/')
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $relative
+          } | Set-Content "$ai/checksums.sha256" -Encoding ascii
+          Compress-Archive -Path $ai -DestinationPath NexusMonach-AI-Pack-win-x64.zip -CompressionLevel Optimal
+
+      - name: Build and verify browser
+        shell: powershell
+        run: |
+          dotnet build NexusMonach.sln --configuration Release -warnaserror
+          ./scripts/Build-Portable.ps1
+
+      - name: Publish GitHub release with models
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          $notes = @'
+          Nexus Monach 2.6.1 Full Offline
+
+          Includes pinned local Qwen3 0.6B, Whisper base q5_1, SmolVLM 500M and multilingual-e5-small.
+          Model hashes are verified before every build. No model is downloaded while the browser is running.
+          '@
+          gh release view $env:TAG 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:TAG NexusMonach-AI-Pack-win-x64.zip dist/NexusMonach-Portable-win-x64.zip --clobber
+          } else {
+            gh release create $env:TAG NexusMonach-AI-Pack-win-x64.zip dist/NexusMonach-Portable-win-x64.zip --title "Nexus Monach 2.6.1 Full Offline" --notes $notes
+          }
