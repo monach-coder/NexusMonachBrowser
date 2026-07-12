@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+  <title>Новая вкладка</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b1018; --panel:#111c28; --line:#294054; --text:#eef4f8; --muted:#91a2b4; --aqua:#36d7c4; --gold:#dab96a; }
+    * { box-sizing:border-box; }
+    html, body { min-height:100%; margin:0; }
+    body {
+      display:grid; place-items:center; overflow:auto; padding:42px 24px;
+      color:var(--text); font-family:"Segoe UI",system-ui,sans-serif;
+      background:
+        radial-gradient(circle at 18% 14%, rgba(54,215,196,.09), transparent 30%),
+        radial-gradient(circle at 82% 82%, rgba(218,185,106,.07), transparent 28%),
+        linear-gradient(145deg, #0b1018, #0c141e 55%, #080d14);
+    }
+    .page { width:min(820px, 100%); text-align:center; }
+    .brand { display:flex; flex-direction:column; align-items:center; }
+    .logo { width:142px; height:142px; filter:drop-shadow(0 16px 28px rgba(0,0,0,.36)); }
+    h1 { margin:16px 0 0; font-size:30px; letter-spacing:.18em; font-weight:650; }
+    .tagline { margin:7px 0 28px; color:var(--muted); font-size:14px; }
+    .cards { display:grid; grid-template-columns:repeat(3,1fr); gap:13px; margin-top:18px; text-align:left; }
+    .card { min-height:116px; padding:17px; border:1px solid #203548; border-radius:14px; background:rgba(17,28,40,.72); }
+    .card .icon { color:var(--aqua); font-size:20px; }
+    .card strong { display:block; margin:10px 0 4px; font-size:13px; }
+    .card span { color:var(--muted); font-size:11.5px; line-height:1.45; }
+    .settings { margin-top:26px; border:1px solid #35536a; border-radius:16px; padding:8px 16px; color:#b9cad7; background:transparent; cursor:pointer; }
+    .settings:hover { color:var(--text); border-color:#4b7c80; background:rgba(54,215,196,.05); }
+    .foot { margin-top:26px; color:#607284; font-size:10.5px; }
+    @media (max-width:650px) { .cards { grid-template-columns:1fr; } .card { min-height:auto; } h1 { font-size:23px; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="brand">
+      <img class="logo" src="logo.svg" alt="Эмблема Nexus Monach">
+      <h1>NEXUS MONACH</h1>
+      <p class="tagline">Тихая защита. Обычный интернет без лишнего наблюдения.</p>
+    </section>
+
+    <section class="cards" aria-label="Возможности браузера">
+      <article class="card"><div class="icon">◈</div><strong>Сбалансированная защита</strong><span>Трекеры ограничиваются на уровне Chromium без грубой маскировки, которая ломает сайты.</span></article>
+      <article class="card"><div class="icon">◎</div><strong>Без нашей телеметрии</strong><span>Nexus Monach не отправляет разработчику историю, поисковые запросы и статистику использования.</span></article>
+      <article class="card"><div class="icon">◇</div><strong>Приватное окно</strong><span>Отдельный режим не сохраняет локальную историю и данные сеанса после закрытия окна.</span></article>
+    </section>
+
+    <button class="settings" id="settings" type="button">Настроить защиту</button>
+    <div class="foot">Стартовая страница работает локально и не выполняет внешних запросов.</div>
+  </main>
+  <script>
+    const send = message => { if (window.chrome?.webview) window.chrome.webview.postMessage(message); };
+    document.getElementById('settings').addEventListener('click', () => send({ type: 'settings' }));
+  </script>
+</body>
+</html>

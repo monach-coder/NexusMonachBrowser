@@ -1,0 +1,45 @@
+<Window x:Class="NexusMonach.Views.AboutWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="О Nexus Monach" Width="540" Height="570" ResizeMode="NoResize"
+        Background="{StaticResource BackgroundBrush}" Foreground="{StaticResource TextBrush}"
+        Icon="/Assets/nexus-monach.ico" WindowStartupLocation="CenterOwner" Style="{StaticResource GlassPopupWindow}">
+    <Grid Margin="28">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <StackPanel HorizontalAlignment="Center">
+            <Image Width="112" Height="112" Source="/Assets/nexus-monach-512.png" />
+            <TextBlock Text="NEXUS MONACH" Margin="0,12,0,0" FontSize="25" FontWeight="SemiBold"
+                       HorizontalAlignment="Center" />
+            <TextBlock Text="Версия 2.5.0 · Chromium / WebView2" Margin="0,4,0,0"
+                       Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center" />
+        </StackPanel>
+        <StackPanel Grid.Row="1" Margin="0,22,0,0">
+            <TextBlock TextWrapping="Wrap" TextAlignment="Center"
+                       Text="Лёгкий приватный браузер без собственной телеметрии. Сетевая топология, Smart Capsules, локальный граф знаний и Chromium DevTools со встроенным автономным Nexus AI." />
+            <Border Margin="0,16,0,0" Padding="14,10" Background="#10262B" CornerRadius="8"
+                    BorderBrush="#2B7772" BorderThickness="1">
+                <StackPanel>
+                    <TextBlock Text="АВТОРЫ ПРОЕКТА" HorizontalAlignment="Center"
+                               Foreground="{StaticResource GoldBrush}" FontSize="10" FontWeight="SemiBold" />
+                    <TextBlock Text="CoderMonach  ×  OpenAI Codex" Margin="0,4,0,0"
+                               HorizontalAlignment="Center" Foreground="{StaticResource AccentBrush}"
+                               FontSize="15" FontWeight="SemiBold" />
+                    <TextBlock Text="Идея, видение и направление — CoderMonach. Проектирование и код — в сотрудничестве с OpenAI Codex."
+                               Margin="0,5,0,0" TextAlignment="Center" TextWrapping="Wrap"
+                               Foreground="{StaticResource MutedTextBrush}" FontSize="11" />
+                </StackPanel>
+            </Border>
+            <Border Margin="0,18,0,0" Padding="14" Background="#111E2B" CornerRadius="8"
+                    BorderBrush="#2A465A" BorderThickness="1">
+                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" FontSize="12"
+                           Text="Честное ограничение: никакой обычный браузер не может одновременно гарантировать полную анонимность и стопроцентную совместимость. Nexus Monach уменьшает отслеживание через cookies, сетевые трекеры, рекламные параметры и сигналы приватности, но не скрывает IP-адрес. Для этого нужен доверенный VPN или сеть Tor." />
+            </Border>
+        </StackPanel>
+        <Button Grid.Row="2" Content="Закрыть" Padding="22,8" HorizontalAlignment="Center"
+                Click="Close_Click" />
+    </Grid>
+</Window>

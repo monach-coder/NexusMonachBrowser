@@ -1,0 +1,8 @@
+{
+  "manifest_version": 3,
+  "name": "Nexus Monach DevTools AI",
+  "version": "2.0.0",
+  "description": "Локальный AI-помощник внутри Chromium DevTools.",
+  "devtools_page": "devtools.html",
+  "host_permissions": ["http://127.0.0.1:28471/*"]
+}

@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Nexus Monach">
+  <defs>
+    <radialGradient id="bg" cx="38%" cy="30%" r="78%">
+      <stop offset="0" stop-color="#203448"/>
+      <stop offset="0.55" stop-color="#0f1b29"/>
+      <stop offset="1" stop-color="#080d14"/>
+    </radialGradient>
+    <linearGradient id="aqua" x1="90" y1="70" x2="420" y2="450" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8ff7e9"/>
+      <stop offset="0.48" stop-color="#36d7c4"/>
+      <stop offset="1" stop-color="#157f83"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="150" y1="90" x2="370" y2="430" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff0b0"/>
+      <stop offset="0.5" stop-color="#dab96a"/>
+      <stop offset="1" stop-color="#8c672c"/>
+    </linearGradient>
+    <filter id="glow" x="-35%" y="-35%" width="170%" height="170%">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <circle cx="256" cy="256" r="244" fill="url(#bg)" stroke="#071019" stroke-width="12"/>
+  <circle cx="256" cy="256" r="218" fill="none" stroke="url(#aqua)" stroke-width="5" opacity="0.9"/>
+  <path d="M98 196A171 171 0 0 1 220 91" fill="none" stroke="url(#gold)" stroke-width="10" stroke-linecap="round"/>
+  <path d="M414 316A171 171 0 0 1 292 421" fill="none" stroke="url(#gold)" stroke-width="10" stroke-linecap="round"/>
+
+  <g opacity="0.48" stroke="#62e8d8" stroke-width="2">
+    <circle cx="256" cy="256" r="154" fill="none"/>
+    <path d="M256 84V126M256 386V428M84 256H126M386 256H428"/>
+    <path d="M135 135L165 165M347 347L377 377M377 135L347 165M165 347L135 377"/>
+  </g>
+
+  <path d="M256 104L269 144L309 157L269 170L256 210L243 170L203 157L243 144Z"
+        fill="url(#gold)" filter="url(#glow)"/>
+
+  <path d="M161 357V206L210 279L256 214L302 279L351 206V357"
+        fill="none" stroke="url(#gold)" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M189 357V266L256 357L323 266V357"
+        fill="none" stroke="url(#aqua)" stroke-width="17" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <circle cx="256" cy="256" r="28" fill="#0b141f" stroke="url(#aqua)" stroke-width="7"/>
+  <circle cx="256" cy="256" r="9" fill="url(#gold)" filter="url(#glow)"/>
+</svg>

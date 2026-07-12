@@ -1,0 +1,14 @@
+bin/
+obj/
+dist/
+Data/
+*.user
+*.suo
+
+# Веса и нативные runtime публикуются только в проверенном Full Offline release,
+# чтобы случайно не принять в git неподтверждённый многосотмегабайтный файл.
+src/NexusMonach/AI/**/*.gguf
+src/NexusMonach/AI/**/*.bin
+src/NexusMonach/AI/**/*.onnx
+src/NexusMonach/AI/**/*.exe
+src/NexusMonach/AI/**/*.dll

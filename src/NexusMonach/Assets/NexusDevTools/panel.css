@@ -1,0 +1,9 @@
+:root{color-scheme:dark;font:13px/1.45 "Segoe UI",sans-serif;background:#111;color:#eef4f8}
+*{box-sizing:border-box}body{margin:0;padding:14px;background:linear-gradient(145deg,#101010e8,#171717c9);min-height:100vh}
+header{display:flex;align-items:center;gap:10px;border:1px solid #65ffffff;border-radius:14px;background:#25101010;padding:10px 12px}
+header img{width:34px;height:34px}h1{font-size:18px;margin:0;color:#36d7c4}small{color:#91a2b4}.auto{margin-left:auto;color:#b9c7d4;font-size:12px}
+.toolbar,.question{display:flex;gap:8px;margin-top:12px}.question input{flex:1}
+button,input{border:1px solid #65ffffff;border-radius:9px;background:#26ffffff;color:#fff;padding:8px 11px;font:inherit}
+button{cursor:pointer}button:hover{background:#48ffffff}button:disabled{opacity:.4;cursor:default}
+#status{margin:12px 0 8px;color:#dab96a}#result{white-space:pre-wrap;border:1px solid #45ffffff;border-radius:13px;background:#48101010;padding:14px;min-height:240px;overflow:auto}
+footer{margin-top:10px;color:#91a2b4;font-size:11px}

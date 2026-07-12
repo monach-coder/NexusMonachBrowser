@@ -1,0 +1,111 @@
+<UserControl x:Class="NexusMonach.Views.LocalAiDockControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Width="430" MinWidth="370" Background="Transparent">
+    <Border Background="#B3101010" BorderBrush="#80FFFFFF" BorderThickness="1"
+            CornerRadius="16" Padding="15">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock x:Name="ModeTitleText" Text="DEVTOOLS AI" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
+                    <TextBlock x:Name="PageTitleText" Margin="0,3,0,0" FontSize="10.5"
+                               Foreground="{StaticResource MutedTextBrush}" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <Button Grid.Column="1" Content="×" Width="34" Height="30" FontSize="17"
+                        ToolTip="Скрыть панель подсказок" Click="Close_Click" />
+            </Grid>
+
+            <Border Grid.Row="1" Margin="0,13,0,0" Padding="11" CornerRadius="8"
+                    Background="#11232A" BorderBrush="#2B6463" BorderThickness="1">
+                <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="ЛОКАЛЬНАЯ МОДЕЛЬ" FontSize="9.5" Foreground="{StaticResource GoldBrush}" />
+                        <TextBlock x:Name="ModelNameText" Margin="0,3,0,0" FontSize="14" FontWeight="SemiBold"
+                                   Foreground="{StaticResource AccentBrush}" Text="Проверка Nexus AI…" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Right">
+                        <TextBlock Text="LOCAL AI · PAGE AGENT" HorizontalAlignment="Right"
+                                   FontSize="9" Foreground="{StaticResource MutedTextBrush}" />
+                        <Button Content="Проверить AI" Margin="0,5,0,0" Padding="8,4"
+                                FontSize="9.5" Click="TestLocalAi_Click" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <Grid Grid.Row="2" Margin="0,12,0,0">
+                <Button x:Name="DeveloperAnalyzeButton" Content="Повторить анализ и подсветку" Visibility="Collapsed"
+                        Padding="14,8" HorizontalAlignment="Left" Click="DeveloperAnalyze_Click" />
+                <Grid x:Name="ShoppingAgentPanel" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <TextBox x:Name="ShoppingQueryBox" Padding="10,8" MinHeight="38"
+                             Text="Что ищем на этом сайте?" GotKeyboardFocus="ShoppingQueryBox_GotKeyboardFocus"
+                             KeyDown="ShoppingQueryBox_KeyDown" />
+                    <Button Grid.Column="1" Content="Собрать" Padding="13,8" Margin="7,0,0,0"
+                            Click="ShoppingAgent_Click" />
+                    <Button Grid.Column="2" Content="Фото…" Padding="11,8" Margin="7,0,0,0"
+                            ToolTip="Распознать фотографию или рисунок локальной моделью" Click="ShoppingImage_Click" />
+                </Grid>
+            </Grid>
+
+            <StackPanel x:Name="DeveloperGuidePanel" Grid.Row="3" Margin="0,11,0,0" Visibility="Collapsed">
+                <TextBlock Text="Задержи мышь на разделе на 2 секунды" FontSize="10.5"
+                           Foreground="{StaticResource MutedTextBrush}" />
+                <WrapPanel Margin="0,5,0,0">
+                    <Button Content="Elements" Tag="Elements показывает DOM и CSS. Здесь ищут элемент, меняют стили для проверки и смотрят рассчитанные свойства. Изменения временные." Margin="0,0,5,5" Padding="8,5" MouseEnter="DevTopic_MouseEnter" MouseLeave="DevTopic_MouseLeave" />
+                    <Button Content="Console" Tag="Console показывает ошибки JavaScript и позволяет вручную выполнять выражения. Не вставляй сюда неизвестный код: он получает права открытой страницы." Margin="0,0,5,5" Padding="8,5" MouseEnter="DevTopic_MouseEnter" MouseLeave="DevTopic_MouseLeave" />
+                    <Button Content="Sources" Tag="Sources показывает загруженные файлы, точки остановки и пошаговую отладку JavaScript. Правки обычно исчезают после перезагрузки." Margin="0,0,5,5" Padding="8,5" MouseEnter="DevTopic_MouseEnter" MouseLeave="DevTopic_MouseLeave" />
+                    <Button Content="Network" Tag="Network показывает запросы, ответы, тайминги, размеры и инициаторов. Тела запросов могут содержать секреты — Nexus не передаёт их локальным моделям." Margin="0,0,5,5" Padding="8,5" MouseEnter="DevTopic_MouseEnter" MouseLeave="DevTopic_MouseLeave" />
+                    <Button Content="Performance" Tag="Performance записывает работу страницы во времени и помогает находить долгие задачи, зависания интерфейса и проблемы отрисовки." Margin="0,0,5,5" Padding="8,5" MouseEnter="DevTopic_MouseEnter" MouseLeave="DevTopic_MouseLeave" />
+                    <Button Content="Memory" Tag="Memory создаёт снимки памяти и помогает находить утечки, удерживаемые DOM-узлы и рост JavaScript heap. Снимок может на короткое время нагрузить страницу." Margin="0,0,5,5" Padding="8,5" MouseEnter="DevTopic_MouseEnter" MouseLeave="DevTopic_MouseLeave" />
+                    <Button Content="Application" Tag="Application показывает хранилища сайта, service worker, manifest и кэш. Удаление данных может разлогинить пользователя." Margin="0,0,5,5" Padding="8,5" MouseEnter="DevTopic_MouseEnter" MouseLeave="DevTopic_MouseLeave" />
+                    <Button Content="Security" Tag="Security объясняет TLS, сертификат и происхождение ресурсов страницы. Красные предупреждения требуют проверки до ввода данных." Margin="0,0,5,5" Padding="8,5" MouseEnter="DevTopic_MouseEnter" MouseLeave="DevTopic_MouseLeave" />
+                </WrapPanel>
+                <Grid Margin="0,3,0,0">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <TextBox x:Name="DeveloperQuestionBox" Padding="9,7" KeyDown="DeveloperQuestionBox_KeyDown"
+                             ToolTip="Например: где увидеть медленные запросы?" />
+                    <Button Grid.Column="1" Content="Спросить" Padding="10,7" Margin="6,0,0,0"
+                            Click="DeveloperQuestion_Click" />
+                </Grid>
+            </StackPanel>
+
+            <TextBox x:Name="ResultBox" Grid.Row="4" Margin="0,12,0,0" Padding="12"
+                     Background="#80101010" BorderBrush="#66FFFFFF" Foreground="{StaticResource TextBrush}"
+                     IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
+                     VerticalScrollBarVisibility="Auto"
+                     Text="Открой DevTools через F12 или нажми AI для сравнения товаров." />
+
+            <Grid Grid.Row="5" Margin="0,10,0,0">
+                <TextBlock x:Name="StatusText" VerticalAlignment="Center" FontSize="10.5"
+                           Foreground="{StaticResource MutedTextBrush}" Text="Готово" />
+                <Button x:Name="CancelButton" Content="Остановить" Padding="10,6"
+                        HorizontalAlignment="Right" IsEnabled="False" Click="Cancel_Click" />
+            </Grid>
+
+            <!-- Скрытые служебные элементы нужны для перевода по кнопке RU и совместимости с хранимыми настройками. -->
+            <Grid Visibility="Collapsed">
+                <StackPanel x:Name="ModelSetupPanel" />
+                <ProgressBar x:Name="ModelProgress" />
+            </Grid>
+
+            <Popup x:Name="DevHelpPopup" AllowsTransparency="True" Placement="Mouse" StaysOpen="False">
+                <Border Width="360" Padding="13" CornerRadius="12" Background="#B3101010"
+                        BorderBrush="#80FFFFFF" BorderThickness="1">
+                    <TextBlock x:Name="DevHelpText" TextWrapping="Wrap" FontSize="12.5"
+                               Foreground="White" LineHeight="19" />
+                </Border>
+            </Popup>
+        </Grid>
+    </Border>
+</UserControl>

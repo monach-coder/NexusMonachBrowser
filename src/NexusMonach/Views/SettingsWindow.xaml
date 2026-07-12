@@ -1,0 +1,128 @@
+<Window x:Class="NexusMonach.Views.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Настройки Nexus Monach" Width="640" Height="760" MinWidth="560" MinHeight="580"
+        Background="{StaticResource BackgroundBrush}" Foreground="{StaticResource TextBrush}"
+        Icon="/Assets/nexus-monach.ico" WindowStartupLocation="CenterOwner" Style="{StaticResource GlassPopupWindow}">
+    <Window.Resources>
+        <Style x:Key="ActionButton" TargetType="Button">
+            <Setter Property="Padding" Value="18,8" />
+            <Setter Property="Margin" Value="6,0,0,0" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Background" Value="#285F67" />
+            <Setter Property="BorderBrush" Value="#3F8990" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+    </Window.Resources>
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="0,0,12,0">
+                <TextBlock Text="Настройки" FontSize="26" FontWeight="SemiBold" />
+                <TextBlock Text="Изменения защиты применяются ко всем открытым вкладкам."
+                           Margin="0,4,0,22" Foreground="{StaticResource MutedTextBrush}" />
+
+                <TextBlock Text="Поиск" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
+                <TextBlock Text="Поисковая система по умолчанию" Margin="0,12,0,5" />
+                <ComboBox x:Name="SearchEngineCombo" />
+                <TextBlock Text="Домашняя страница" Margin="0,14,0,5" />
+                <TextBox x:Name="HomePageBox" Padding="9,7" />
+                <TextBlock Text="Оставьте app://newtab для встроенной стартовой страницы."
+                           Margin="0,4,0,18" FontSize="11" Foreground="{StaticResource MutedTextBrush}" />
+
+                <Separator Margin="0,4,0,18" Background="#2D4053" />
+                <TextBlock Text="Приватность" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
+                <TextBlock Text="Уровень защиты от отслеживания" Margin="0,12,0,5" />
+                <ComboBox x:Name="PrivacyLevelCombo" />
+                <TextBlock Text="Сбалансированный режим рекомендуется для обычной работы. Строгий режим блокирует больше сторонних трекеров, но способен нарушить отдельные функции сайтов."
+                           TextWrapping="Wrap" Margin="0,5,0,7" FontSize="11" Foreground="{StaticResource MutedTextBrush}" />
+                <CheckBox x:Name="DntCheck" Content="Отправлять сигнал Do Not Track" />
+                <CheckBox x:Name="GpcCheck" Content="Отправлять Global Privacy Control" />
+                <CheckBox x:Name="StripParametersCheck" Content="Удалять рекламные метки из ссылок (utm, fbclid, gclid и другие)" />
+                <CheckBox x:Name="BlockNotificationsCheck" Content="Блокировать запросы на уведомления" />
+                <CheckBox x:Name="SaveHistoryCheck" Content="Сохранять историю посещений" />
+                <CheckBox x:Name="RestoreSessionCheck" Content="Восстанавливать вкладки после перезапуска" />
+                <CheckBox x:Name="ClearOnExitCheck" Content="Очищать данные сайтов при выходе" />
+                <CheckBox x:Name="MemorySaverCheck" Content="Экономить память, приостанавливая неактивные вкладки" />
+
+                <Separator Margin="0,14,0,18" Background="#2D4053" />
+                <TextBlock Text="Совместимость и функции" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
+                <CheckBox x:Name="ExtensionsCheck" Content="Разрешить распакованные расширения (требуется перезапуск)" />
+                <CheckBox x:Name="PasswordCheck" Content="Разрешить WebView2 сохранять и подставлять пароли" />
+                <CheckBox x:Name="AutofillCheck" Content="Разрешить автозаполнение обычных форм" />
+                <TextBlock Text="F12 открывает Chromium DevTools. Встроенное расширение добавляет внутрь него вкладку Nexus AI для анализа $0 и Network."
+                           TextWrapping="Wrap" Margin="0,7,0,0" FontSize="11" Foreground="{StaticResource MutedTextBrush}" />
+
+                <Separator Margin="0,18,0,18" Background="#2D4053" />
+                <TextBlock Text="Сеть и прокси" FontSize="16" FontWeight="SemiBold"
+                           Foreground="{StaticResource AccentBrush}" />
+                <CheckBox x:Name="CustomProxyCheck" Content="Использовать собственный прокси для браузера" />
+                <TextBlock Text="Тип прокси" Margin="0,8,0,5" />
+                <ComboBox x:Name="ProxyTypeCombo" />
+                <Grid Margin="0,12,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="120" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel>
+                        <TextBlock Text="IP-адрес или имя сервера" Margin="0,0,0,5" />
+                        <TextBox x:Name="ProxyHostBox" Padding="9,7" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="12,0,0,0">
+                        <TextBlock Text="Порт" Margin="0,0,0,5" />
+                        <TextBox x:Name="ProxyPortBox" Padding="9,7" />
+                    </StackPanel>
+                </Grid>
+                <TextBlock Text="Сайты с прямым подключением — по одному в строке" Margin="0,12,0,5" />
+                <TextBox x:Name="ProxyBypassBox" Padding="9,7" MinHeight="72" AcceptsReturn="True"
+                         VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" />
+                <TextBlock Margin="0,5,0,0" TextWrapping="Wrap" FontSize="11"
+                           Foreground="{StaticResource MutedTextBrush}"
+                           Text="Пример: ozon.ru. Nexus Monach автоматически добавит поддомены. Исключения относятся только к прокси, указанному здесь, и не управляют системным VPN. Изменения вступают в силу после перезапуска браузера." />
+
+                <Separator Margin="0,18,0,18" Background="#2D4053" />
+                <TextBlock Text="Монитор приватности" FontSize="16" FontWeight="SemiBold"
+                           Foreground="{StaticResource AccentBrush}" />
+                <CheckBox x:Name="PrivacyMonitorCheck" Content="Показывать нижнюю панель Privacy Dock при запуске браузера" />
+                <CheckBox x:Name="PreventWebRtcLeakCheck" Content="Запрещать WebRTC обходить прокси и раскрывать другой IP (требуется перезапуск)" />
+                <TextBlock Margin="0,4,0,0" TextWrapping="Wrap" FontSize="11"
+                           Foreground="{StaticResource MutedTextBrush}"
+                           Text="Для определения внешнего IP, региона и репутационных признаков монитор обращается через браузер к Cloudflare и ipapi.is. Проверка WebRTC использует STUN Cloudflare. Ограничение WebRTC повышает приватность, но может ухудшить работу отдельных видеозвонков и P2P-сервисов." />
+
+                <Separator Margin="0,18,0,18" Background="#2D4053" />
+                <TextBlock Text="Passkeys и Windows Hello" FontSize="16" FontWeight="SemiBold"
+                           Foreground="{StaticResource AccentBrush}" />
+                <TextBlock Margin="0,10,0,12" TextWrapping="Wrap" FontSize="12"
+                           Foreground="{StaticResource MutedTextBrush}"
+                           Text="Nexus Monach поддерживает вход по Passkey через WebAuthn движка. Отпечаток, лицо и PIN проверяет Windows Hello: браузер и сайт не получают ваши биометрические данные." />
+                <WrapPanel>
+                    <Button Content="Параметры входа Windows" Style="{StaticResource ActionButton}"
+                            Margin="0,0,8,8" Click="OpenSignInOptions_Click" />
+                    <Button Content="Настроить отпечаток" Style="{StaticResource ActionButton}"
+                            Margin="0,0,8,8" Background="#303C49" BorderBrush="#526273"
+                            Click="OpenFingerprintSetup_Click" />
+                </WrapPanel>
+                <TextBlock TextWrapping="Wrap" Margin="0,2,0,0" FontSize="11"
+                           Foreground="{StaticResource MutedTextBrush}"
+                           Text="В Windows 11 24H2 доступ отдельных приложений к ключам настраивается в разделе «Конфиденциальность и безопасность → Доступ к ключам доступа»." />
+
+                <Border Margin="0,18,0,8" Padding="14" Background="#111E2B" CornerRadius="8"
+                        BorderBrush="#2A465A" BorderThickness="1">
+                    <TextBlock TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" FontSize="12">
+                        Nexus Monach не отправляет собственную телеметрию. При этом посещаемые сайты, интернет-провайдер и сам Chromium-движок всё ещё могут видеть часть сетевой информации. Для сокрытия IP нужен отдельно выбранный VPN или Tor.
+                    </TextBlock>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+            <Button Content="Отмена" Style="{StaticResource ActionButton}" Background="#303C49"
+                    BorderBrush="#526273" Click="Cancel_Click" />
+            <Button Content="Сохранить" Style="{StaticResource ActionButton}" Click="Save_Click" />
+        </StackPanel>
+    </Grid>
+</Window>

@@ -1,0 +1,1137 @@
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
+using System.Windows;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.Wpf;
+using NexusMonach.Services;
+using NexusMonach.Views;
+
+namespace NexusMonach.Models;
+
+public sealed class UrlRequestedEventArgs(string value) : EventArgs
+{
+    public string Value { get; } = value;
+    public bool OpenInNewTab { get; init; }
+}
+
+public sealed record TabNetworkSnapshot(
+    IReadOnlyList<string> ContactedHosts,
+    IReadOnlyList<string> ThirdPartyHosts,
+    IReadOnlyList<string> BlockedTrackerHosts,
+    IReadOnlyList<int> ObservedPorts,
+    int RequestCount);
+
+public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
+{
+    private readonly bool _isPrivate;
+    private readonly bool _navigateOnInitialize;
+    private readonly TaskCompletionSource<bool> _firstNavigation =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private Task? _initializationTask;
+    private string _title = "Новая вкладка";
+    private string _address = string.Empty;
+    private bool _isLoading;
+    private int _blockedCount;
+    private bool _disposed;
+    private bool _isSuspended;
+    private PhishingRiskLevel _phishingRisk;
+    private string _securityWarning = string.Empty;
+    private double _visualOpacity = 1;
+    private readonly object _networkLock = new();
+    private readonly HashSet<string> _contactedHosts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _thirdPartyHosts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _blockedTrackerHosts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<int> _observedPorts = [];
+    private int _requestCount;
+    private string _networkTopHost = string.Empty;
+    private string _agentDomToken = string.Empty;
+    private readonly object _developerLock = new();
+    private readonly Queue<string> _developerEvents = new();
+    private CoreWebView2DevToolsProtocolEventReceiver? _consoleReceiver;
+    private CoreWebView2DevToolsProtocolEventReceiver? _exceptionReceiver;
+
+    public BrowserTab(string initialUrl, bool isPrivate, bool navigateOnInitialize = true)
+    {
+        InitialUrl = initialUrl;
+        _isPrivate = isPrivate;
+        _navigateOnInitialize = navigateOnInitialize;
+        View = new WebView2
+        {
+            DefaultBackgroundColor = System.Drawing.Color.FromArgb(255, 11, 16, 24),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch
+        };
+    }
+
+    public string InitialUrl { get; }
+    public WebView2 View { get; }
+    public CoreWebView2? Core => View.CoreWebView2;
+    public bool IsInitialized => Core is not null;
+    public DateTime LastActivatedUtc { get; private set; } = DateTime.UtcNow;
+    public bool IsSuspended => _isSuspended;
+    public double VisualOpacity
+    {
+        get => _visualOpacity;
+        private set { _visualOpacity = value; OnPropertyChanged(); }
+    }
+
+    public string Title
+    {
+        get => _title;
+        private set { _title = value; OnPropertyChanged(); OnPropertyChanged(nameof(ShortTitle)); }
+    }
+
+    public string ShortTitle => Title.Length <= 26 ? Title : Title[..25] + "…";
+
+    public string Address
+    {
+        get => _address;
+        private set { _address = value; OnPropertyChanged(); }
+    }
+
+    public bool IsLoading
+    {
+        get => _isLoading;
+        private set { _isLoading = value; OnPropertyChanged(); }
+    }
+
+    public int BlockedCount
+    {
+        get => _blockedCount;
+        private set { _blockedCount = value; OnPropertyChanged(); }
+    }
+
+    public bool CanGoBack => Core?.CanGoBack == true;
+    public bool CanGoForward => Core?.CanGoForward == true;
+    public string CurrentUrl => Core?.Source ??
+        (!string.IsNullOrWhiteSpace(Address) ? Address : InitialUrl);
+    public string CurrentHost => Uri.TryCreate(CurrentUrl, UriKind.Absolute, out var uri) ? uri.Host : string.Empty;
+    public bool IsSecureConnection => CurrentUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+    public PhishingRiskLevel PhishingRisk
+    {
+        get => _phishingRisk;
+        private set { _phishingRisk = value; OnPropertyChanged(); }
+    }
+    public string SecurityWarning
+    {
+        get => _securityWarning;
+        private set { _securityWarning = value; OnPropertyChanged(); }
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+    public event EventHandler? StateChanged;
+    public event EventHandler? NavigationSucceeded;
+    public event EventHandler<UrlRequestedEventArgs>? OpenUrlRequested;
+    public event EventHandler? SettingsRequested;
+    public Func<string, Task<CoreWebView2?>>? CreatePopupAsync { get; set; }
+
+    public Task InitializeAsync() => _initializationTask ??= InitializeCoreAsync();
+
+    public async Task WaitForFirstPageAsync(TimeSpan timeout)
+    {
+        await InitializeAsync();
+        await Task.WhenAny(_firstNavigation.Task, Task.Delay(timeout));
+    }
+
+    public void Navigate(string url)
+    {
+        if (Core is null)
+            return;
+        Core.Settings.IsWebMessageEnabled = UrlService.IsInternal(url);
+        Core.Navigate(url);
+    }
+
+    public void GoBack()
+    {
+        if (Core?.CanGoBack == true) Core.GoBack();
+    }
+
+    public void GoForward()
+    {
+        if (Core?.CanGoForward == true) Core.GoForward();
+    }
+
+    public void ReloadOrStop()
+    {
+        if (Core is null) return;
+        if (IsLoading) Core.Stop(); else Core.Reload();
+    }
+
+    public void Reload() => Core?.Reload();
+
+    public async Task ApplySettingsAsync()
+    {
+        if (Core is null) return;
+        var settings = SettingsService.Current;
+        Core.Settings.AreDevToolsEnabled = true;
+        Core.Settings.IsPasswordAutosaveEnabled = settings.EnablePasswordAutosave;
+        Core.Settings.IsGeneralAutofillEnabled = settings.EnableGeneralAutofill;
+        BrowserEnvironment.ApplyPrivacyLevel(Core.Profile, settings.PrivacyLevel);
+        await Task.CompletedTask;
+    }
+
+    public void MarkActive()
+    {
+        LastActivatedUtc = DateTime.UtcNow;
+        VisualOpacity = 1;
+        if (_isSuspended && Core is not null)
+        {
+            Core.Resume();
+            _isSuspended = false;
+        }
+    }
+
+    public void UpdateVisualDecay(bool isActive, DateTime nowUtc)
+    {
+        if (isActive) { VisualOpacity = 1; return; }
+        var idleMinutes = Math.Max(0, (nowUtc - LastActivatedUtc).TotalMinutes);
+        if (idleMinutes < 5) { VisualOpacity = 1; return; }
+
+        // После пяти минут вкладка мягко затухает до 42% за следующие 115 минут.
+        VisualOpacity = Math.Clamp(1 - ((idleMinutes - 5) / 115 * 0.58), 0.42, 1);
+    }
+
+    public async Task TrySuspendAsync()
+    {
+        if (Core is null || _isSuspended || IsLoading || Core.IsDocumentPlayingAudio)
+            return;
+        try { _isSuspended = await Core.TrySuspendAsync(); }
+        catch { _isSuspended = false; }
+    }
+
+    public async Task<bool> ClearCurrentSiteDataAsync()
+    {
+        if (Core is null || !Uri.TryCreate(CurrentUrl, UriKind.Absolute, out var uri) ||
+            uri.Scheme is not ("http" or "https") || UrlService.IsInternal(CurrentUrl))
+            return false;
+
+        try
+        {
+            var origin = uri.GetLeftPart(UriPartial.Authority);
+            var cookies = await Core.CookieManager.GetCookiesAsync(origin);
+            foreach (var cookie in cookies)
+                Core.CookieManager.DeleteCookie(cookie);
+
+            await Core.ExecuteScriptAsync("""
+                (async () => {
+                  try { localStorage.clear(); } catch (_) {}
+                  try { sessionStorage.clear(); } catch (_) {}
+                  try {
+                    const keys = await caches.keys();
+                    await Promise.all(keys.map(key => caches.delete(key)));
+                  } catch (_) {}
+                  try {
+                    if (indexedDB.databases) {
+                      const databases = await indexedDB.databases();
+                      for (const database of databases) {
+                        if (database.name) indexedDB.deleteDatabase(database.name);
+                      }
+                    }
+                  } catch (_) {}
+                  return true;
+                })();
+                """);
+            Core.Reload();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public TabNetworkSnapshot GetNetworkSnapshot()
+    {
+        lock (_networkLock)
+        {
+            return new TabNetworkSnapshot(
+                _contactedHosts.OrderBy(x => x).ToArray(),
+                _thirdPartyHosts.OrderBy(x => x).ToArray(),
+                _blockedTrackerHosts.OrderBy(x => x).ToArray(),
+                _observedPorts.OrderBy(x => x).ToArray(),
+                _requestCount);
+        }
+    }
+
+    public async Task<string> GetReadablePageTextAsync()
+    {
+        if (Core is null || UrlService.IsInternal(CurrentUrl))
+            return string.Empty;
+
+        var json = await Core.ExecuteScriptAsync("""
+            (() => {
+              const clone = document.body ? document.body.cloneNode(true) : null;
+              if (!clone) return '';
+              clone.querySelectorAll('script, style, noscript, svg, canvas, iframe').forEach(node => node.remove());
+              const text = (clone.innerText || clone.textContent || '')
+                .replace(/\n{3,}/g, '\n\n')
+                .replace(/[ \t]{2,}/g, ' ')
+                .trim();
+              return text.slice(0, 30000);
+            })();
+            """);
+        try { return JsonSerializer.Deserialize<string>(json) ?? string.Empty; }
+        catch { return string.Empty; }
+    }
+
+    public async Task<string> GetSelectedTextAsync()
+    {
+        if (Core is null || UrlService.IsInternal(CurrentUrl)) return string.Empty;
+        var json = await Core.ExecuteScriptAsync("window.getSelection?.().toString().trim().slice(0, 12000) || ''");
+        try { return JsonSerializer.Deserialize<string>(json) ?? string.Empty; }
+        catch { return string.Empty; }
+    }
+
+    public async Task<IReadOnlyList<TranslationSegment>> CaptureTranslationSegmentsAsync()
+    {
+        if (Core is null || UrlService.IsInternal(CurrentUrl)) return [];
+        var json = await Core.ExecuteScriptAsync("""
+            (() => {
+              document.querySelectorAll('span[data-nexus-translation-id]').forEach(span => {
+                span.replaceWith(document.createTextNode(span.dataset.nexusOriginal || span.textContent || ''));
+              });
+              document.body?.normalize();
+              const root=document.body; if(!root) return [];
+              const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+              const nodes=[]; let node,total=0;
+              while((node=walker.nextNode()) && nodes.length<420 && total<18000){
+                const parent=node.parentElement, raw=node.nodeValue||'', text=raw.trim();
+                if(!parent||text.length<2||parent.closest('script,style,noscript,textarea,code,pre,svg,canvas,[contenteditable="true"],[data-nexus-translation-ui]')) continue;
+                const style=getComputedStyle(parent); if(style.display==='none'||style.visibility==='hidden'||style.opacity==='0'||parent.getClientRects().length===0) continue;
+                nodes.push({node,raw,text}); total+=text.length;
+              }
+              return nodes.map((item,index)=>{
+                const id='n'+(index+1), span=document.createElement('span');
+                span.dataset.nexusTranslationId=id; span.dataset.nexusOriginal=item.raw;
+                span.textContent=item.raw; item.node.replaceWith(span);
+                return {Id:id,Text:item.text};
+              });
+            })();
+            """);
+        try { return JsonSerializer.Deserialize<List<TranslationSegment>>(json) ?? []; }
+        catch { return []; }
+    }
+
+    public async Task BeginInPageTranslationAsync(int total)
+    {
+        if (Core is null) return;
+        await Core.ExecuteScriptAsync($$"""
+            (() => {
+              document.getElementById('nexus-translation-toolbar')?.remove();
+              const box=document.createElement('div'); box.id='nexus-translation-toolbar';
+              box.dataset.nexusTranslationUi='true';
+              box.style.cssText='position:fixed;right:22px;top:22px;z-index:2147483647;display:flex;align-items:center;gap:10px;max-width:440px;padding:11px 13px;border:1px solid #80ffffff;border-radius:14px;background:#b3101010;color:#fff;box-shadow:0 12px 36px #0008;font:600 13px Segoe UI,Arial,sans-serif;backdrop-filter:blur(12px);';
+              const status=document.createElement('span'); status.id='nexus-translation-status'; status.textContent='Перевод: 0 / '+{{total}};
+              const restore=document.createElement('button'); restore.textContent='Вернуть оригинал';
+              restore.style.cssText='border:1px solid #66ffffff;border-radius:8px;background:#26ffffff;color:#fff;padding:6px 9px;cursor:pointer;';
+              restore.onclick=()=>{document.querySelectorAll('span[data-nexus-translation-id]').forEach(s=>s.replaceWith(document.createTextNode(s.dataset.nexusOriginal||s.textContent||'')));document.body?.normalize();box.remove();};
+              const close=document.createElement('button'); close.textContent='×'; close.title='Скрыть панель, оставив перевод';
+              close.style.cssText='border:0;background:transparent;color:#fff;font-size:18px;cursor:pointer;padding:2px 5px;'; close.onclick=()=>box.remove();
+              box.append(status,restore,close); document.documentElement.append(box);
+            })();
+            """);
+    }
+
+    public async Task ApplyTranslationSegmentsAsync(IReadOnlyList<TranslationSegment> translated, int completed, int total)
+    {
+        if (Core is null || translated.Count == 0) return;
+        await Core.ExecuteScriptAsync($$"""
+            (() => {
+              const items={{JsonSerializer.Serialize(translated)}};
+              for(const item of items){
+                const span=document.querySelector('span[data-nexus-translation-id="'+CSS.escape(item.Id)+'"]'); if(!span) continue;
+                const original=span.dataset.nexusOriginal||span.textContent||'';
+                const lead=original.match(/^\s*/)?.[0]||'', tail=original.match(/\s*$/)?.[0]||'';
+                span.textContent=lead+item.Text+tail; span.title='Оригинал: '+original.trim();
+              }
+              const status=document.getElementById('nexus-translation-status'); if(status) status.textContent='Перевод: '+{{completed}}+' / '+{{total}};
+            })();
+            """);
+    }
+
+    public async Task CompleteInPageTranslationAsync(int translated, int total, string? error = null)
+    {
+        if (Core is null) return;
+        await Core.ExecuteScriptAsync($$"""
+            (() => { const status=document.getElementById('nexus-translation-status'); if(status){
+              status.textContent={{JsonSerializer.Serialize(error is null ? $"Переведено элементов: {translated} из {total}" : "Перевод остановлен: " + error)}};
+              status.style.color={{JsonSerializer.Serialize(error is null ? "#7ff5e7" : "#ffcb6b")}};
+              }
+            })();
+            """);
+    }
+
+    public async Task<IReadOnlyList<VideoCaptionSegment>> CaptureVideoCaptionSegmentsAsync()
+    {
+        if (Core is null || UrlService.IsInternal(CurrentUrl)) return [];
+        var json = await Core.ExecuteScriptAsync("""
+            (async () => {
+              const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0)
+                .sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
+              const video=videos.find(v=>!v.paused)||videos[0]; if(!video) return [];
+              const candidates=[];
+              for(const track of video.textTracks){
+                if(track.label==='Nexus RU') continue;
+                if(track.kind==='subtitles'||track.kind==='captions'){
+                  track.mode='hidden'; candidates.push(track);
+                }
+              }
+              if(candidates.length && !candidates.some(t=>t.cues?.length)) await new Promise(resolve=>setTimeout(resolve,900));
+              const selected=candidates.find(t=>t.cues?.length);
+              if(!selected?.cues?.length) return [];
+              return [...selected.cues].slice(0,900).map((cue,index)=>({
+                Id:'v'+(index+1), Text:(cue.text||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim(),
+                Start:Number(cue.startTime)||0, End:Number(cue.endTime)||0
+              })).filter(x=>x.Text);
+            })();
+            """);
+        try { return JsonSerializer.Deserialize<List<VideoCaptionSegment>>(json) ?? []; }
+        catch { return []; }
+    }
+
+    public async Task ApplyRussianVideoCaptionsAsync(IReadOnlyList<VideoCaptionSegment> captions)
+    {
+        if (Core is null || captions.Count == 0) return;
+        await Core.ExecuteScriptAsync($$"""
+            (() => {
+              const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0)
+                .sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
+              const video=videos.find(v=>!v.paused)||videos[0]; if(!video) return false;
+              for(const old of video.textTracks) if(old.label==='Nexus RU') old.mode='disabled';
+              const track=video.addTextTrack('subtitles','Nexus RU','ru'); track.mode='showing';
+              for(const item of {{JsonSerializer.Serialize(captions)}}){
+                try { track.addCue(new VTTCue(item.Start,item.End,item.Text)); } catch {}
+              }
+              let badge=document.getElementById('nexus-video-translation-badge');
+              if(!badge){badge=document.createElement('div');badge.id='nexus-video-translation-badge';badge.dataset.nexusTranslationUi='true';
+                badge.style.cssText='position:fixed;right:22px;top:22px;z-index:2147483647;padding:9px 12px;border:1px solid #80ffffff;border-radius:12px;background:#b3101010;color:#fff;font:600 13px Segoe UI,Arial,sans-serif;backdrop-filter:blur(12px);';document.documentElement.append(badge);}
+              badge.textContent='RU-субтитры Nexus включены · '+{{captions.Count}}+' реплик';
+              setTimeout(()=>badge?.remove(),5000); return true;
+            })();
+            """);
+    }
+
+    public async Task ShowVideoTranslationStatusAsync(string message, bool warning = false)
+    {
+        if (Core is null) return;
+        await Core.ExecuteScriptAsync($$"""
+            (() => {
+              let badge=document.getElementById('nexus-video-translation-badge');
+              if(!badge){badge=document.createElement('div');badge.id='nexus-video-translation-badge';badge.dataset.nexusTranslationUi='true';
+                badge.style.cssText='position:fixed;right:22px;top:22px;z-index:2147483647;padding:9px 12px;border:1px solid #80ffffff;border-radius:12px;background:#b3101010;color:#fff;font:600 13px Segoe UI,Arial,sans-serif;backdrop-filter:blur(12px);';document.documentElement.append(badge);}
+              badge.textContent={{JsonSerializer.Serialize(message)}};
+              badge.style.color={{JsonSerializer.Serialize(warning ? "#ffcb6b" : "#ffffff")}};
+            })();
+            """);
+    }
+
+    public async Task<AudioCaptureResult> CaptureActiveVideoAudioAsync(int seconds,
+        CancellationToken cancellationToken = default)
+    {
+        if (Core is null || UrlService.IsInternal(CurrentUrl))
+            return new AudioCaptureResult { Error = "Открой страницу с видео." };
+        var script = """
+            (async () => {
+              try {
+                const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0)
+                  .sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
+                const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];
+                if(!video) return {Success:false,Error:'Активное HTML5-видео не найдено.',WavBase64:''};
+                const capture=video.captureStream||video.mozCaptureStream;
+                if(!capture) return {Success:false,Error:'Этот проигрыватель не разрешает захват звукового потока.',WavBase64:''};
+                const stream=capture.call(video),tracks=stream.getAudioTracks();
+                if(!tracks.length) return {Success:false,Error:'В видеопотоке нет доступной аудиодорожки или она защищена DRM.',WavBase64:''};
+                const context=new AudioContext(),source=context.createMediaStreamSource(stream);
+                const processor=context.createScriptProcessor(4096,1,1),silent=context.createGain();silent.gain.value=0;
+                const chunks=[];processor.onaudioprocess=e=>chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+                source.connect(processor);processor.connect(silent);silent.connect(context.destination);await context.resume();
+                await new Promise(resolve=>setTimeout(resolve,__MILLISECONDS__));
+                processor.disconnect();source.disconnect();silent.disconnect();tracks.forEach(t=>t.stop());await context.close();
+                const length=chunks.reduce((n,x)=>n+x.length,0),input=new Float32Array(length);let offset=0;
+                for(const chunk of chunks){input.set(chunk,offset);offset+=chunk.length}
+                if(!input.length) return {Success:false,Error:'Браузер не получил аудиосэмплы.',WavBase64:''};
+                let energy=0;for(let i=0;i<input.length;i+=32)energy+=input[i]*input[i];
+                if(Math.sqrt(energy/Math.max(1,input.length/32))<0.0001)return {Success:false,Error:'Получен пустой звук. Возможна защита DRM или ограничение cross-origin.',WavBase64:''};
+                const outRate=16000,ratio=context.sampleRate/outRate,outLength=Math.floor(input.length/ratio),pcm=new Int16Array(outLength);
+                for(let i=0;i<outLength;i++){const start=Math.floor(i*ratio),end=Math.min(input.length,Math.floor((i+1)*ratio));let sum=0;for(let j=start;j<end;j++)sum+=input[j];const value=Math.max(-1,Math.min(1,sum/Math.max(1,end-start)));pcm[i]=value<0?value*32768:value*32767}
+                const bytes=new Uint8Array(44+pcm.length*2),view=new DataView(bytes.buffer),write=(p,s)=>{for(let i=0;i<s.length;i++)view.setUint8(p+i,s.charCodeAt(i))};
+                write(0,'RIFF');view.setUint32(4,36+pcm.length*2,true);write(8,'WAVE');write(12,'fmt ');view.setUint32(16,16,true);view.setUint16(20,1,true);view.setUint16(22,1,true);view.setUint32(24,outRate,true);view.setUint32(28,outRate*2,true);view.setUint16(32,2,true);view.setUint16(34,16,true);write(36,'data');view.setUint32(40,pcm.length*2,true);for(let i=0;i<pcm.length;i++)view.setInt16(44+i*2,pcm[i],true);
+                let binary='';for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));
+                return {Success:true,Error:'',WavBase64:btoa(binary)};
+              } catch(error) { return {Success:false,Error:error?.message||String(error),WavBase64:''}; }
+            })();
+            """.Replace("__MILLISECONDS__", Math.Clamp(seconds, 3, 15).ToString() + "000", StringComparison.Ordinal);
+        var json = await Core.ExecuteScriptAsync(script).WaitAsync(cancellationToken);
+        try { return JsonSerializer.Deserialize<AudioCaptureResult>(json) ?? new AudioCaptureResult { Error = "Пустой результат захвата." }; }
+        catch { return new AudioCaptureResult { Error = "Не удалось прочитать аудиопоток страницы." }; }
+    }
+
+    public async Task BeginLiveAudioTranslationAsync()
+    {
+        if (Core is null) return;
+        await Core.ExecuteScriptAsync("""
+            (()=>{window.__nexusStopAudioTranslation=false;let badge=document.getElementById('nexus-live-translation');
+              if(!badge){badge=document.createElement('div');badge.id='nexus-live-translation';badge.dataset.nexusTranslationUi='true';badge.style.cssText='position:fixed;right:22px;top:22px;z-index:2147483647;display:flex;gap:10px;align-items:center;padding:10px 12px;border:1px solid #80ffffff;border-radius:12px;background:#b3101010;color:#fff;font:600 13px Segoe UI,sans-serif;backdrop-filter:blur(12px);';
+              const text=document.createElement('span');text.id='nexus-live-translation-status';badge.append(text);const stop=document.createElement('button');stop.textContent='Остановить';stop.style.cssText='border:1px solid #66ffffff;border-radius:8px;background:#26ffffff;color:#fff;padding:6px 9px;cursor:pointer';stop.onclick=()=>{window.__nexusStopAudioTranslation=true;text.textContent='Остановка после текущего фрагмента…'};badge.append(stop);document.documentElement.append(badge)}
+              document.getElementById('nexus-live-translation-status').textContent='Подготовка перевода звука…';})();
+            """);
+    }
+
+    public async Task UpdateLiveAudioTranslationStatusAsync(string text)
+    {
+        if (Core is null) return;
+        await Core.ExecuteScriptAsync("(()=>{const e=document.getElementById('nexus-live-translation-status');if(e)e.textContent=" +
+                                      JsonSerializer.Serialize(text) + "})()");
+    }
+
+    public async Task<bool> ShouldStopLiveAudioTranslationAsync()
+    {
+        if (Core is null) return true;
+        var json = await Core.ExecuteScriptAsync("Boolean(window.__nexusStopAudioTranslation)");
+        return bool.TryParse(json, out var stopped) && stopped;
+    }
+
+    public async Task ShowLiveVideoSubtitleAsync(string translatedText)
+    {
+        if (Core is null || string.IsNullOrWhiteSpace(translatedText)) return;
+        await Core.ExecuteScriptAsync("""
+            ((text)=>{const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];if(!video)return;
+              let track=[...video.textTracks].find(x=>x.label==='Nexus Live RU');if(!track)track=video.addTextTrack('subtitles','Nexus Live RU','ru');track.mode='showing';const now=video.currentTime;try{track.addCue(new VTTCue(now,now+12,text))}catch{}
+              let overlay=document.getElementById('nexus-live-subtitle-overlay');if(!overlay){overlay=document.createElement('div');overlay.id='nexus-live-subtitle-overlay';overlay.dataset.nexusTranslationUi='true';overlay.style.cssText='position:fixed;z-index:2147483646;max-width:80%;padding:7px 12px;border-radius:8px;background:#a8000000;color:#fff;text-align:center;font:600 18px/1.35 Segoe UI,sans-serif;text-shadow:0 1px 2px #000;pointer-events:none';document.documentElement.append(overlay)}
+              const r=video.getBoundingClientRect();overlay.style.left=Math.max(8,r.left+r.width*.1)+'px';overlay.style.width=Math.max(180,r.width*.8)+'px';overlay.style.top=Math.max(8,r.bottom-70)+'px';overlay.textContent=text;clearTimeout(window.__nexusSubtitleTimer);window.__nexusSubtitleTimer=setTimeout(()=>overlay.textContent='',11000);
+            })(__TEXT__);
+            """.Replace("__TEXT__", JsonSerializer.Serialize(translatedText), StringComparison.Ordinal));
+    }
+
+    public async Task EndLiveAudioTranslationAsync(string status)
+    {
+        await UpdateLiveAudioTranslationStatusAsync(status);
+    }
+
+    public async Task<string> GetAgentDomSnapshotAsync()
+    {
+        if (Core is null || UrlService.IsInternal(CurrentUrl)) return "[]";
+        _agentDomToken = Guid.NewGuid().ToString("N");
+        return await Core.ExecuteScriptAsync($$"""
+            (() => {
+              const visible = e => { const r=e.getBoundingClientRect(), s=getComputedStyle(e); return r.width>1 && r.height>1 && s.visibility!=='hidden' && s.display!=='none'; };
+              const elements=[...document.querySelectorAll('a,button,input,select,textarea,[role="button"],[tabindex]')].filter(visible).slice(0,120);
+              return elements.map((e,i)=>{
+                const id='n'+(i+1); e.dataset.nexusAgentId=id; e.dataset.nexusAgentToken={{JsonSerializer.Serialize(_agentDomToken)}};
+                let href=''; if(e.tagName==='A'&&e.href){ try { const u=new URL(e.href); href=u.origin+u.pathname; } catch {} }
+                return { id, tag:e.tagName.toLowerCase(), type:(e.type||''), text:(e.innerText||e.getAttribute('aria-label')||e.placeholder||'').trim().slice(0,180),
+                  placeholder:(e.placeholder||'').slice(0,100), href:href.slice(0,300) };
+              });
+            })();
+            """);
+    }
+
+    public async Task<IReadOnlyList<string>> ExecuteAgentPlanAsync(AgentPlan plan)
+    {
+        if (Core is null) throw new InvalidOperationException("Страница не готова.");
+        var results = new List<string>();
+        string[] forbidden = ["купить", "оплат", "заказать", "отправить", "удалить", "пароль", "purchase", "pay", "submit", "delete", "password", "login"];
+        foreach (var step in plan.Steps)
+        {
+            if (!System.Text.RegularExpressions.Regex.IsMatch(step.ElementId ?? string.Empty, @"^n\d+$"))
+            {
+                results.Add("Пропущено: неверный elementId.");
+                continue;
+            }
+            var combined = (step.Description + " " + step.Value).ToLowerInvariant();
+            if (forbidden.Any(word => combined.Contains(word, StringComparison.Ordinal)))
+            {
+                results.Add("Заблокировано опасное действие: " + step.Description);
+                continue;
+            }
+            var script = $$"""
+                (() => {
+                  const e=document.querySelector('[data-nexus-agent-token={{JsonSerializer.Serialize(_agentDomToken)}}][data-nexus-agent-id="{{step.ElementId}}"]');
+                  if(!e) return 'элемент не найден';
+                  const action={{JsonSerializer.Serialize(step.Action)}};
+                  if(action==='highlight'){ e.style.outline='3px solid #36d7c4'; e.scrollIntoView({behavior:'smooth',block:'center'}); return 'подсвечено'; }
+                  if(action==='scroll'){ e.scrollIntoView({behavior:'smooth',block:'center'}); return 'прокручено'; }
+                  if(action==='fill'){
+                    if(!['INPUT','TEXTAREA','SELECT'].includes(e.tagName)) return 'не поле ввода';
+                    const type=(e.type||'').toLowerCase(), ac=(e.autocomplete||'').toLowerCase();
+                    if(['password','file','hidden'].includes(type)||/password|cc-|card|one-time-code/.test(ac)) return 'чувствительное поле заблокировано';
+                    e.value={{JsonSerializer.Serialize((step.Value ?? string.Empty)[..Math.Min(step.Value?.Length ?? 0, 500)])}};
+                    e.dispatchEvent(new Event('input',{bubbles:true})); e.dispatchEvent(new Event('change',{bubbles:true})); return 'заполнено';
+                  }
+                  if(action==='click'){
+                    if(!['A','BUTTON'].includes(e.tagName)||(e.type||'').toLowerCase()==='submit') return 'клик заблокирован';
+                    const label=(e.innerText||e.getAttribute('aria-label')||'').toLowerCase();
+                    if(/купить|оплат|заказать|отправить|удалить|purchase|pay|submit|delete|login/.test(label)) return 'опасный клик заблокирован';
+                    e.click(); return 'нажато';
+                  }
+                  return 'неизвестное действие';
+                })();
+                """;
+            var json = await Core.ExecuteScriptAsync(script);
+            string result;
+            try { result = JsonSerializer.Deserialize<string>(json) ?? json; }
+            catch { result = json; }
+            results.Add(step.Description + ": " + result);
+            await Task.Delay(250);
+        }
+        return results;
+    }
+
+    public async Task<string> GetDeveloperContextAsync()
+    {
+        if (Core is null || UrlService.IsInternal(CurrentUrl)) return string.Empty;
+        var dom = await Core.ExecuteScriptAsync("""
+            (() => {
+              const root=document.documentElement.cloneNode(true);
+              root.querySelectorAll('script,style,noscript,iframe,canvas,svg').forEach(e=>e.remove());
+              root.querySelectorAll('input,textarea,select').forEach(e=>{e.removeAttribute('value');e.textContent='';});
+              root.querySelectorAll('*').forEach(e=>[...e.attributes].forEach(a=>{
+                if(/^on/i.test(a.name)||/token|secret|password|nonce|auth|cookie|session/i.test(a.name)) e.removeAttribute(a.name);
+              }));
+              return root.outerHTML.slice(0,18000);
+            })();
+            """);
+        string domText;
+        try { domText = JsonSerializer.Deserialize<string>(dom) ?? string.Empty; }
+        catch { domText = string.Empty; }
+        string events;
+        lock (_developerLock) events = string.Join("\n", _developerEvents.TakeLast(80));
+        var network = GetNetworkSnapshot();
+        return $"URL: {StripSensitiveUrl(CurrentUrl)}\nЗаголовок: {Title}\n" +
+               $"Консоль и исключения:\n{(string.IsNullOrWhiteSpace(events) ? "—" : events)}\n\n" +
+               $"Сеть: {network.RequestCount} запросов; порты {string.Join(", ", network.ObservedPorts)}; " +
+               $"сторонние узлы {string.Join(", ", network.ThirdPartyHosts.Take(40))}; " +
+               $"заблокированы {string.Join(", ", network.BlockedTrackerHosts.Take(30))}.\n\n" +
+               $"Безопасный DOM:\n{domText}";
+    }
+
+    public async Task<int> HighlightDeveloperSelectorsAsync(IReadOnlyList<DeveloperHighlight> highlights)
+    {
+        if (Core is null || highlights.Count == 0) return 0;
+        var safe = highlights.Select(x => new { selector = x.Selector, reason = x.Reason }).ToArray();
+        var json = await Core.ExecuteScriptAsync($$"""
+            (() => {
+              document.querySelectorAll('[data-nexus-devtools-highlight]').forEach(e=>{
+                e.style.removeProperty('outline'); e.removeAttribute('data-nexus-devtools-highlight');
+              });
+              const items={{JsonSerializer.Serialize(safe)}}; let count=0;
+              for(const item of items){
+                let found=[]; try { found=[...document.querySelectorAll(item.selector)].slice(0,8); } catch { continue; }
+                for(const e of found){ e.style.outline='3px solid #dab96a'; e.dataset.nexusDevtoolsHighlight=item.reason||'Проверить';
+                  e.title=(e.title?e.title+'\n':'')+'Nexus AI: '+(item.reason||'Проверить'); count++; }
+              }
+              document.querySelector('[data-nexus-devtools-highlight]')?.scrollIntoView({behavior:'smooth',block:'center'});
+              return count;
+            })();
+            """);
+        return int.TryParse(json, out var count) ? count : 0;
+    }
+
+    public async Task<bool> SearchCurrentSiteForAgentAsync(string query)
+    {
+        if (Core is null || UrlService.IsInternal(CurrentUrl) || string.IsNullOrWhiteSpace(query)) return false;
+        var json = await Core.ExecuteScriptAsync($$"""
+            (() => {
+              const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>80&&r.height>15&&s.display!=='none'&&s.visibility!=='hidden';};
+              const inputs=[...document.querySelectorAll('input')].filter(visible).map(e=>{
+                const hint=((e.type||'')+' '+(e.name||'')+' '+(e.id||'')+' '+(e.placeholder||'')+' '+(e.getAttribute('aria-label')||'')).toLowerCase();
+                let score=(e.type==='search'?8:0)+(/search|поиск|найти|товар/.test(hint)?6:0)-(e.type==='password'?100:0);
+                return {e,score};
+              }).sort((a,b)=>b.score-a.score);
+              const input=inputs[0]; if(!input||input.score<4) return false;
+              const e=input.e, value={{JsonSerializer.Serialize(query[..Math.Min(query.Length, 300)])}};
+              const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
+              if(setter) setter.call(e,value); else e.value=value;
+              e.dispatchEvent(new Event('input',{bubbles:true})); e.dispatchEvent(new Event('change',{bubbles:true})); e.focus();
+              const form=e.closest('form');
+              if(form){ if(form.requestSubmit) form.requestSubmit(); else form.submit(); }
+              else { e.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true}));
+                     e.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',code:'Enter',bubbles:true})); }
+              return true;
+            })();
+            """);
+        return bool.TryParse(json, out var found) && found;
+    }
+
+    public async Task<string> ExtractShoppingCardsAsync()
+    {
+        if (Core is null || UrlService.IsInternal(CurrentUrl)) return "[]";
+        return await Core.ExecuteScriptAsync("""
+            (() => {
+              const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>100&&r.height>45&&s.display!=='none'&&s.visibility!=='hidden';};
+              const selectors='[itemtype*="Product"],[data-product-id],[data-nm-id],article,li[class*="product"],div[class*="product-card"],div[class*="productCard"],div[class*="card"]';
+              const nodes=[...new Set(document.querySelectorAll(selectors))].filter(visible);
+              const result=[], seen=new Set();
+              for(const e of nodes){
+                const text=(e.innerText||'').replace(/\s+/g,' ').trim(); if(text.length<18||text.length>1400) continue;
+                const heading=e.querySelector('h1,h2,h3,h4,[class*="name"],[class*="title"]');
+                const link=e.matches('a')?e:e.querySelector('a[href]');
+                const name=(heading?.innerText||link?.getAttribute('aria-label')||link?.title||text.slice(0,160)).replace(/\s+/g,' ').trim().slice(0,220);
+                if(name.length<3) continue;
+                let url=''; try { if(link?.href){const u=new URL(link.href);url=u.origin+u.pathname;} } catch {}
+                const key=(url||name).toLowerCase(); if(seen.has(key)) continue; seen.add(key);
+                const price=(text.match(/(?:\d[\d\s.,]{0,14})\s*(?:₽|руб\.?|RUB)/i)||text.match(/(?:₽|руб\.?)\s*\d[\d\s.,]{0,14}/i)||[])[0]||'';
+                const rating=(text.match(/(?:рейтинг|rating)?\s*[0-5][.,]\d\s*(?:из\s*5)?/i)||[])[0]||'';
+                const buyers=(text.match(/\d[\d\s.,]*\s*(?:купили|купило|покупок|заказов|отзыв(?:а|ов)?|sold|reviews?)/i)||[])[0]||'';
+                result.push({name,price,rating,buyers,url,text:text.slice(0,900)}); if(result.length>=60) break;
+              }
+              if(result.length<3){
+                for(const link of [...document.querySelectorAll('main a[href],section a[href],[role="main"] a[href]')].filter(visible)){
+                  const host=link.closest('article,li,[class*="result"],[class*="item"],[class*="product"]')||link.parentElement;
+                  const text=(host?.innerText||link.innerText||'').replace(/\s+/g,' ').trim();if(text.length<18||text.length>1400)continue;
+                  const name=(link.innerText||link.getAttribute('aria-label')||link.title||text.slice(0,160)).replace(/\s+/g,' ').trim().slice(0,220);if(name.length<3)continue;
+                  let url='';try{const u=new URL(link.href);if(u.origin!==location.origin)continue;url=u.origin+u.pathname}catch{continue}
+                  const key=(url||name).toLowerCase();if(seen.has(key))continue;seen.add(key);
+                  const price=(text.match(/(?:\d[\d\s.,]{0,14})\s*(?:₽|руб\.?|RUB|\$|€|£|¥)/i)||[])[0]||'';
+                  const rating=(text.match(/(?:рейтинг|rating)?\s*[0-5][.,]\d\s*(?:из\s*5)?/i)||[])[0]||'';
+                  const buyers=(text.match(/\d[\d\s.,]*\s*(?:купили|покупок|заказов|отзыв(?:а|ов)?|sold|reviews?)/i)||[])[0]||'';
+                  result.push({name,price,rating,buyers,url,text:text.slice(0,900)});if(result.length>=60)break;
+                }
+              }
+              return result;
+            })();
+            """);
+    }
+
+    public async Task<string?> GetNextShoppingPageUrlAsync()
+    {
+        if (Core is null || UrlService.IsInternal(CurrentUrl)) return null;
+        var json = await Core.ExecuteScriptAsync("""
+            (()=>{const direct=document.querySelector('link[rel="next"],a[rel="next"]');if(direct?.href)return direct.href;
+              const links=[...document.querySelectorAll('a[href],button')];
+              const next=links.find(e=>{const t=((e.innerText||'')+' '+(e.getAttribute('aria-label')||'')+' '+(e.title||'')).trim().toLowerCase();return /^(next|следующ|далее|впер[её]д|›|»|下一页|次へ)/i.test(t)&&!e.disabled});
+              if(next?.href)return next.href;return null;})();
+            """);
+        string? value;
+        try { value = JsonSerializer.Deserialize<string>(json); }
+        catch { return null; }
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var next) ||
+            !Uri.TryCreate(CurrentUrl, UriKind.Absolute, out var current) ||
+            !next.Host.Equals(current.Host, StringComparison.OrdinalIgnoreCase) ||
+            next.Scheme is not ("http" or "https")) return null;
+        return next.GetLeftPart(UriPartial.Path) + next.Query;
+    }
+
+    public async Task<bool> NavigateAndWaitAsync(string url, TimeSpan timeout)
+    {
+        if (Core is null || !Uri.TryCreate(url, UriKind.Absolute, out var target) ||
+            !Uri.TryCreate(CurrentUrl, UriKind.Absolute, out var current) ||
+            !target.Host.Equals(current.Host, StringComparison.OrdinalIgnoreCase)) return false;
+        var source = new TaskCompletionSource<CoreWebView2NavigationCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Handler(object? _, CoreWebView2NavigationCompletedEventArgs e) => source.TrySetResult(e);
+        Core.NavigationCompleted += Handler;
+        try { Core.Navigate(url); return (await source.Task.WaitAsync(timeout)).IsSuccess; }
+        catch (TimeoutException) { return false; }
+        finally { Core.NavigationCompleted -= Handler; }
+    }
+
+    public async Task<bool> TryClickNextShoppingPageAsync()
+    {
+        if (Core is null) return false;
+        var json = await Core.ExecuteScriptAsync("""
+            (()=>{const candidates=[...document.querySelectorAll('button,[role="button"]')];const next=candidates.find(e=>{const t=((e.innerText||'')+' '+(e.getAttribute('aria-label')||'')+' '+(e.title||'')).trim().toLowerCase();return /^(next|следующ|далее|впер[её]д|›|»|下一页|次へ)/i.test(t)&&!e.disabled&&e.getAttribute('aria-disabled')!=='true'});if(!next)return false;next.click();return true})();
+            """);
+        if (!bool.TryParse(json, out var clicked) || !clicked) return false;
+        await Task.Delay(2300);
+        return true;
+    }
+
+    public async Task ScrollShoppingResultsAsync()
+    {
+        if (Core is null) return;
+        await Core.ExecuteScriptAsync("window.scrollTo({top:document.documentElement.scrollHeight,behavior:'smooth'});true");
+        await Task.Delay(1800);
+    }
+
+    private void ResetNetworkSnapshot(string topLevelUrl)
+    {
+        lock (_networkLock)
+        {
+            _contactedHosts.Clear();
+            _thirdPartyHosts.Clear();
+            _blockedTrackerHosts.Clear();
+            _observedPorts.Clear();
+            _requestCount = 0;
+            _networkTopHost = Uri.TryCreate(topLevelUrl, UriKind.Absolute, out var top) ? top.Host : string.Empty;
+        }
+    }
+
+    private void RecordNetworkRequest(string requestUrl, bool blocked)
+    {
+        if (!Uri.TryCreate(requestUrl, UriKind.Absolute, out var request) ||
+            request.Scheme is not ("http" or "https"))
+            return;
+
+        lock (_networkLock)
+        {
+            _requestCount++;
+            _contactedHosts.Add(request.Host);
+            var port = request.IsDefaultPort
+                ? request.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ? 443 : 80
+                : request.Port;
+            if (port is > 0 and <= 65535)
+                _observedPorts.Add(port);
+
+            if (!string.IsNullOrWhiteSpace(_networkTopHost) && !IsSameSite(request.Host, _networkTopHost))
+                _thirdPartyHosts.Add(request.Host);
+            if (blocked)
+                _blockedTrackerHosts.Add(request.Host);
+        }
+    }
+
+    private static bool IsSameSite(string left, string right) =>
+        left.Equals(right, StringComparison.OrdinalIgnoreCase) ||
+        left.EndsWith('.' + right, StringComparison.OrdinalIgnoreCase) ||
+        right.EndsWith('.' + left, StringComparison.OrdinalIgnoreCase);
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        View.Dispose();
+    }
+
+    private async Task InitializeCoreAsync()
+    {
+        if (_disposed) return;
+        var controllerOptions = BrowserEnvironment.CreateControllerOptions(_isPrivate);
+        await View.EnsureCoreWebView2Async(BrowserEnvironment.Current, controllerOptions);
+
+        var core = Core!;
+        BrowserEnvironment.RegisterProfile(core.Profile);
+        BrowserEnvironment.ApplyPrivacyLevel(core.Profile, SettingsService.Current.PrivacyLevel);
+        if (!_isPrivate)
+            await ExtensionService.EnsureInstalledAsync(core.Profile);
+
+        if (Directory.Exists(AppPaths.WebAssets))
+        {
+            core.SetVirtualHostNameToFolderMapping(
+                "nexus.local",
+                AppPaths.WebAssets,
+                CoreWebView2HostResourceAccessKind.DenyCors);
+        }
+
+        Address = _navigateOnInitialize ? UrlService.Resolve(InitialUrl) : "about:blank";
+        ConfigureSettings(core.Settings, UrlService.IsInternal(Address));
+        AttachEvents(core);
+        await AttachDeveloperDiagnosticsAsync(core);
+        TrackingProtectionService.Attach(core, () => core.Source, () =>
+        {
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                BlockedCount++;
+                StateChanged?.Invoke(this, EventArgs.Empty);
+            });
+        }, RecordNetworkRequest);
+
+        if (_navigateOnInitialize)
+            core.Navigate(Address);
+    }
+
+    private async Task AttachDeveloperDiagnosticsAsync(CoreWebView2 core)
+    {
+        try
+        {
+            await core.CallDevToolsProtocolMethodAsync("Runtime.enable", "{}");
+            _consoleReceiver = core.GetDevToolsProtocolEventReceiver("Runtime.consoleAPICalled");
+            _exceptionReceiver = core.GetDevToolsProtocolEventReceiver("Runtime.exceptionThrown");
+            _consoleReceiver.DevToolsProtocolEventReceived += (_, e) => CaptureDeveloperEvent("console", e.ParameterObjectAsJson);
+            _exceptionReceiver.DevToolsProtocolEventReceived += (_, e) => CaptureDeveloperEvent("exception", e.ParameterObjectAsJson);
+        }
+        catch { /* DevTools AI покажет DOM и сеть, даже если CDP-журнал недоступен. */ }
+    }
+
+    private void CaptureDeveloperEvent(string kind, string json)
+    {
+        var safe = RedactDeveloperText(json);
+        if (safe.Length > 1800) safe = safe[..1800] + "…";
+        lock (_developerLock)
+        {
+            _developerEvents.Enqueue($"[{DateTime.Now:HH:mm:ss}] {kind}: {safe}");
+            while (_developerEvents.Count > 200) _developerEvents.Dequeue();
+        }
+    }
+
+    private static string RedactDeveloperText(string value)
+    {
+        var redacted = System.Text.RegularExpressions.Regex.Replace(value,
+            """(?i)(authorization|cookie|password|passwd|token|secret|session)["']?\s*[:=]\s*["']?[^\s,;"']+""",
+            "$1:[REDACTED]");
+        return System.Text.RegularExpressions.Regex.Replace(redacted,
+            @"eyJ[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}(?:\.[A-Za-z0-9_-]{8,})?", "[JWT REDACTED]");
+    }
+
+    private static string StripSensitiveUrl(string value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)) return value;
+        return new UriBuilder(uri) { Query = string.Empty, Fragment = string.Empty }.Uri.AbsoluteUri;
+    }
+
+    private void ConfigureSettings(CoreWebView2Settings settings, bool allowLocalBridge)
+    {
+        var app = SettingsService.Current;
+        settings.IsScriptEnabled = true;
+        settings.AreDefaultScriptDialogsEnabled = true;
+        settings.AreDefaultContextMenusEnabled = true;
+        settings.AreBrowserAcceleratorKeysEnabled = true;
+        settings.AreHostObjectsAllowed = false;
+        settings.IsWebMessageEnabled = allowLocalBridge;
+        settings.AreDevToolsEnabled = true;
+        settings.IsStatusBarEnabled = false;
+        settings.IsZoomControlEnabled = true;
+        settings.IsPinchZoomEnabled = true;
+        settings.IsBuiltInErrorPageEnabled = true;
+        settings.IsReputationCheckingRequired = true;
+        settings.IsPasswordAutosaveEnabled = app.EnablePasswordAutosave;
+        settings.IsGeneralAutofillEnabled = app.EnableGeneralAutofill;
+        // User-Agent намеренно не меняется: стандартный Chromium-отпечаток менее уникален.
+    }
+
+    private void AttachEvents(CoreWebView2 core)
+    {
+        core.NavigationStarting += (_, e) =>
+        {
+            ResetNetworkSnapshot(e.Uri);
+            core.Settings.IsWebMessageEnabled = UrlService.IsInternal(e.Uri);
+            var phishing = PhishingProtectionService.Analyze(e.Uri);
+            PhishingRisk = phishing.Level;
+            SecurityWarning = phishing.Description;
+            if (phishing.Level == PhishingRiskLevel.High)
+            {
+                e.Cancel = true;
+                var owner = Window.GetWindow(View);
+                var warning = $"Возможная подмена адреса\n\n{phishing.Description}\n\nАдрес: {e.Uri}\n\nВсё равно открыть сайт?";
+                var decision = owner is null
+                    ? GlassDialogWindow.Show(warning, "Monach Anti-Phishing", MessageBoxButton.YesNo, MessageBoxImage.Stop)
+                    : GlassDialogWindow.Show(owner, warning, "Monach Anti-Phishing", MessageBoxButton.YesNo, MessageBoxImage.Stop);
+                if (decision == MessageBoxResult.Yes)
+                {
+                    PhishingProtectionService.TrustForSession(phishing.Host);
+                    Application.Current.Dispatcher.BeginInvoke(new Action(() => core.Navigate(e.Uri)));
+                }
+                StateChanged?.Invoke(this, EventArgs.Empty);
+                return;
+            }
+            var cleaned = UrlService.CleanTrackingParameters(e.Uri);
+            if (!cleaned.Equals(e.Uri, StringComparison.Ordinal))
+            {
+                e.Cancel = true;
+                Application.Current.Dispatcher.BeginInvoke(new Action(() => core.Navigate(cleaned)));
+                return;
+            }
+
+            IsLoading = true;
+            Address = e.Uri;
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        };
+
+        core.SourceChanged += (_, _) =>
+        {
+            Address = core.Source;
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        };
+
+        core.DocumentTitleChanged += (_, _) =>
+        {
+            Title = string.IsNullOrWhiteSpace(core.DocumentTitle) ? "Новая вкладка" : core.DocumentTitle;
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        };
+
+        core.HistoryChanged += (_, _) => StateChanged?.Invoke(this, EventArgs.Empty);
+
+        core.NavigationCompleted += (_, e) =>
+        {
+            IsLoading = false;
+            Address = core.Source;
+            _firstNavigation.TrySetResult(e.IsSuccess);
+            StateChanged?.Invoke(this, EventArgs.Empty);
+            if (e.IsSuccess)
+                NavigationSucceeded?.Invoke(this, EventArgs.Empty);
+        };
+
+        core.NewWindowRequested += async (_, e) =>
+        {
+            e.Handled = true;
+            var deferral = e.GetDeferral();
+            try
+            {
+                if (CreatePopupAsync is not null)
+                    e.NewWindow = await CreatePopupAsync(e.Uri);
+            }
+            finally
+            {
+                deferral.Complete();
+            }
+        };
+
+        core.PermissionRequested += (_, e) => HandlePermission(e);
+        core.WebMessageReceived += (_, e) => HandleWebMessage(e);
+        core.DownloadStarting += (_, e) => HandleDownload(e);
+        core.ProcessFailed += (_, _) =>
+        {
+            Title = "Вкладка аварийно завершена";
+            IsLoading = false;
+            StateChanged?.Invoke(this, EventArgs.Empty);
+        };
+    }
+
+    private void HandlePermission(CoreWebView2PermissionRequestedEventArgs e)
+    {
+        if (SettingsService.Current.BlockNotifications && e.PermissionKind == CoreWebView2PermissionKind.Notifications)
+        {
+            e.State = CoreWebView2PermissionState.Deny;
+            e.Handled = true;
+            return;
+        }
+
+        var needsOurPrompt = e.PermissionKind is
+            CoreWebView2PermissionKind.Camera or
+            CoreWebView2PermissionKind.Microphone or
+            CoreWebView2PermissionKind.Geolocation or
+            CoreWebView2PermissionKind.ClipboardRead or
+            CoreWebView2PermissionKind.FileReadWrite or
+            CoreWebView2PermissionKind.OtherSensors or
+            CoreWebView2PermissionKind.LocalFonts or
+            CoreWebView2PermissionKind.MidiSystemExclusiveMessages or
+            CoreWebView2PermissionKind.WindowManagement or
+            CoreWebView2PermissionKind.MultipleAutomaticDownloads or
+            CoreWebView2PermissionKind.Notifications;
+        if (!needsOurPrompt)
+            return;
+
+        var origin = Uri.TryCreate(e.Uri, UriKind.Absolute, out var uri) ? uri.Host : e.Uri;
+        var permission = e.PermissionKind switch
+        {
+            CoreWebView2PermissionKind.Camera => "доступ к камере",
+            CoreWebView2PermissionKind.Microphone => "доступ к микрофону",
+            CoreWebView2PermissionKind.Geolocation => "местоположение",
+            CoreWebView2PermissionKind.ClipboardRead => "чтение буфера обмена",
+            CoreWebView2PermissionKind.Notifications => "уведомления",
+            CoreWebView2PermissionKind.FileReadWrite => "чтение и изменение выбранных файлов",
+            CoreWebView2PermissionKind.LocalFonts => "список локальных шрифтов",
+            CoreWebView2PermissionKind.OtherSensors => "датчики устройства",
+            CoreWebView2PermissionKind.MultipleAutomaticDownloads => "несколько автоматических загрузок",
+            _ => e.PermissionKind.ToString()
+        };
+
+        var owner = Window.GetWindow(View);
+        var result = owner is null
+            ? GlassDialogWindow.Show($"Сайт {origin} запрашивает {permission}. Разрешить?", "Разрешение сайта",
+                MessageBoxButton.YesNo, MessageBoxImage.Question)
+            : GlassDialogWindow.Show(owner, $"Сайт {origin} запрашивает {permission}. Разрешить?", "Разрешение сайта",
+                MessageBoxButton.YesNo, MessageBoxImage.Question);
+        e.State = result == MessageBoxResult.Yes ? CoreWebView2PermissionState.Allow : CoreWebView2PermissionState.Deny;
+        e.Handled = true;
+    }
+
+    private void HandleWebMessage(CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        if (!Uri.TryCreate(e.Source, UriKind.Absolute, out var source) ||
+            !source.Host.Equals("nexus.local", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        try
+        {
+            using var json = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = json.RootElement;
+            var type = root.TryGetProperty("type", out var t) ? t.GetString() : null;
+            if (type is "navigate" or "search")
+            {
+                var value = root.TryGetProperty("value", out var v) ? v.GetString() : null;
+                if (!string.IsNullOrWhiteSpace(value))
+                    OpenUrlRequested?.Invoke(this, new UrlRequestedEventArgs(value) { OpenInNewTab = false });
+            }
+            else if (type == "settings")
+            {
+                SettingsRequested?.Invoke(this, EventArgs.Empty);
+            }
+        }
+        catch (JsonException)
+        {
+            // Сообщения неизвестного формата отбрасываются.
+        }
+    }
+
+    private void HandleDownload(CoreWebView2DownloadStartingEventArgs e)
+    {
+        var operation = e.DownloadOperation;
+        var path = operation.ResultFilePath;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            var downloads = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+            Directory.CreateDirectory(downloads);
+            path = MakeUniquePath(Path.Combine(downloads, "download.bin"));
+            e.ResultFilePath = path;
+        }
+
+        var fileName = Path.GetFileName(path);
+        var assessment = DownloadSecurityService.Assess(fileName, operation.Uri);
+        if (assessment.Level == DownloadRiskLevel.High)
+        {
+            var owner = Window.GetWindow(View);
+            var message = $"Файл: {fileName}\nИсточник: {operation.Uri}\n\n{assessment.Description}.\n\nПродолжить загрузку?";
+            var decision = owner is null
+                ? GlassDialogWindow.Show(message, "Опасная загрузка", MessageBoxButton.YesNo, MessageBoxImage.Warning)
+                : GlassDialogWindow.Show(owner, message, "Опасная загрузка", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (decision != MessageBoxResult.Yes)
+            {
+                e.Cancel = true;
+                return;
+            }
+        }
+
+        // Оставляем стандартную панель загрузок WebView2 видимой для понятного UX.
+        e.Handled = false;
+        var item = new DownloadItem
+        {
+            FileName = Path.GetFileName(path),
+            FilePath = path,
+            SourceUrl = operation.Uri,
+            BytesReceived = operation.BytesReceived,
+            TotalBytes = NormalizeTotalBytes(operation.TotalBytesToReceive)
+        };
+        DownloadSecurityService.SetAssessment(item, assessment);
+        DownloadService.Add(item);
+
+        operation.BytesReceivedChanged += (_, _) => Application.Current.Dispatcher.Invoke(() =>
+        {
+            item.BytesReceived = operation.BytesReceived;
+            item.TotalBytes = NormalizeTotalBytes(operation.TotalBytesToReceive);
+        });
+        operation.StateChanged += (_, _) => Application.Current.Dispatcher.Invoke(() =>
+        {
+            item.Status = operation.State switch
+            {
+                CoreWebView2DownloadState.Completed => "Завершено",
+                CoreWebView2DownloadState.Interrupted => "Прервано: " + operation.InterruptReason,
+                _ => "Загрузка"
+            };
+            if (operation.State == CoreWebView2DownloadState.Completed)
+                _ = DownloadSecurityService.InspectCompletedAsync(item);
+        });
+    }
+
+    private static string MakeUniquePath(string path)
+    {
+        if (!File.Exists(path)) return path;
+        var folder = Path.GetDirectoryName(path)!;
+        var name = Path.GetFileNameWithoutExtension(path);
+        var extension = Path.GetExtension(path);
+        for (var i = 1; i < 10000; i++)
+        {
+            var candidate = Path.Combine(folder, $"{name} ({i}){extension}");
+            if (!File.Exists(candidate)) return candidate;
+        }
+        return Path.Combine(folder, $"{name}-{Guid.NewGuid():N}{extension}");
+    }
+
+    private static long NormalizeTotalBytes(ulong? value)
+    {
+        if (!value.HasValue) return 0;
+        return value.Value > long.MaxValue ? long.MaxValue : (long)value.Value;
+    }
+
+    private void OnPropertyChanged([CallerMemberName] string? name = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+}
