@@ -1,20 +1,47 @@
 using System.Media;
+using System.Runtime.InteropServices;
 
 namespace NexusMonach.Services;
 
 public static class StartupSoundService
 {
-    public static Task PlayAsync() => Task.Run(() =>
+    public static Task PlayAsync()
     {
-        try
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
         {
-            using var stream = new MemoryStream(BuildChime());
-            using var player = new SoundPlayer(stream);
-            player.PlaySync();
-            SpeakBrandName();
-        }
-        catch { /* Отсутствие аудиоустройства не должно мешать запуску браузера. */ }
-    });
+            try
+            {
+                PlayChime();
+                SpeakBrandName();
+                WriteDiagnostic("OK: chime and spoken brand completed.");
+                completion.TrySetResult(true);
+            }
+            catch (Exception ex)
+            {
+                // Звук не должен мешать запуску, но ошибка больше не теряется молча.
+                WriteDiagnostic(ex.ToString());
+                completion.TrySetResult(false);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "Nexus startup voice"
+        };
+        // SAPI надёжнее работает в отдельном STA-потоке. Task.Run создавал MTA-поток,
+        // из-за чего на части Windows голос и даже весь стартовый сценарий молча пропускались.
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        return completion.Task;
+    }
+
+    private static void PlayChime()
+    {
+        using var stream = new MemoryStream(BuildChime(), writable: false);
+        using var player = new SoundPlayer(stream);
+        player.Load();
+        player.PlaySync();
+    }
 
     private static byte[] BuildChime()
     {
@@ -46,24 +73,44 @@ public static class StartupSoundService
                 value += Math.Sin(2 * Math.PI * frequencies[tone] * 2 * local) * envelope * 0.12;
             }
             var masterFade = Math.Min(1, (duration - time) / 0.12);
-            writer.Write((short)(Math.Clamp(value * masterFade * 0.105, -1, 1) * short.MaxValue));
+            writer.Write((short)(Math.Clamp(value * masterFade * 0.24, -1, 1) * short.MaxValue));
         }
+        writer.Flush();
         return stream.ToArray();
     }
 
     private static void SpeakBrandName()
     {
+        object? voiceObject = null;
         try
         {
             var sapiType = Type.GetTypeFromProgID("SAPI.SpVoice");
-            if (sapiType is null) return;
-            dynamic voice = Activator.CreateInstance(sapiType)!;
+            if (sapiType is null) throw new InvalidOperationException("Windows SAPI.SpVoice не зарегистрирован.");
+            voiceObject = Activator.CreateInstance(sapiType)
+                          ?? throw new InvalidOperationException("Windows не создал SAPI.SpVoice.");
+            dynamic voice = voiceObject;
             dynamic maleVoices = voice.GetVoices("Gender=Male", "");
             if (maleVoices.Count > 0) voice.Voice = maleVoices.Item(0);
             voice.Rate = -1;
-            voice.Volume = 78;
-            voice.Speak("Nexus Monach", 0);
+            voice.Volume = 92;
+            // Кириллическая запись одинаково читается русскими голосами Windows.
+            voice.Speak("Нексус Монах", 0);
         }
-        catch { /* SAPI или мужской голос могут отсутствовать в облегчённой Windows. */ }
+        finally
+        {
+            if (voiceObject is not null && Marshal.IsComObject(voiceObject))
+                try { Marshal.FinalReleaseComObject(voiceObject); } catch { }
+        }
+    }
+
+    private static void WriteDiagnostic(string text)
+    {
+        try
+        {
+            Directory.CreateDirectory(AppPaths.AppRoot);
+            File.AppendAllText(Path.Combine(AppPaths.AppRoot, "startup-audio.log"),
+                $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {text}{Environment.NewLine}");
+        }
+        catch { }
     }
 }

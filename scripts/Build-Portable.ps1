@@ -58,7 +58,8 @@ dotnet publish $project `
     -p:PublishSingleFile=false `
     -p:PublishTrimmed=false `
     -p:DebugType=None `
-    -p:DebugSymbols=false
+    -p:DebugSymbols=false `
+    -warnaserror
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Compilation failed. No portable archive was created." -ForegroundColor Red
     exit $LASTEXITCODE

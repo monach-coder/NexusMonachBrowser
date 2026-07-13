@@ -203,10 +203,9 @@
                         <MenuItem Header="Новое приватное окно" InputGestureText="Ctrl+Shift+N" Click="NewPrivateWindow_Click" />
                         <Separator />
                         <MenuItem Header="Закладки" InputGestureText="Ctrl+Shift+B" Click="ShowBookmarks_Click" />
-                        <MenuItem Header="История" InputGestureText="Ctrl+H" Click="ShowHistory_Click" />
                         <MenuItem Header="Загрузки" InputGestureText="Ctrl+J" Click="ShowDownloads_Click" />
                         <MenuItem Header="Умные капсулы вкладок" InputGestureText="Ctrl+Shift+K" Click="ShowSmartCapsules_Click" />
-                        <MenuItem Header="Локальный граф знаний" InputGestureText="Ctrl+Shift+G" Click="ShowKnowledgeGraph_Click" />
+                        <MenuItem Header="Граф знаний и память просмотра" InputGestureText="Ctrl+Shift+G" Click="ShowKnowledgeGraph_Click" />
                         <Separator />
                         <MenuItem x:Name="ExtensionsMenuItem" Header="Расширения" Click="ShowExtensions_Click" />
                         <MenuItem Header="Показать / скрыть Privacy Dock" Click="ShowPrivacyMonitor_Click" />
@@ -330,13 +329,13 @@
             <TextBlock x:Name="NetworkStatusText" FontSize="12"
                        FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}"
                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
-                       ToolTip="↓/↑ — текущая скорость наиболее активного сетевого адаптера; PING — проверка 1.1.1.1 каждые 5 секунд">
+                       ToolTip="↓/↑ — текущая скорость наиболее активного сетевого адаптера; PING LAN — локальная проверка шлюза Windows без внешнего запроса">
                 <Run Text="СЕТЕВОЙ СТАТУС  ·  " />
                 <Run x:Name="DownloadRateText" Text="↓ —" />
                 <Run Text="  ·  " />
                 <Run x:Name="UploadRateText" Text="↑ —" />
                 <Run Text="  ·  " />
-                <Run x:Name="PingText" Text="PING —" />
+                <Run x:Name="PingText" Text="PING LAN —" />
                 <Run x:Name="NetworkDetailsText" Text="  ·  подготовка…" />
             </TextBlock>
         </Border>

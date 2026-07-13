@@ -659,37 +659,64 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         if (Core is null || UrlService.IsInternal(CurrentUrl)) return "[]";
         return await Core.ExecuteScriptAsync("""
             (() => {
-              const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>100&&r.height>45&&s.display!=='none'&&s.visibility!=='hidden';};
-              const selectors='[itemtype*="Product"],[data-product-id],[data-nm-id],article,li[class*="product"],div[class*="product-card"],div[class*="productCard"],div[class*="card"]';
-              const nodes=[...new Set(document.querySelectorAll(selectors))].filter(visible);
               const result=[], seen=new Set();
-              for(const e of nodes){
-                const text=(e.innerText||'').replace(/\s+/g,' ').trim(); if(text.length<18||text.length>1400) continue;
-                const heading=e.querySelector('h1,h2,h3,h4,[class*="name"],[class*="title"]');
-                const link=e.matches('a')?e:e.querySelector('a[href]');
-                const name=(heading?.innerText||link?.getAttribute('aria-label')||link?.title||text.slice(0,160)).replace(/\s+/g,' ').trim().slice(0,220);
-                if(name.length<3) continue;
-                let url=''; try { if(link?.href){const u=new URL(link.href);url=u.origin+u.pathname;} } catch {}
-                const key=(url||name).toLowerCase(); if(seen.has(key)) continue; seen.add(key);
-                const price=(text.match(/(?:\d[\d\s.,]{0,14})\s*(?:₽|руб\.?|RUB)/i)||text.match(/(?:₽|руб\.?)\s*\d[\d\s.,]{0,14}/i)||[])[0]||'';
-                const rating=(text.match(/(?:рейтинг|rating)?\s*[0-5][.,]\d\s*(?:из\s*5)?/i)||[])[0]||'';
-                const buyers=(text.match(/\d[\d\s.,]*\s*(?:купили|купило|покупок|заказов|отзыв(?:а|ов)?|sold|reviews?)/i)||[])[0]||'';
-                result.push({name,price,rating,buyers,url,text:text.slice(0,900)}); if(result.length>=60) break;
+              const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>70&&r.height>25&&s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';};
+              const clean=value=>(value||'').replace(/\s+/g,' ').trim();
+              const currency=/(?:\d[\d\s.,]{0,14})\s*(?:₽|руб\.?|RUB|\$|€|£|¥|₸|₴)|(?:₽|руб\.?|RUB|\$|€|£|¥|₸|₴)\s*\d[\d\s.,]{0,14}/i;
+              const ratingPattern=/(?:рейтинг|rating|оценка)?\s*[0-5][.,]\d\s*(?:из\s*5)?/i;
+              const buyersPattern=/\d[\d\s.,]*\s*(?:купили|купило|покупок|заказов|отзыв(?:а|ов)?|оцен(?:ка|ок)|sold|reviews?|ratings?)/i;
+              const safeUrl=value=>{try{const u=new URL(value,location.href);if(!/^https?:$/.test(u.protocol)||u.origin!==location.origin)return '';u.hash='';return u.origin+u.pathname+u.search;}catch{return ''}};
+              const add=(name,text,url,price='',rating='',buyers='',source='DOM')=>{
+                name=clean(name).slice(0,220);text=clean(text).slice(0,1200);url=safeUrl(url);
+                if(name.length<3)return;const key=(url||name).toLowerCase();if(seen.has(key))return;
+                price=clean(price)||(text.match(currency)||[])[0]||'';
+                rating=clean(rating)||(text.match(ratingPattern)||[])[0]||'';
+                buyers=clean(buyers)||(text.match(buyersPattern)||[])[0]||'';
+                if(!price&&!rating&&!buyers&&!/product|товар|catalog|item|offer/i.test((url||'')+' '+source))return;
+                seen.add(key);result.push({name,price,rating,buyers,url,text,source});
+              };
+
+              // Структурированные данные надёжнее CSS-классов и работают на многих магазинах.
+              for(const script of document.querySelectorAll('script[type="application/ld+json"]')){
+                try{
+                  const root=JSON.parse(script.textContent||'null'), queue=Array.isArray(root)?[...root]:[root];
+                  while(queue.length){const item=queue.shift();if(!item||typeof item!=='object')continue;
+                    if(Array.isArray(item)){queue.push(...item);continue} if(item['@graph'])queue.push(item['@graph']);
+                    const type=Array.isArray(item['@type'])?item['@type'].join(' '):String(item['@type']||'');
+                    if(/Product/i.test(type)){
+                      const offer=Array.isArray(item.offers)?item.offers[0]:(item.offers||{}), aggregate=item.aggregateRating||{};
+                      const price=offer.price?String(offer.price)+' '+String(offer.priceCurrency||''):'';
+                      const rating=aggregate.ratingValue?String(aggregate.ratingValue):'';
+                      const buyers=aggregate.reviewCount||aggregate.ratingCount?String(aggregate.reviewCount||aggregate.ratingCount)+' отзывов':'';
+                      add(item.name||item.headline,item.description||item.name,item.url||offer.url||location.href,price,rating,buyers,'JSON-LD Product');
+                    }
+                    if(/ItemList/i.test(type)&&Array.isArray(item.itemListElement))queue.push(...item.itemListElement.map(x=>x.item||x));
+                  }
+                }catch{}
               }
-              if(result.length<3){
-                for(const link of [...document.querySelectorAll('main a[href],section a[href],[role="main"] a[href]')].filter(visible)){
-                  const host=link.closest('article,li,[class*="result"],[class*="item"],[class*="product"]')||link.parentElement;
-                  const text=(host?.innerText||link.innerText||'').replace(/\s+/g,' ').trim();if(text.length<18||text.length>1400)continue;
-                  const name=(link.innerText||link.getAttribute('aria-label')||link.title||text.slice(0,160)).replace(/\s+/g,' ').trim().slice(0,220);if(name.length<3)continue;
-                  let url='';try{const u=new URL(link.href);if(u.origin!==location.origin)continue;url=u.origin+u.pathname}catch{continue}
-                  const key=(url||name).toLowerCase();if(seen.has(key))continue;seen.add(key);
-                  const price=(text.match(/(?:\d[\d\s.,]{0,14})\s*(?:₽|руб\.?|RUB|\$|€|£|¥)/i)||[])[0]||'';
-                  const rating=(text.match(/(?:рейтинг|rating)?\s*[0-5][.,]\d\s*(?:из\s*5)?/i)||[])[0]||'';
-                  const buyers=(text.match(/\d[\d\s.,]*\s*(?:купили|покупок|заказов|отзыв(?:а|ов)?|sold|reviews?)/i)||[])[0]||'';
-                  result.push({name,price,rating,buyers,url,text:text.slice(0,900)});if(result.length>=60)break;
+
+              const selectors='[itemtype*="Product"],[data-product-id],[data-nm-id],[data-sku],article,li[class*="product" i],div[class*="product-card" i],div[class*="productcard" i],div[class*="catalog" i] [class*="card" i],[role="listitem"]';
+              const nodes=[...new Set(document.querySelectorAll(selectors))].filter(visible);
+              for(const e of nodes){
+                const text=clean(e.innerText); if(text.length<12||text.length>1800) continue;
+                const heading=e.querySelector('h1,h2,h3,h4,[itemprop="name"],[class*="name" i],[class*="title" i]');
+                const link=e.matches('a')?e:e.querySelector('a[href]');
+                const name=heading?.innerText||link?.getAttribute('aria-label')||link?.title||text.slice(0,180);
+                add(name,text,link?.href||e.getAttribute('itemid')||'','','','','product DOM'); if(result.length>=80) break;
+              }
+
+              // Универсальный резерв: ссылка с изображением и ценой в ближайшей карточке.
+              if(result.length<8){
+                for(const link of [...document.querySelectorAll('a[href]')].filter(visible)){
+                  if(!link.querySelector('img')&&!link.closest('[class*="product" i],[class*="card" i],[class*="item" i]'))continue;
+                  const host=link.closest('article,li,[role="listitem"],[class*="result" i],[class*="item" i],[class*="product" i],[class*="card" i]')||link.parentElement;
+                  const text=clean(host?.innerText||link.innerText);if(text.length<8||text.length>1800||!currency.test(text))continue;
+                  const image=link.querySelector('img')||host?.querySelector('img');
+                  const name=link.innerText||link.getAttribute('aria-label')||image?.alt||link.title||text.slice(0,180);
+                  add(name,text,link.href,'','','','image + price');if(result.length>=80)break;
                 }
               }
-              return result;
+              return result.slice(0,80);
             })();
             """);
     }

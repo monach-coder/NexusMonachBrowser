@@ -18,10 +18,20 @@ public static class SemanticEmbeddingService
             var request = JsonSerializer.Serialize(new { text = text[..Math.Min(text.Length, 12_000)] });
             await _process!.StandardInput.WriteLineAsync(request.AsMemory(), cancellationToken);
             await _process.StandardInput.FlushAsync(cancellationToken);
-            var line = await _process.StandardOutput.ReadLineAsync(cancellationToken);
-            return string.IsNullOrWhiteSpace(line)
-                ? []
-                : JsonSerializer.Deserialize<List<float>>(line) ?? [];
+            // transformers.js может один раз вывести служебную строку при загрузке ONNX.
+            // Пропускаем её и ждём именно JSON-массив эмбеддинга.
+            for (var attempt = 0; attempt < 40; attempt++)
+            {
+                var line = await _process.StandardOutput.ReadLineAsync(cancellationToken);
+                if (line is null) break;
+                try
+                {
+                    var value = JsonSerializer.Deserialize<List<float>>(line);
+                    if (value is not null) return value;
+                }
+                catch (JsonException) { }
+            }
+            return [];
         }
         catch { Stop(); return []; }
         finally { Gate.Release(); }
@@ -40,6 +50,7 @@ public static class SemanticEmbeddingService
         start.ArgumentList.Add(AiModelCatalog.SemanticAdapter);
         start.ArgumentList.Add(AiModelCatalog.SemanticRoot);
         _process = Process.Start(start) ?? throw new InvalidOperationException("Не удалось запустить Nexus Semantics.");
+        _ = _process.StandardError.ReadToEndAsync();
     }
 
     public static void Stop()

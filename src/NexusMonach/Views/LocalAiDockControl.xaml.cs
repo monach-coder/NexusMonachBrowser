@@ -66,7 +66,7 @@ public partial class LocalAiDockControl : UserControl
             segments = await tab.CaptureTranslationSegmentsAsync();
             if (segments.Count == 0) throw new InvalidOperationException("На странице нет видимого текста для перевода.");
             await tab.BeginInPageTranslationAsync(segments.Count);
-            foreach (var batch in segments.Chunk(20))
+            foreach (var batch in segments.Chunk(12))
             {
                 var translated = await LocalIntelligenceService.TranslateSegmentsAsync(batch, _cancellation.Token);
                 completed += translated.Count;
@@ -146,14 +146,31 @@ public partial class LocalAiDockControl : UserControl
                 await Task.Delay(1000, _cancellation.Token);
             }
             await preparation;
+            var useSystemLoopback = false;
             while (!_cancellation.IsCancellationRequested && !await tab.ShouldStopLiveAudioTranslationAsync())
             {
-                await tab.UpdateLiveAudioTranslationStatusAsync("Слушаю текущий фрагмент видео…");
-                var capture = await tab.CaptureActiveVideoAudioAsync(7, _cancellation.Token);
-                if (!capture.Success)
-                    throw new InvalidOperationException(capture.Error);
+                byte[] wav;
+                if (!useSystemLoopback)
+                {
+                    await tab.UpdateLiveAudioTranslationStatusAsync("Слушаю аудиодорожку текущего видео…");
+                    var capture = await tab.CaptureActiveVideoAudioAsync(7, _cancellation.Token);
+                    if (capture.Success)
+                        wav = Convert.FromBase64String(capture.WavBase64);
+                    else
+                    {
+                        useSystemLoopback = true;
+                        await tab.UpdateLiveAudioTranslationStatusAsync(
+                            "Плеер не отдал дорожку. Слушаю системный выход Windows 7 секунд…");
+                        wav = await SystemAudioCaptureService.CaptureWavAsync(7, _cancellation.Token);
+                    }
+                }
+                else
+                {
+                    await tab.UpdateLiveAudioTranslationStatusAsync("Слушаю системный выход Windows 7 секунд…");
+                    wav = await SystemAudioCaptureService.CaptureWavAsync(7, _cancellation.Token);
+                }
                 await tab.UpdateLiveAudioTranslationStatusAsync("Whisper распознаёт речь локально…");
-                var transcript = await WhisperService.TranscribeAsync(Convert.FromBase64String(capture.WavBase64), _cancellation.Token);
+                var transcript = await WhisperService.TranscribeAsync(wav, _cancellation.Token);
                 if (string.IsNullOrWhiteSpace(transcript)) continue;
                 await tab.UpdateLiveAudioTranslationStatusAsync("Nexus Fast Intelligence переводит реплику…");
                 var translated = await LocalIntelligenceService.TranslateSegmentsAsync(
@@ -332,8 +349,11 @@ public partial class LocalAiDockControl : UserControl
                     catch (JsonException) { }
                 }
                 await AppendCurrentPageAsync();
-                await _tab.ScrollShoppingResultsAsync();
-                await AppendCurrentPageAsync();
+                for (var scrollRound = 0; scrollRound < 3 && rawItems.Count < 150; scrollRound++)
+                {
+                    await _tab.ScrollShoppingResultsAsync();
+                    await AppendCurrentPageAsync();
+                }
                 var next = await _tab.GetNextShoppingPageUrlAsync();
                 if (page == 5) break;
                 if (string.IsNullOrWhiteSpace(next))
@@ -349,7 +369,13 @@ public partial class LocalAiDockControl : UserControl
             }
             var count = rawItems.Count;
             if (count == 0)
-                throw new InvalidOperationException("Агент проверил текущую страницу и прокрутку, но не нашёл читаемых результатов. Возможны блокировка VPN/ботов, DRM-приложение или закрытая разметка сайта.");
+            {
+                StatusText.Text = "Локальный AI определяет, что показал сайт…";
+                var visibleText = await _tab.GetReadablePageTextAsync();
+                var diagnosis = await LocalIntelligenceService.DiagnoseAgentPageAsync(
+                    query, _tab.Title, _tab.CurrentUrl, visibleText, _cancellation.Token);
+                throw new InvalidOperationException("Карточки товаров не извлечены. " + diagnosis);
+            }
             var cards = "[" + string.Join(",", rawItems) + "]";
             StatusText.Text = $"Nexus Fast Intelligence сравнивает {count} результатов с {pages} страниц…";
             var report = await LocalIntelligenceService.AnalyzeShoppingResultsAsync(

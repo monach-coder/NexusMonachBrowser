@@ -17,7 +17,6 @@ public partial class MainWindow : Window
     private static readonly Lazy<Task> DataInitialization = new(async () =>
     {
         await BookmarkService.InitializeAsync();
-        await HistoryService.InitializeAsync();
         await ExtensionService.InitializeAsync();
         await SiteRuleService.InitializeAsync();
         await KnowledgeGraphService.InitializeAsync();
@@ -42,6 +41,7 @@ public partial class MainWindow : Window
     private int[] _localUdpPorts = [];
     private LocalPortInfo[] _localPortDetails = [];
     private bool _localPortsAvailable;
+    private readonly Dictionary<BrowserTab, string> _lastKnowledgeUrl = [];
 
     public ObservableCollection<BrowserTab> Tabs { get; } = [];
     private BrowserTab? ActiveTab => TabsList.SelectedItem as BrowserTab;
@@ -107,12 +107,14 @@ public partial class MainWindow : Window
     {
         var tab = new BrowserTab(url, _isPrivate, navigateOnInitialize);
         tab.StateChanged += (_, _) => Dispatcher.Invoke(SyncUi);
-        tab.NavigationSucceeded += async (_, _) =>
+        tab.NavigationSucceeded += (_, _) =>
         {
             if (!_isPrivate)
             {
-                await HistoryService.AddAsync(tab.Title, tab.CurrentUrl);
-                _ = IndexKnowledgeAsync(tab, tab.CurrentUrl);
+                var current = tab.CurrentUrl;
+                _lastKnowledgeUrl.TryGetValue(tab, out var previous);
+                _lastKnowledgeUrl[tab] = current;
+                _ = IndexKnowledgeAsync(tab, current, previous);
             }
             Dispatcher.Invoke(SyncUi);
         };
@@ -219,7 +221,7 @@ public partial class MainWindow : Window
         DownloadRateText.Foreground = RateBrush(_downloadBytesPerSecond);
         UploadRateText.Text = $"↑ {FormatRate(_uploadBytesPerSecond)}";
         UploadRateText.Foreground = RateBrush(_uploadBytesPerSecond);
-        PingText.Text = $"PING {(_pingMilliseconds is null ? "—" : _pingMilliseconds + " мс")}";
+        PingText.Text = $"PING LAN {(_pingMilliseconds is null ? "—" : _pingMilliseconds + " мс")}";
         PingText.Foreground = PingBrush(_pingMilliseconds);
         NetworkDetailsText.Text = $"  ·  {(tab.IsSecureConnection ? "TLS защищён" : "без TLS")}  ·  {route}  ·  " +
                                   $"сайт: {(string.IsNullOrWhiteSpace(tab.CurrentHost) ? "—" : tab.CurrentHost)}  ·  " +
@@ -401,6 +403,7 @@ public partial class MainWindow : Window
         if (index < 0) return;
         if (ReferenceEquals(BrowserHost.Content, tab.View))
             BrowserHost.Content = null;
+        _lastKnowledgeUrl.Remove(tab);
         Tabs.Remove(tab);
         tab.Dispose();
 
@@ -454,13 +457,6 @@ public partial class MainWindow : Window
         window.ShowDialog();
     }
 
-    private void ShowHistory_Click(object sender, RoutedEventArgs e)
-    {
-        var window = DataWindow.ForHistory(async url => await OpenTabAsync(url));
-        window.Owner = this;
-        window.ShowDialog();
-    }
-
     private void ShowDownloads_Click(object sender, RoutedEventArgs e)
     {
         var window = DataWindow.ForDownloads();
@@ -468,15 +464,14 @@ public partial class MainWindow : Window
         window.Show();
     }
 
-    private async Task IndexKnowledgeAsync(BrowserTab tab, string expectedUrl)
+    private async Task IndexKnowledgeAsync(BrowserTab tab, string expectedUrl, string? previousUrl)
     {
         try
         {
             await Task.Delay(TimeSpan.FromSeconds(5));
             if (!tab.CurrentUrl.Equals(expectedUrl, StringComparison.OrdinalIgnoreCase)) return;
             var text = await tab.GetReadablePageTextAsync();
-            if (!string.IsNullOrWhiteSpace(text))
-                await KnowledgeGraphService.IndexPageAsync(tab.Title, expectedUrl, text);
+            await KnowledgeGraphService.IndexPageAsync(tab.Title, expectedUrl, text, previousUrl);
         }
         catch { /* Индексация не должна мешать просмотру страницы. */ }
     }
@@ -604,15 +599,15 @@ public partial class MainWindow : Window
     private async void ClearData_Click(object sender, RoutedEventArgs e)
     {
         if (GlassDialogWindow.Show(this,
-                "Удалить cookies, кэш, разрешения сайтов, сохранённые формы, историю и локальный граф знаний?\n\nПосле очистки сайты могут выйти из учётных записей.",
+                "Удалить cookies, кэш, разрешения сайтов, сохранённые формы и локальный граф знаний?\n\nПосле очистки сайты могут выйти из учётных записей.",
                 "Очистка данных", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
             return;
         if (ActiveTab?.Core is not null)
             await ActiveTab.Core.Profile.ClearBrowsingDataAsync();
         if (!_isPrivate)
         {
-            await HistoryService.ClearAsync();
             await KnowledgeGraphService.ClearAsync();
+            try { if (File.Exists(AppPaths.HistoryFile)) File.Delete(AppPaths.HistoryFile); } catch { }
         }
         GlassDialogWindow.Show(this, "Данные просмотра очищены.", "Nexus Monach",
             MessageBoxButton.OK, MessageBoxImage.Information);
@@ -629,7 +624,6 @@ public partial class MainWindow : Window
         else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.K) { ShowSmartCapsules_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.G) { ShowKnowledgeGraph_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.D) { Bookmark_Click(sender, e); e.Handled = true; }
-        else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.H) { ShowHistory_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.J) { ShowDownloads_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.Delete) { ClearData_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == ModifierKeys.Alt && e.Key == Key.Left) { ActiveTab?.GoBack(); e.Handled = true; }
@@ -715,14 +709,33 @@ public partial class MainWindow : Window
             _pingBusy = true;
             try
             {
-                using var ping = new Ping();
-                var reply = await ping.SendPingAsync("1.1.1.1", 1500);
-                _pingMilliseconds = reply.Status == IPStatus.Success ? reply.RoundtripTime : null;
+                var gateway = GetDefaultGateway();
+                if (gateway is null) _pingMilliseconds = null;
+                else
+                {
+                    using var ping = new Ping();
+                    var reply = await ping.SendPingAsync(gateway, 1500);
+                    _pingMilliseconds = reply.Status == IPStatus.Success ? reply.RoundtripTime : null;
+                }
             }
             catch { _pingMilliseconds = null; }
             finally { _pingBusy = false; }
         }
         SyncUi();
+    }
+
+    private static string? GetDefaultGateway()
+    {
+        try
+        {
+            return NetworkInterface.GetAllNetworkInterfaces()
+                .Where(x => x.OperationalStatus == OperationalStatus.Up && x.NetworkInterfaceType != NetworkInterfaceType.Loopback)
+                .SelectMany(x => x.GetIPProperties().GatewayAddresses)
+                .Select(x => x.Address)
+                .FirstOrDefault(x => !x.Equals(System.Net.IPAddress.Any) && !x.Equals(System.Net.IPAddress.IPv6Any))
+                ?.ToString();
+        }
+        catch { return null; }
     }
 
     private static string FormatRate(double bytesPerSecond)
@@ -770,8 +783,8 @@ public partial class MainWindow : Window
         {
             try { await ActiveTab.Core.Profile.ClearBrowsingDataAsync(); }
             catch { /* Закрытие продолжится даже при повреждённом профиле. */ }
-            await HistoryService.ClearAsync();
             await KnowledgeGraphService.ClearAsync();
+            try { if (File.Exists(AppPaths.HistoryFile)) File.Delete(AppPaths.HistoryFile); } catch { }
             if (File.Exists(AppPaths.SessionFile))
                 File.Delete(AppPaths.SessionFile);
         }

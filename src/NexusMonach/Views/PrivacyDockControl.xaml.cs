@@ -1,6 +1,7 @@
+using System.Globalization;
 using System.Net;
-using System.Net.Http;
 using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
@@ -13,41 +14,32 @@ namespace NexusMonach.Views;
 
 public partial class PrivacyDockControl : UserControl
 {
+    // ICE собирается строго без STUN/TURN. Запросы во внешнюю сеть не создаются.
     private const string ProbeScript = """
         (async () => {
           const candidates = [];
           try {
-            const pc = new RTCPeerConnection({iceServers:[{urls:'stun:stun.cloudflare.com:3478'}]});
-            pc.createDataChannel('probe');
+            const pc = new RTCPeerConnection({iceServers:[]});
+            pc.createDataChannel('local-probe');
             pc.onicecandidate = e => { if (e.candidate) candidates.push(e.candidate.candidate); };
             await pc.setLocalDescription(await pc.createOffer());
-            await new Promise(resolve => setTimeout(resolve, 2200));
+            await new Promise(resolve => setTimeout(resolve, 1200));
             pc.close();
           } catch (_) {}
           let canvasToken = '';
           try {
             const c=document.createElement('canvas'); c.width=220; c.height=45;
-            const x=c.getContext('2d'); x.font='16px Segoe UI'; x.fillText('Nexus Monach 🛡',5,20);
+            const x=c.getContext('2d'); x.font='16px Segoe UI'; x.fillText('Nexus Monach local',5,20);
             canvasToken=c.toDataURL();
           } catch (_) {}
-          const data={
-            language:navigator.language||'',
-            timezone:Intl.DateTimeFormat().resolvedOptions().timeZone||'',
-            candidates
-          };
+          const data={language:navigator.language||'',timezone:Intl.DateTimeFormat().resolvedOptions().timeZone||'',candidates};
           const source=JSON.stringify(data)+canvasToken+navigator.userAgent+screen.width+'x'+screen.height;
-          let hash=2166136261;
-          for(let i=0;i<source.length;i++){hash^=source.charCodeAt(i);hash=Math.imul(hash,16777619);}
-          data.fingerprint=(hash>>>0).toString(16).padStart(8,'0').toUpperCase();
-          return data;
+          let hash=2166136261;for(let i=0;i<source.length;i++){hash^=source.charCodeAt(i);hash=Math.imul(hash,16777619);}
+          data.fingerprint=(hash>>>0).toString(16).padStart(8,'0').toUpperCase();return data;
         })();
         """;
 
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
-    private static readonly HttpClient DirectClient = new(new HttpClientHandler { UseProxy = false })
-    {
-        Timeout = TimeSpan.FromSeconds(20)
-    };
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMinutes(5) };
     private bool _started;
     private bool _refreshing;
@@ -66,12 +58,7 @@ public partial class PrivacyDockControl : UserControl
 
     public async Task StartAsync()
     {
-        if (_started)
-        {
-            _timer.Start();
-            await RefreshAsync();
-            return;
-        }
+        if (_started) { _timer.Start(); await RefreshAsync(); return; }
         _started = true;
         try
         {
@@ -84,13 +71,11 @@ public partial class PrivacyDockControl : UserControl
             core.Settings.IsWebMessageEnabled = false;
             core.SetVirtualHostNameToFolderMapping("nexus.local", AppPaths.WebAssets,
                 CoreWebView2HostResourceAccessKind.DenyCors);
+            await NavigateLocalAsync();
             _timer.Start();
             await RefreshAsync();
         }
-        catch (Exception ex)
-        {
-            ShowError(ex.Message);
-        }
+        catch (Exception ex) { ShowError(ex.Message); }
     }
 
     private async void Control_Loaded(object sender, RoutedEventArgs e)
@@ -108,89 +93,73 @@ public partial class PrivacyDockControl : UserControl
     {
         if (!_started || NetworkProbe.CoreWebView2 is null || _refreshing) return;
         _refreshing = true;
-        UpdatedText.Text = "Проверка соединения…";
+        UpdatedText.Text = "Локальная проверка…";
         try
         {
-            var trace = await NavigateAndReadAsync("https://www.cloudflare.com/cdn-cgi/trace");
-            var browserIp = ParseTrace(trace).GetValueOrDefault("ip");
-            if (!IPAddress.TryParse(browserIp, out _)) throw new InvalidOperationException("Внешний IP не определён.");
-            var directIp = await GetDirectIpAsync();
-
-            NetworkData network;
-            try
-            {
-                var json = await NavigateAndReadAsync("https://api.ipapi.is/?q=" + Uri.EscapeDataString(browserIp));
-                network = ParseNetwork(json, browserIp, directIp);
-            }
-            catch { network = new NetworkData { Ip = browserIp, DirectIp = directIp }; }
-
-            await NavigateAsync("https://nexus.local/diagnostics.html");
+            if (!NetworkProbe.CoreWebView2.Source.StartsWith("https://nexus.local", StringComparison.OrdinalIgnoreCase))
+                await NavigateLocalAsync();
             var probeJson = await NetworkProbe.CoreWebView2.ExecuteScriptAsync(ProbeScript);
-            var probe = JsonSerializer.Deserialize<BrowserData>(probeJson, JsonOptions) ?? new BrowserData();
-            Render(network, probe);
-            UpdatedText.Text = "Обновлено " + DateTime.Now.ToString("HH:mm:ss") + " · каждые 5 мин";
+            var browser = JsonSerializer.Deserialize<BrowserData>(probeJson, JsonOptions) ?? new BrowserData();
+            Render(GetLocalNetworkData(), browser);
+            UpdatedText.Text = "Локально " + DateTime.Now.ToString("HH:mm:ss") + " · внешних запросов нет";
         }
         catch (Exception ex) { ShowError(ex.Message); }
         finally { _refreshing = false; }
     }
 
-    private void Render(NetworkData network, BrowserData browser)
+    private void Render(LocalNetworkData network, BrowserData browser)
     {
-        BrowserIpText.Text = "IP браузера: " + network.Ip;
-        DirectIpText.Text = "Прямой IP: " + Dash(network.DirectIp);
-        LocationText.Text = "Регион: " + Dash(string.Join(", ",
-            new[] { network.Country, network.City }.Where(x => !string.IsNullOrWhiteSpace(x))));
-        FlagsText.Text = network.HasReputation
-            ? $"VPN {Mark(network.IsVpn)} · Proxy {Mark(network.IsProxy)} · Tor {Mark(network.IsTor)} · Hosting {Mark(network.IsDatacenter)}"
-            : "VPN/Proxy/Tor/Hosting: нет данных";
+        BrowserIpText.Text = "Локальный IP: " + Dash(string.Join(", ", network.LocalAddresses.Take(3)));
+        DirectIpText.Text = "Маршрут: " + Dash(network.PrimaryInterface);
+        LocationText.Text = "Среда: " + network.LocalRegion + " · " + browser.Timezone;
+        FlagsText.Text = $"VPN-интерфейс {Mark(network.HasVpnInterface)} · Proxy {Mark(network.HasCustomProxy)} · Tor-порт {Mark(network.HasTorEndpoint)}";
 
-        var publicWebRtc = browser.Candidates.Select(ParseCandidate)
-            .Where(x => x is { Type: "srflx" }).Select(x => x!.Address)
-            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        var mismatch = publicWebRtc.Any(x => !x.Equals(network.Ip, StringComparison.OrdinalIgnoreCase));
-        WebRtcText.Text = mismatch ? "⚠ WebRTC: другой IP " + string.Join(", ", publicWebRtc)
-            : publicWebRtc.Count > 0 ? "WebRTC: совпадает" : "WebRTC: публичный IP не раскрыт";
-        WebRtcText.Foreground = mismatch ? Brushes.OrangeRed : (Brush)FindResource("MutedTextBrush");
-
-        var timezoneMatch = network.Timezone.Equals(browser.Timezone, StringComparison.OrdinalIgnoreCase) &&
-                            !string.IsNullOrWhiteSpace(network.Timezone);
-        var region = browser.Language.Split('-', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
-        var languageMatch = region?.Equals(network.CountryCode, StringComparison.OrdinalIgnoreCase) == true;
-        MatchText.Text = $"Часовой пояс {Mark(timezoneMatch)} · язык/регион {Mark(languageMatch)}";
-        MatchText.Foreground = timezoneMatch && languageMatch ? (Brush)FindResource("AccentBrush") : Brushes.DarkOrange;
-        DnsText.Text = "DNS Windows: " + Dash(string.Join(", ", GetDns()));
-        FingerprintText.Text = "Отпечаток: " + Dash(browser.Fingerprint);
-
-        if (network.IsTor || mismatch)
+        var candidates = browser.Candidates.Select(ParseCandidate).Where(x => x is not null).Cast<Ice>().ToArray();
+        var publicCandidates = candidates.Where(x => IsPublicAddress(x.Address)).Select(x => x.Address)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var localCandidates = candidates.Select(x => x.Address).Where(x => !x.EndsWith(".local", StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (publicCandidates.Length > 0)
         {
-            RiskText.Text = network.IsTor ? "TOR ОБНАРУЖЕН" : "ВОЗМОЖНА УТЕЧКА WEBRTC";
-            RiskText.Foreground = Brushes.OrangeRed;
-        }
-        else if (!network.HasReputation)
-        {
-            RiskText.Text = "РЕПУТАЦИЯ IP НЕДОСТУПНА";
-            RiskText.Foreground = Brushes.DarkOrange;
-        }
-        else if (network.IsVpn || network.IsProxy || network.IsDatacenter)
-        {
-            RiskText.Text = "VPN / PROXY ВИДЕН САЙТАМ";
-            RiskText.Foreground = Brushes.DarkOrange;
+            WebRtcText.Text = "⚠ WebRTC локально видит публичный адрес: " + string.Join(", ", publicCandidates);
+            WebRtcText.Foreground = Brushes.OrangeRed;
         }
         else
         {
-            RiskText.Text = "ЯВНЫЕ СЕТЕВЫЕ МЕТКИ НЕ НАЙДЕНЫ";
+            WebRtcText.Text = localCandidates.Length > 0
+                ? "WebRTC: только локальные адреса " + string.Join(", ", localCandidates.Take(2))
+                : "WebRTC: адреса скрыты mDNS / политикой";
+            WebRtcText.Foreground = (Brush)FindResource("MutedTextBrush");
+        }
+
+        MatchText.Text = $"Язык {Dash(browser.Language)} · зона {Dash(browser.Timezone)} · регион только локально";
+        MatchText.Foreground = (Brush)FindResource("AccentBrush");
+        DnsText.Text = "DNS Windows: " + Dash(string.Join(", ", network.Dns.Take(6)));
+        FingerprintText.Text = "Локальный отпечаток: " + Dash(browser.Fingerprint);
+
+        if (publicCandidates.Length > 0)
+        {
+            RiskText.Text = "WEBRTC ВИДИТ ПУБЛИЧНЫЙ ИНТЕРФЕЙС";
+            RiskText.Foreground = Brushes.OrangeRed;
+        }
+        else if (network.HasTorEndpoint)
+        {
+            RiskText.Text = "ЛОКАЛЬНЫЙ TOR-ПОРТ ОБНАРУЖЕН";
+            RiskText.Foreground = Brushes.DarkOrange;
+        }
+        else if (network.HasVpnInterface || network.HasCustomProxy)
+        {
+            RiskText.Text = "ЗАЩИЩЁННЫЙ МАРШРУТ ВИДЕН В WINDOWS";
+            RiskText.Foreground = (Brush)FindResource("AccentBrush");
+        }
+        else
+        {
+            RiskText.Text = "ЯВНЫХ ЛОКАЛЬНЫХ УТЕЧЕК НЕ НАЙДЕНО";
             RiskText.Foreground = (Brush)FindResource("AccentBrush");
         }
     }
 
-    private async Task<string> NavigateAndReadAsync(string url)
-    {
-        await NavigateAsync(url);
-        var value = await NetworkProbe.CoreWebView2.ExecuteScriptAsync("document.body?.innerText || ''");
-        return JsonSerializer.Deserialize<string>(value) ?? string.Empty;
-    }
-
-    private async Task NavigateAsync(string url)
+    private async Task NavigateLocalAsync()
     {
         var core = NetworkProbe.CoreWebView2;
         var source = new TaskCompletionSource<CoreWebView2NavigationCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -198,92 +167,86 @@ public partial class PrivacyDockControl : UserControl
         core.NavigationCompleted += Handler;
         try
         {
-            core.Navigate(url);
-            var result = await source.Task.WaitAsync(TimeSpan.FromSeconds(25));
-            if (!result.IsSuccess) throw new InvalidOperationException("Сетевая ошибка: " + result.WebErrorStatus);
+            core.Navigate("https://nexus.local/diagnostics.html");
+            var result = await source.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            if (!result.IsSuccess) throw new InvalidOperationException("Локальная страница диагностики недоступна.");
         }
         finally { core.NavigationCompleted -= Handler; }
     }
 
-    private static Dictionary<string, string> ParseTrace(string value) => value
-        .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-        .Select(x => x.Split('=', 2)).Where(x => x.Length == 2)
-        .ToDictionary(x => x[0], x => x[1], StringComparer.OrdinalIgnoreCase);
-
-    private static NetworkData ParseNetwork(string json, string ip, string directIp)
+    private static LocalNetworkData GetLocalNetworkData()
     {
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-        return new NetworkData
+        var result = new LocalNetworkData();
+        try
         {
-            HasReputation = true, Ip = Text(root, "ip") ?? ip, DirectIp = directIp,
-            IsVpn = Bool(root, "is_vpn"), IsProxy = Bool(root, "is_proxy"),
-            IsTor = Bool(root, "is_tor"), IsDatacenter = Bool(root, "is_datacenter"),
-            Country = Nested(root, "location", "country") ?? string.Empty,
-            CountryCode = Nested(root, "location", "country_code") ?? string.Empty,
-            City = Nested(root, "location", "city") ?? string.Empty,
-            Timezone = Nested(root, "location", "timezone") ?? string.Empty
-        };
+            var active = NetworkInterface.GetAllNetworkInterfaces().Where(x => x.OperationalStatus == OperationalStatus.Up &&
+                x.NetworkInterfaceType != NetworkInterfaceType.Loopback).ToArray();
+            foreach (var adapter in active)
+            {
+                var properties = adapter.GetIPProperties();
+                result.LocalAddresses.AddRange(properties.UnicastAddresses.Where(x => x.Address.AddressFamily == AddressFamily.InterNetwork)
+                    .Select(x => x.Address.ToString()));
+                result.Dns.AddRange(properties.DnsAddresses.Select(x => x.ToString()));
+                var descriptor = (adapter.Name + " " + adapter.Description).ToLowerInvariant();
+                if (adapter.NetworkInterfaceType is NetworkInterfaceType.Tunnel or NetworkInterfaceType.Ppp ||
+                    new[] { "vpn", "wireguard", "wintun", "openvpn", "tap", "tailscale", "zerotier", "adguard" }
+                        .Any(descriptor.Contains)) result.HasVpnInterface = true;
+                if (string.IsNullOrWhiteSpace(result.PrimaryInterface) && properties.GatewayAddresses.Any(x =>
+                        !x.Address.Equals(IPAddress.Any) && !x.Address.Equals(IPAddress.IPv6Any)))
+                    result.PrimaryInterface = adapter.Name;
+            }
+            result.HasTorEndpoint = IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners()
+                .Any(x => IPAddress.IsLoopback(x.Address) && x.Port is 9050 or 9051 or 9150 or 9151);
+        }
+        catch { }
+        result.LocalAddresses = result.LocalAddresses.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        result.Dns = result.Dns.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        result.HasCustomProxy = SettingsService.Current.EnableCustomProxy;
+        try { result.LocalRegion = RegionInfo.CurrentRegion.DisplayName + " (Windows)"; }
+        catch { result.LocalRegion = CultureInfo.CurrentCulture.Name + " (Windows)"; }
+        return result;
     }
-
-    private static string? Text(JsonElement root, string name) => root.TryGetProperty(name, out var x) ? x.ToString() : null;
-    private static bool Bool(JsonElement root, string name) => root.TryGetProperty(name, out var x) && x.ValueKind == JsonValueKind.True;
-    private static string? Nested(JsonElement root, string parent, string name) =>
-        root.TryGetProperty(parent, out var x) && x.ValueKind == JsonValueKind.Object &&
-        x.TryGetProperty(name, out var y) ? y.ToString() : null;
 
     private static Ice? ParseCandidate(string value)
     {
-        var p = value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var i = Array.IndexOf(p, "typ");
-        return p.Length > 5 && i >= 0 && i + 1 < p.Length ? new Ice(p[4], p[i + 1]) : null;
+        var parts = value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var typeIndex = Array.IndexOf(parts, "typ");
+        return parts.Length > 5 && typeIndex >= 0 && typeIndex + 1 < parts.Length ? new Ice(parts[4], parts[typeIndex + 1]) : null;
     }
 
-    private static async Task<string> GetDirectIpAsync()
+    private static bool IsPublicAddress(string value)
     {
-        try
-        {
-            var value = await DirectClient.GetStringAsync("https://www.cloudflare.com/cdn-cgi/trace");
-            var ip = ParseTrace(value).GetValueOrDefault("ip");
-            return IPAddress.TryParse(ip, out _) ? ip : string.Empty;
-        }
-        catch { return string.Empty; }
-    }
-
-    private static List<string> GetDns()
-    {
-        try
-        {
-            return NetworkInterface.GetAllNetworkInterfaces().Where(x => x.OperationalStatus == OperationalStatus.Up)
-                .SelectMany(x => x.GetIPProperties().DnsAddresses).Select(x => x.ToString())
-                .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        }
-        catch { return []; }
+        if (!IPAddress.TryParse(value, out var ip)) return false;
+        if (IPAddress.IsLoopback(ip) || ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal) return false;
+        var bytes = ip.GetAddressBytes();
+        if (ip.AddressFamily == AddressFamily.InterNetwork)
+            return !(bytes[0] == 10 || bytes[0] == 127 || bytes[0] == 169 && bytes[1] == 254 ||
+                     bytes[0] == 172 && bytes[1] is >= 16 and <= 31 || bytes[0] == 192 && bytes[1] == 168 ||
+                     bytes[0] == 100 && bytes[1] is >= 64 and <= 127);
+        return !ip.Equals(IPAddress.IPv6Loopback) && (bytes[0] & 0xFE) != 0xFC;
     }
 
     private void ShowError(string message)
     {
-        RiskText.Text = "ДИАГНОСТИКА НЕДОСТУПНА";
+        RiskText.Text = "ЛОКАЛЬНАЯ ДИАГНОСТИКА НЕДОСТУПНА";
         RiskText.Foreground = Brushes.DarkOrange;
         UpdatedText.Text = message;
     }
+
     private static string Mark(bool value) => value ? "●" : "○";
     private static string Dash(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
 
-    private sealed class NetworkData
+    private sealed class LocalNetworkData
     {
-        public bool HasReputation { get; init; }
-        public string Ip { get; init; } = string.Empty;
-        public string DirectIp { get; init; } = string.Empty;
-        public bool IsVpn { get; init; }
-        public bool IsProxy { get; init; }
-        public bool IsTor { get; init; }
-        public bool IsDatacenter { get; init; }
-        public string Country { get; init; } = string.Empty;
-        public string CountryCode { get; init; } = string.Empty;
-        public string City { get; init; } = string.Empty;
-        public string Timezone { get; init; } = string.Empty;
+        public List<string> LocalAddresses { get; set; } = [];
+        public List<string> Dns { get; set; } = [];
+        public string PrimaryInterface { get; set; } = string.Empty;
+        public string LocalRegion { get; set; } = string.Empty;
+        public bool HasVpnInterface { get; set; }
+        public bool HasCustomProxy { get; set; }
+        public bool HasTorEndpoint { get; set; }
     }
+
     private sealed class BrowserData
     {
         public string Language { get; set; } = string.Empty;

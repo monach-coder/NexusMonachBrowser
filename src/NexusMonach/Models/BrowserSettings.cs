@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace NexusMonach.Models;
 
 public enum PrivacyLevel
@@ -30,7 +32,9 @@ public sealed class BrowserSettings
     public bool SendGlobalPrivacyControl { get; set; } = true;
     public bool StripTrackingParameters { get; set; } = true;
     public bool BlockNotifications { get; set; } = true;
-    public bool SaveHistory { get; set; } = true;
+    // Старое JSON-имя сохраняется, чтобы обновление не сбрасывало выбор пользователя.
+    [JsonPropertyName("SaveHistory")]
+    public bool BuildKnowledgeGraph { get; set; } = true;
     public bool RestoreSession { get; set; } = true;
     public bool ClearBrowsingDataOnExit { get; set; }
     public bool EnableExtensions { get; set; } = true;
@@ -55,7 +59,7 @@ public sealed class BrowserSettings
         SendGlobalPrivacyControl = SendGlobalPrivacyControl,
         StripTrackingParameters = StripTrackingParameters,
         BlockNotifications = BlockNotifications,
-        SaveHistory = SaveHistory,
+        BuildKnowledgeGraph = BuildKnowledgeGraph,
         RestoreSession = RestoreSession,
         ClearBrowsingDataOnExit = ClearBrowsingDataOnExit,
         EnableExtensions = EnableExtensions,

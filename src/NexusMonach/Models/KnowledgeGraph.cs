@@ -6,11 +6,16 @@ public sealed class KnowledgeNode
     public string Title { get; set; } = string.Empty;
     public string Url { get; set; } = string.Empty;
     public string Summary { get; set; } = string.Empty;
+    public string Domain { get; set; } = string.Empty;
+    public string PageKind { get; set; } = "страница";
+    public string Topic { get; set; } = "прочее";
     public List<string> Keywords { get; set; } = [];
     public List<float> Embedding { get; set; } = [];
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime LastVisitedAtUtc { get; set; } = DateTime.UtcNow;
     public int VisitCount { get; set; } = 1;
+    public List<DateTime> RecentVisitsUtc { get; set; } = [DateTime.UtcNow];
+    public bool IsPinned { get; set; }
 }
 
 public sealed class KnowledgeEdge
@@ -18,13 +23,24 @@ public sealed class KnowledgeEdge
     public string SourceId { get; set; } = string.Empty;
     public string TargetId { get; set; } = string.Empty;
     public string Relation { get; set; } = "общая тема";
+    public string Kind { get; set; } = "semantic";
+    public List<string> Evidence { get; set; } = [];
     public double Score { get; set; }
+    public int Strength { get; set; } = 1;
+    public DateTime LastSeenAtUtc { get; set; } = DateTime.UtcNow;
 }
 
 public sealed class KnowledgeGraphData
 {
     public List<KnowledgeNode> Nodes { get; set; } = [];
     public List<KnowledgeEdge> Edges { get; set; } = [];
+}
+
+public sealed class KnowledgeSearchHit
+{
+    public KnowledgeNode Node { get; set; } = new();
+    public double Score { get; set; }
+    public string MatchReason { get; set; } = string.Empty;
 }
 
 public sealed class SmartCapsule
