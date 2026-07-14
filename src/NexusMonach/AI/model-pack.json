@@ -6,6 +6,6 @@
     { "id": "text", "name": "Qwen3 0.6B Q8", "runtime": "llama.cpp", "load": "on-demand" },
     { "id": "speech", "name": "Whisper base q5_1 multilingual", "runtime": "whisper.cpp", "load": "video-only" },
     { "id": "semantics", "name": "multilingual-e5-small INT8", "runtime": "ONNX Runtime", "load": "background-low-priority" },
-    { "id": "vision", "name": "Florence-2-base", "runtime": "ONNX Runtime", "load": "image-only" }
+    { "id": "vision", "name": "SmolVLM 500M Q8", "runtime": "llama.cpp mtmd", "load": "image-only" }
   ]
 }

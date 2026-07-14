@@ -116,16 +116,22 @@ public static class LocalIntelligenceService
     {
         var model = await LocalAiService.GetPreferredModelAsync(cancellationToken)
                     ?? throw new InvalidOperationException(AiModelCatalog.MissingTextRuntimeMessage);
-        var answer = await LocalAiService.AskAsync(model,
-            "Ты локальный агент исследования сайтов и сравнения товаров Nexus Monach. " + UntrustedDataRule +
-            " Используй только переданные результаты с нескольких страниц. Не придумывай цену, рейтинг, число покупателей, отзывы и характеристики. " +
-            "Если значения нет, пиши 'нет данных'. Оценивай только соответствие запросу, цену и доверие к данным. " +
-            "Отвечай только JSON: {\"query\":\"...\",\"items\":[{\"name\":\"...\",\"price\":\"...\"," +
-            "\"rating\":\"...\",\"buyers\":\"...\",\"url\":\"...\",\"strengths\":\"...\",\"weaknesses\":\"...\",\"score\":0}]," +
-            "\"recommendation\":\"...\",\"caveat\":\"...\"}.",
-            $"Сайт: {siteHost}\nЗапрос: {query}\nИзвлечённые результаты:\n{extractedCardsJson[..Math.Min(extractedCardsJson.Length, 45000)]}", cancellationToken);
-        var result = JsonSerializer.Deserialize<ShoppingReport>(ExtractJson(answer), JsonOptions)
-                     ?? throw new InvalidOperationException("Модель не вернула сравнение.");
+        ShoppingReport? result = null;
+        try
+        {
+            var answer = await LocalAiService.AskAsync(model,
+                "Ты локальный агент исследования сайтов и сравнения товаров Nexus Monach. " + UntrustedDataRule +
+                " Используй только переданные результаты с нескольких страниц. Не придумывай цену, рейтинг, число покупателей, отзывы и характеристики. " +
+                "Если значения нет, пиши 'нет данных'. Оценивай только соответствие запросу, цену и доверие к данным. " +
+                "Отвечай только JSON: {\"query\":\"...\",\"items\":[{\"name\":\"...\",\"price\":\"...\"," +
+                "\"rating\":\"...\",\"buyers\":\"...\",\"url\":\"...\",\"strengths\":\"...\",\"weaknesses\":\"...\",\"score\":0}]," +
+                "\"recommendation\":\"...\",\"caveat\":\"...\"}.",
+                $"Сайт: {siteHost}\nЗапрос: {query}\nИзвлечённые результаты:\n{extractedCardsJson[..Math.Min(extractedCardsJson.Length, 45000)]}", cancellationToken);
+            result = JsonSerializer.Deserialize<ShoppingReport>(ExtractJson(answer), JsonOptions);
+        }
+        catch (JsonException) { }
+        if (result is null || result.Items is null || result.Items.Count == 0)
+            result = BuildShoppingFallback(query, extractedCardsJson);
         result.Items ??= [];
         var extractedUrls = ReadExtractedProductUrls(extractedCardsJson);
         result.Items = result.Items.Where(x => !string.IsNullOrWhiteSpace(x.Name)).Take(15).ToList();
@@ -137,7 +143,7 @@ public static class LocalIntelligenceService
             item.Strengths = MissingAsNoData(item.Strengths);
             item.Weaknesses = MissingAsNoData(item.Weaknesses);
             item.Score = Math.Clamp(item.Score, 0, 10);
-            var itemUrl = item.Url ?? string.Empty;
+            var itemUrl = NormalizeProductUrl(item.Url);
             item.Url = extractedUrls.Contains(itemUrl) ? itemUrl : string.Empty;
         }
         result.Query = string.IsNullOrWhiteSpace(result.Query) ? query : result.Query;
@@ -150,17 +156,61 @@ public static class LocalIntelligenceService
         if (segments.Count == 0) return [];
         var model = await LocalAiService.GetPreferredModelAsync(cancellationToken)
                     ?? throw new InvalidOperationException(AiModelCatalog.MissingTextRuntimeMessage);
-        var input = JsonSerializer.Serialize(segments.Select(x => new { id = x.Id, text = x.Text }));
+        var result = new Dictionary<string, TranslationSegment>(StringComparer.Ordinal);
+        foreach (var original in segments.Where(x => LooksRussian(x.Text)))
+            result[original.Id] = new TranslationSegment { Id = original.Id, Text = original.Text };
+
+        var pending = segments.Where(x => !result.ContainsKey(x.Id)).ToArray();
+        foreach (var group in pending.Chunk(6))
+        {
+            try
+            {
+                var input = JsonSerializer.Serialize(group.Select(x => new { id = x.Id, text = x.Text }));
+                var answer = await LocalAiService.AskAsync(model,
+                    "Ты локальный переводчик интерфейсов и веб-страниц. " + UntrustedDataRule +
+                    " Переведи каждый text на естественный русский. Сохрани id, числа, URL, имена и смысл элементов интерфейса. " +
+                    "Не объединяй и не пропускай элементы. Отвечай только валидным JSON без Markdown: " +
+                    "{\"items\":[{\"id\":\"n1\",\"text\":\"перевод\"}] }.", input, cancellationToken);
+                var response = JsonSerializer.Deserialize<TranslationResponse>(ExtractJson(answer), JsonOptions);
+                var expected = group.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
+                foreach (var item in response?.Items ?? [])
+                    if (expected.Contains(item.Id) && !string.IsNullOrWhiteSpace(item.Text))
+                        result[item.Id] = new TranslationSegment { Id = item.Id, Text = item.Text.Trim() };
+            }
+            catch (JsonException)
+            {
+                // Маленькая модель иногда добавляет пояснение или повреждает JSON. Ниже
+                // недостающие строки переводятся по одной, поэтому весь перевод не теряется.
+            }
+
+            foreach (var missing in group.Where(x => !result.ContainsKey(x.Id)))
+            {
+                var translated = await LocalAiService.AskAsync(model,
+                    "Переведи переданный текст на русский. " + UntrustedDataRule +
+                    " Верни только перевод, без кавычек, Markdown и пояснений. Сохрани числа, URL и имена.",
+                    missing.Text, cancellationToken);
+                translated = translated.Trim().Trim('"', '\'', '«', '»');
+                if (!string.IsNullOrWhiteSpace(translated))
+                    result[missing.Id] = new TranslationSegment { Id = missing.Id, Text = translated };
+            }
+        }
+
+        return segments.Where(x => result.ContainsKey(x.Id)).Select(x => result[x.Id]).ToArray();
+    }
+
+    public static async Task<string> DiagnoseAgentPageAsync(string query, string title, string url, string pageText,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(pageText))
+            return "Страница не предоставила браузеру читаемый текст или карточки товаров.";
+        var model = await LocalAiService.GetPreferredModelAsync(cancellationToken)
+                    ?? throw new InvalidOperationException(AiModelCatalog.MissingTextRuntimeMessage);
         var answer = await LocalAiService.AskAsync(model,
-            "Ты локальный переводчик интерфейсов и веб-страниц. " + UntrustedDataRule +
-            " Переведи каждый text на русский. Сохрани id, числа, URL, имена и смысл элементов интерфейса. " +
-            "Не объединяй и не пропускай элементы. Отвечай только JSON: " +
-            "{\"items\":[{\"id\":\"n1\",\"text\":\"перевод\"}] }.", input, cancellationToken);
-        var response = JsonSerializer.Deserialize<TranslationResponse>(ExtractJson(answer), JsonOptions)
-                       ?? throw new InvalidOperationException("Модель не вернула перевод.");
-        var expected = segments.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
-        return (response.Items ?? []).Where(x => expected.Contains(x.Id) && !string.IsNullOrWhiteSpace(x.Text))
-            .GroupBy(x => x.Id, StringComparer.Ordinal).Select(x => x.First()).ToArray();
+            "Ты локальный диагност исследовательского агента браузера. " + UntrustedDataRule +
+            " По видимому тексту точно объясни, что открыто: результаты, пустая выдача, CAPTCHA, вход, ошибка, региональное ограничение или обычная страница. " +
+            "Не упоминай VPN, блокировку или регион, если этого прямо не видно в тексте. Ответь по-русски 2-4 предложениями и предложи одно безопасное действие.",
+            $"Запрос: {query}\nЗаголовок: {title}\nURL: {url}\nВидимый текст:\n{pageText[..Math.Min(pageText.Length, 7000)]}", cancellationToken);
+        return answer.Trim();
     }
 
     public static async Task<DeveloperAnalysis> AnswerDeveloperQuestionAsync(string question, string context,
@@ -197,7 +247,7 @@ public static class LocalIntelligenceService
                 if (card.TryGetProperty("url", out var value) && value.ValueKind == JsonValueKind.String &&
                     Uri.TryCreate(value.GetString(), UriKind.Absolute, out var uri) &&
                     uri.Scheme is "http" or "https")
-                    urls.Add(uri.GetLeftPart(UriPartial.Path));
+                    urls.Add(NormalizeProductUrl(uri.AbsoluteUri));
             }
         }
         catch (JsonException) { }
@@ -206,6 +256,61 @@ public static class LocalIntelligenceService
 
     private static string MissingAsNoData(string? value) =>
         string.IsNullOrWhiteSpace(value) ? "нет данных" : value.Trim();
+
+    private static ShoppingReport BuildShoppingFallback(string query, string json)
+    {
+        var candidates = new List<ShoppingCandidate>();
+        var words = ExtractKeywords(query, 10).ToArray();
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            foreach (var card in document.RootElement.EnumerateArray())
+            {
+                var name = card.TryGetProperty("name", out var n) ? n.GetString() ?? string.Empty : string.Empty;
+                var text = card.TryGetProperty("text", out var t) ? t.GetString() ?? string.Empty : string.Empty;
+                if (string.IsNullOrWhiteSpace(name)) continue;
+                var searchable = (name + " " + text).ToLowerInvariant();
+                var match = words.Length == 0 ? 0.5 : words.Count(searchable.Contains) / (double)words.Length;
+                var price = card.TryGetProperty("price", out var p) ? p.GetString() : null;
+                var rating = card.TryGetProperty("rating", out var r) ? r.GetString() : null;
+                var buyers = card.TryGetProperty("buyers", out var b) ? b.GetString() : null;
+                var data = new[] { price, rating, buyers }.Count(x => !string.IsNullOrWhiteSpace(x));
+                candidates.Add(new ShoppingCandidate
+                {
+                    Name = name, Price = MissingAsNoData(price), Rating = MissingAsNoData(rating),
+                    Buyers = MissingAsNoData(buyers),
+                    Url = NormalizeProductUrl(card.TryGetProperty("url", out var u) ? u.GetString() : null),
+                    Strengths = data > 1 ? "на странице есть несколько проверяемых показателей" : "соответствует тексту запроса",
+                    Weaknesses = data < 2 ? "мало структурированных данных на карточке" : "нужна ручная проверка характеристик",
+                    Score = Math.Clamp(4.5 + match * 4 + data * 0.45, 0, 10)
+                });
+            }
+        }
+        catch (JsonException) { }
+        var selected = candidates.OrderByDescending(x => x.Score).Take(15).ToList();
+        return new ShoppingReport
+        {
+            Query = query, Items = selected,
+            Recommendation = selected.Count == 0 ? "Недостаточно структурированных данных для сравнения." :
+                $"По доступным данным ближе всего к запросу «{selected[0].Name}». Проверь цену, продавца и условия на самой странице перед решением.",
+            Caveat = "Локальная модель не вернула устойчивый JSON, поэтому Nexus применил прозрачное ранжирование извлечённых карточек без выдумывания данных."
+        };
+    }
+
+    private static string NormalizeProductUrl(string? value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme is not "http" and not "https")
+            return string.Empty;
+        return uri.GetLeftPart(UriPartial.Path);
+    }
+
+    private static bool LooksRussian(string value)
+    {
+        var letters = value.Count(char.IsLetter);
+        if (letters < 2) return true;
+        var cyrillic = value.Count(ch => ch is >= '\u0400' and <= '\u04FF');
+        return cyrillic >= Math.Max(2, letters * 2 / 3);
+    }
 
     public static string ExtractJson(string value)
     {

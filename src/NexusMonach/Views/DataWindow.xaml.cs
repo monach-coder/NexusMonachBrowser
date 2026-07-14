@@ -8,7 +8,7 @@ namespace NexusMonach.Views;
 
 public partial class DataWindow : Window
 {
-    private enum DataMode { Bookmarks, History, Downloads }
+    private enum DataMode { Bookmarks, Downloads }
 
     private sealed class Row
     {
@@ -31,7 +31,6 @@ public partial class DataWindow : Window
     }
 
     public static DataWindow ForBookmarks(Func<string, Task> openUrl) => new(DataMode.Bookmarks, openUrl);
-    public static DataWindow ForHistory(Func<string, Task> openUrl) => new(DataMode.History, openUrl);
     public static DataWindow ForDownloads() => new(DataMode.Downloads, null);
 
     private void RefreshRows()
@@ -44,17 +43,6 @@ public partial class DataWindow : Window
                 ActionButton.Content = "Удалить";
                 foreach (var item in BookmarkService.Items)
                     _rows.Add(new Row { Primary = item.Title, Secondary = item.Url, Value = item.Url });
-                break;
-            case DataMode.History:
-                HeaderText.Text = "История";
-                ActionButton.Content = "Очистить историю";
-                foreach (var item in HistoryService.Items)
-                    _rows.Add(new Row
-                    {
-                        Primary = item.Title,
-                        Secondary = $"{item.VisitedAtUtc.ToLocalTime():dd.MM.yyyy HH:mm}  ·  {item.Url}",
-                        Value = item.Url
-                    });
                 break;
             case DataMode.Downloads:
                 HeaderText.Text = "Загрузки";
@@ -97,14 +85,6 @@ public partial class DataWindow : Window
             case DataMode.Bookmarks when ItemsList.SelectedItem is Row row:
                 await BookmarkService.RemoveAsync(row.Value);
                 RefreshRows();
-                break;
-            case DataMode.History:
-                if (GlassDialogWindow.Show(this, "Полностью очистить историю?", "Nexus Monach",
-                        MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes)
-                {
-                    await HistoryService.ClearAsync();
-                    RefreshRows();
-                }
                 break;
             case DataMode.Downloads when ItemsList.SelectedItem is Row download:
                 var directory = Path.GetDirectoryName(download.Value);

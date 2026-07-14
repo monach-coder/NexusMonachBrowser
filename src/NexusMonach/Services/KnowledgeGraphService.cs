@@ -2,6 +2,11 @@ using NexusMonach.Models;
 
 namespace NexusMonach.Services;
 
+/// <summary>
+/// Локальная память просмотра: страницы становятся узлами, а смысловая близость,
+/// переходы и общие источники — разными типами связей. Отдельный список истории
+/// не требуется: найти и повторно открыть страницу можно прямо из графа.
+/// </summary>
 public static class KnowledgeGraphService
 {
     private static readonly SemaphoreSlim Gate = new(1, 1);
@@ -13,6 +18,8 @@ public static class KnowledgeGraphService
         _data = await JsonStore.ReadAsync<KnowledgeGraphData>(AppPaths.KnowledgeGraphFile) ?? new KnowledgeGraphData();
         _data.Nodes ??= [];
         _data.Edges ??= [];
+        NormalizeLoadedData();
+        await ImportLegacyHistoryAsync();
     }
 
     public static KnowledgeGraphData Snapshot()
@@ -23,56 +30,112 @@ public static class KnowledgeGraphService
             return new KnowledgeGraphData
             {
                 Nodes = _data.Nodes.Select(Clone).ToList(),
-                Edges = _data.Edges.Select(x => new KnowledgeEdge
-                {
-                    SourceId = x.SourceId, TargetId = x.TargetId, Relation = x.Relation, Score = x.Score
-                }).ToList()
+                Edges = _data.Edges.Select(Clone).ToList()
             };
         }
         finally { Gate.Release(); }
     }
 
-    public static async Task IndexPageAsync(string title, string url, string text,
+    public static async Task IndexPageAsync(string title, string url, string text, string? previousUrl = null,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(url) || UrlService.IsInternal(url) || IsSensitivePage(url, title)) return;
+        if (!SettingsService.Current.BuildKnowledgeGraph || string.IsNullOrWhiteSpace(url) ||
+            UrlService.IsInternal(url) || IsSensitivePage(url, title)) return;
         url = NormalizeUrl(url);
+        previousUrl = string.IsNullOrWhiteSpace(previousUrl) ? null : NormalizeUrl(previousUrl);
+
         PageSemantics semantics;
         List<float> embedding;
         await SemanticGate.WaitAsync(cancellationToken);
         try
         {
             semantics = await LocalIntelligenceService.AnalyzePageAsync(title, url, text, cancellationToken);
-            embedding = await SemanticEmbeddingService.EmbedAsync(title + "\n" + semantics.Summary + "\n" + text,
-                cancellationToken);
+            embedding = await SemanticEmbeddingService.EmbedAsync(
+                title + "\n" + semantics.Summary + "\n" + text[..Math.Min(text.Length, 12_000)], cancellationToken);
         }
         finally { SemanticGate.Release(); }
+
         await Gate.WaitAsync(cancellationToken);
         try
         {
+            var now = DateTime.UtcNow;
             var node = _data.Nodes.FirstOrDefault(x => x.Url.Equals(url, StringComparison.OrdinalIgnoreCase));
             if (node is null)
             {
-                node = new KnowledgeNode { Title = title, Url = url };
+                node = new KnowledgeNode
+                {
+                    Title = title, Url = url, CreatedAtUtc = now, LastVisitedAtUtc = now,
+                    RecentVisitsUtc = [now]
+                };
                 _data.Nodes.Add(node);
             }
             else
             {
                 node.VisitCount++;
-                node.LastVisitedAtUtc = DateTime.UtcNow;
+                node.LastVisitedAtUtc = now;
+                node.RecentVisitsUtc ??= [];
+                if (node.RecentVisitsUtc.Count == 0 || now - node.RecentVisitsUtc[^1] > TimeSpan.FromSeconds(20))
+                    node.RecentVisitsUtc.Add(now);
+                if (node.RecentVisitsUtc.Count > 24)
+                    node.RecentVisitsUtc.RemoveRange(0, node.RecentVisitsUtc.Count - 24);
             }
-            node.Title = string.IsNullOrWhiteSpace(title) ? url : title;
+
+            node.Title = string.IsNullOrWhiteSpace(title) ? url : title.Trim();
             node.Summary = semantics.Summary;
-            node.Keywords = semantics.Keywords.ToList();
+            node.Keywords = semantics.Keywords.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct().Take(12).ToList();
             node.Embedding = embedding;
-            RebuildEdgesFor(node);
-            if (_data.Nodes.Count > 1500)
+            node.Domain = GetDomain(url);
+            node.PageKind = ClassifyPage(url, title, text);
+            node.Topic = PickTopic(node);
+
+            RebuildSemanticEdgesFor(node);
+            if (previousUrl is not null && !previousUrl.Equals(url, StringComparison.OrdinalIgnoreCase))
+                StrengthenNavigationEdge(previousUrl, node, now);
+            TrimGraph();
+            await JsonStore.WriteAsync(AppPaths.KnowledgeGraphFile, _data);
+        }
+        finally { Gate.Release(); }
+    }
+
+    public static async Task<IReadOnlyList<KnowledgeSearchHit>> SearchAsync(string query,
+        CancellationToken cancellationToken = default)
+    {
+        var snapshot = Snapshot();
+        query = query.Trim();
+        if (string.IsNullOrWhiteSpace(query))
+            return snapshot.Nodes.OrderByDescending(x => x.IsPinned).ThenByDescending(x => x.LastVisitedAtUtc)
+                .Take(180).Select(x => new KnowledgeSearchHit { Node = x, Score = 1, MatchReason = "недавняя страница" }).ToArray();
+
+        var queryEmbedding = await SemanticEmbeddingService.EmbedAsync(query, cancellationToken);
+        var words = ExtractQueryWords(query);
+        var now = DateTime.UtcNow;
+        return snapshot.Nodes.Select(node =>
             {
-                var remove = _data.Nodes.OrderBy(x => x.LastVisitedAtUtc).Take(_data.Nodes.Count - 1500)
-                    .Select(x => x.Id).ToHashSet();
-                _data.Nodes.RemoveAll(x => remove.Contains(x.Id));
-                _data.Edges.RemoveAll(x => remove.Contains(x.SourceId) || remove.Contains(x.TargetId));
-            }
+                var searchable = (node.Title + " " + node.Url + " " + node.Summary + " " +
+                                  string.Join(" ", node.Keywords)).ToLowerInvariant();
+                var exact = searchable.Contains(query, StringComparison.OrdinalIgnoreCase) ? 1.0 : 0;
+                var wordMatches = words.Count == 0 ? 0 : words.Count(x => searchable.Contains(x, StringComparison.OrdinalIgnoreCase)) / (double)words.Count;
+                var semantic = Cosine(queryEmbedding, node.Embedding);
+                var recency = Math.Exp(-Math.Max(0, (now - node.LastVisitedAtUtc).TotalDays) / 90);
+                var score = exact * 0.48 + wordMatches * 0.27 + Math.Max(0, semantic) * 0.42 + recency * 0.05 +
+                            Math.Min(0.08, Math.Log2(node.VisitCount + 1) * 0.018) + (node.IsPinned ? 0.1 : 0);
+                var reason = exact > 0 ? "точное совпадение" : semantic >= 0.45 ? "смысловая близость" :
+                    wordMatches > 0 ? "совпали понятия" : "слабая связь";
+                return new KnowledgeSearchHit { Node = node, Score = score, MatchReason = reason };
+            })
+            .Where(x => x.Score >= 0.12)
+            .OrderByDescending(x => x.Score)
+            .Take(180).ToArray();
+    }
+
+    public static async Task SetPinnedAsync(string nodeId, bool pinned)
+    {
+        await Gate.WaitAsync();
+        try
+        {
+            var node = _data.Nodes.FirstOrDefault(x => x.Id == nodeId);
+            if (node is null) return;
+            node.IsPinned = pinned;
             await JsonStore.WriteAsync(AppPaths.KnowledgeGraphFile, _data);
         }
         finally { Gate.Release(); }
@@ -80,10 +143,12 @@ public static class KnowledgeGraphService
 
     public static async Task AddCapsuleAsync(SmartCapsule capsule)
     {
+        string? previous = null;
         for (var i = 0; i < capsule.Urls.Count; i++)
         {
             var title = i < capsule.Titles.Count ? capsule.Titles[i] : capsule.Urls[i];
-            await IndexPageAsync(title, capsule.Urls[i], capsule.Name + ". " + capsule.Summary);
+            await IndexPageAsync(title, capsule.Urls[i], capsule.Name + ". " + capsule.Summary, previous);
+            previous = capsule.Urls[i];
         }
     }
 
@@ -98,26 +163,141 @@ public static class KnowledgeGraphService
         finally { Gate.Release(); }
     }
 
-    private static void RebuildEdgesFor(KnowledgeNode node)
+    private static void RebuildSemanticEdgesFor(KnowledgeNode node)
     {
-        _data.Edges.RemoveAll(x => x.SourceId == node.Id || x.TargetId == node.Id);
+        _data.Edges.RemoveAll(x => x.Kind != "navigation" && (x.SourceId == node.Id || x.TargetId == node.Id));
         var own = node.Keywords.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var candidates = new List<(KnowledgeNode Node, double Score, string[] Common, bool SameDomain)>();
         foreach (var other in _data.Nodes.Where(x => x.Id != node.Id))
         {
             var theirs = other.Keywords.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var common = own.Intersect(theirs, StringComparer.OrdinalIgnoreCase).Take(5).ToArray();
             var union = own.Union(theirs, StringComparer.OrdinalIgnoreCase).Count();
-            if (union == 0) continue;
-            var common = own.Intersect(theirs, StringComparer.OrdinalIgnoreCase).ToArray();
-            var score = Cosine(node.Embedding, other.Embedding);
-            if (score <= 0) score = common.Length / (double)union;
-            if (score < 0.18) continue;
+            var keywordScore = union == 0 ? 0 : common.Length / (double)union;
+            var semantic = Cosine(node.Embedding, other.Embedding);
+            var sameDomain = !string.IsNullOrWhiteSpace(node.Domain) && node.Domain.Equals(other.Domain, StringComparison.OrdinalIgnoreCase);
+            var score = Math.Max(semantic, keywordScore * 1.25) + (sameDomain ? 0.06 : 0);
+            if (score < 0.24 && common.Length < 2) continue;
+            candidates.Add((other, Math.Clamp(score, 0, 1), common, sameDomain));
+        }
+
+        foreach (var candidate in candidates.OrderByDescending(x => x.Score).Take(12))
+        {
+            var ids = new[] { node.Id, candidate.Node.Id }.OrderBy(x => x, StringComparer.Ordinal).ToArray();
             _data.Edges.Add(new KnowledgeEdge
             {
-                SourceId = node.Id, TargetId = other.Id,
-                Relation = string.Join(", ", common.Take(3)), Score = score
+                SourceId = ids[0], TargetId = ids[1], Kind = candidate.SameDomain ? "domain" : "semantic",
+                Relation = candidate.Common.Length > 0 ? string.Join(", ", candidate.Common.Take(3)) :
+                    candidate.SameDomain ? "общий источник" : "смысловая близость",
+                Evidence = candidate.Common.ToList(), Score = candidate.Score,
+                LastSeenAtUtc = DateTime.UtcNow
             });
         }
+        DeduplicateEdges();
     }
+
+    private static void StrengthenNavigationEdge(string previousUrl, KnowledgeNode target, DateTime now)
+    {
+        var source = _data.Nodes.FirstOrDefault(x => x.Url.Equals(previousUrl, StringComparison.OrdinalIgnoreCase));
+        if (source is null || source.Id == target.Id) return;
+        var edge = _data.Edges.FirstOrDefault(x => x.Kind == "navigation" &&
+            x.SourceId == source.Id && x.TargetId == target.Id);
+        if (edge is null)
+        {
+            _data.Edges.Add(new KnowledgeEdge
+            {
+                SourceId = source.Id, TargetId = target.Id, Kind = "navigation", Relation = "переход",
+                Score = 0.72, Strength = 1, LastSeenAtUtc = now
+            });
+        }
+        else
+        {
+            edge.Strength++;
+            edge.Score = Math.Min(1, 0.68 + Math.Log2(edge.Strength + 1) * 0.09);
+            edge.LastSeenAtUtc = now;
+        }
+    }
+
+    private static void DeduplicateEdges()
+    {
+        _data.Edges = _data.Edges.GroupBy(x => (x.SourceId, x.TargetId, x.Kind))
+            .Select(group => group.OrderByDescending(x => x.Score).First()).ToList();
+    }
+
+    private static void TrimGraph()
+    {
+        if (_data.Nodes.Count <= 1800) return;
+        var remove = _data.Nodes.Where(x => !x.IsPinned).OrderBy(x => x.LastVisitedAtUtc)
+            .Take(_data.Nodes.Count - 1800).Select(x => x.Id).ToHashSet();
+        _data.Nodes.RemoveAll(x => remove.Contains(x.Id));
+        _data.Edges.RemoveAll(x => remove.Contains(x.SourceId) || remove.Contains(x.TargetId));
+    }
+
+    private static async Task ImportLegacyHistoryAsync()
+    {
+        if (!File.Exists(AppPaths.HistoryFile)) return;
+        var legacy = await JsonStore.ReadAsync<List<HistoryEntry>>(AppPaths.HistoryFile) ?? [];
+        foreach (var item in legacy.OrderBy(x => x.VisitedAtUtc))
+        {
+            if (string.IsNullOrWhiteSpace(item.Url) || UrlService.IsInternal(item.Url) || IsSensitivePage(item.Url, item.Title)) continue;
+            var url = NormalizeUrl(item.Url);
+            var node = _data.Nodes.FirstOrDefault(x => x.Url.Equals(url, StringComparison.OrdinalIgnoreCase));
+            if (node is null)
+            {
+                node = new KnowledgeNode
+                {
+                    Title = string.IsNullOrWhiteSpace(item.Title) ? url : item.Title, Url = url,
+                    Domain = GetDomain(url), CreatedAtUtc = item.VisitedAtUtc, LastVisitedAtUtc = item.VisitedAtUtc,
+                    RecentVisitsUtc = [item.VisitedAtUtc], PageKind = ClassifyPage(url, item.Title, string.Empty)
+                };
+                _data.Nodes.Add(node);
+            }
+            else
+            {
+                node.VisitCount++;
+                node.LastVisitedAtUtc = item.VisitedAtUtc > node.LastVisitedAtUtc ? item.VisitedAtUtc : node.LastVisitedAtUtc;
+                node.RecentVisitsUtc.Add(item.VisitedAtUtc);
+                node.RecentVisitsUtc = node.RecentVisitsUtc.OrderBy(x => x).TakeLast(24).ToList();
+            }
+        }
+        await JsonStore.WriteAsync(AppPaths.KnowledgeGraphFile, _data);
+        try { File.Delete(AppPaths.HistoryFile); } catch { }
+    }
+
+    private static void NormalizeLoadedData()
+    {
+        foreach (var node in _data.Nodes)
+        {
+            node.Keywords ??= [];
+            node.Embedding ??= [];
+            node.RecentVisitsUtc ??= [];
+            if (node.RecentVisitsUtc.Count == 0) node.RecentVisitsUtc.Add(node.LastVisitedAtUtc);
+            node.Domain = string.IsNullOrWhiteSpace(node.Domain) ? GetDomain(node.Url) : node.Domain;
+            node.PageKind = string.IsNullOrWhiteSpace(node.PageKind) ? ClassifyPage(node.Url, node.Title, string.Empty) : node.PageKind;
+            node.Topic = string.IsNullOrWhiteSpace(node.Topic) ? PickTopic(node) : node.Topic;
+        }
+        foreach (var edge in _data.Edges)
+        {
+            edge.Kind = string.IsNullOrWhiteSpace(edge.Kind) ? "semantic" : edge.Kind;
+            edge.Evidence ??= [];
+            if (edge.Strength < 1) edge.Strength = 1;
+        }
+        DeduplicateEdges();
+    }
+
+    private static KnowledgeNode Clone(KnowledgeNode x) => new()
+    {
+        Id = x.Id, Title = x.Title, Url = x.Url, Summary = x.Summary, Domain = x.Domain,
+        PageKind = x.PageKind, Topic = x.Topic, Keywords = x.Keywords.ToList(), Embedding = x.Embedding.ToList(),
+        CreatedAtUtc = x.CreatedAtUtc, LastVisitedAtUtc = x.LastVisitedAtUtc, VisitCount = x.VisitCount,
+        RecentVisitsUtc = x.RecentVisitsUtc.ToList(), IsPinned = x.IsPinned
+    };
+
+    private static KnowledgeEdge Clone(KnowledgeEdge x) => new()
+    {
+        SourceId = x.SourceId, TargetId = x.TargetId, Relation = x.Relation, Kind = x.Kind,
+        Evidence = x.Evidence.ToList(), Score = x.Score, Strength = x.Strength, LastSeenAtUtc = x.LastSeenAtUtc
+    };
 
     private static double Cosine(IReadOnlyList<float> left, IReadOnlyList<float> right)
     {
@@ -125,19 +305,31 @@ public static class KnowledgeGraphService
         double dot = 0, a = 0, b = 0;
         for (var i = 0; i < left.Count; i++)
         {
-            dot += left[i] * right[i];
-            a += left[i] * left[i];
-            b += right[i] * right[i];
+            dot += left[i] * right[i]; a += left[i] * left[i]; b += right[i] * right[i];
         }
         return a <= 0 || b <= 0 ? 0 : dot / Math.Sqrt(a * b);
     }
 
-    private static KnowledgeNode Clone(KnowledgeNode x) => new()
+    private static List<string> ExtractQueryWords(string query) =>
+        System.Text.RegularExpressions.Regex.Matches(query.ToLowerInvariant(), @"[\p{L}\p{N}]{3,}")
+            .Select(x => x.Value).Distinct().Take(12).ToList();
+
+    private static string PickTopic(KnowledgeNode node) =>
+        node.Keywords.FirstOrDefault(x => x.Length >= 3) ?? (!string.IsNullOrWhiteSpace(node.Domain) ? node.Domain : "прочее");
+
+    private static string GetDomain(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.Host.Replace("www.", string.Empty, StringComparison.OrdinalIgnoreCase) : string.Empty;
+
+    private static string ClassifyPage(string url, string title, string text)
     {
-        Id = x.Id, Title = x.Title, Url = x.Url, Summary = x.Summary,
-        Keywords = x.Keywords.ToList(), Embedding = x.Embedding.ToList(), CreatedAtUtc = x.CreatedAtUtc,
-        LastVisitedAtUtc = x.LastVisitedAtUtc, VisitCount = x.VisitCount
-    };
+        var value = (url + " " + title + " " + text[..Math.Min(text.Length, 400)]).ToLowerInvariant();
+        if (value.Contains("/watch") || value.Contains("video") || value.Contains("youtube")) return "видео";
+        if (value.Contains("product") || value.Contains("товар") || value.Contains("/item/")) return "товар";
+        if (value.Contains("docs") || value.Contains("documentation") || value.Contains("справк")) return "документация";
+        if (value.Contains("news") || value.Contains("статья") || value.Contains("article")) return "статья";
+        if (value.Contains("search") || value.Contains("поиск") || value.Contains("query=")) return "поиск";
+        return "страница";
+    }
 
     private static bool IsSensitivePage(string url, string title)
     {
@@ -150,7 +342,9 @@ public static class KnowledgeGraphService
     private static string NormalizeUrl(string value)
     {
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)) return value;
-        var builder = new UriBuilder(uri) { Query = string.Empty, Fragment = string.Empty };
+        var cleaned = UrlService.CleanTrackingParameters(value);
+        if (!Uri.TryCreate(cleaned, UriKind.Absolute, out uri)) return value;
+        var builder = new UriBuilder(uri) { Fragment = string.Empty };
         return builder.Uri.AbsoluteUri;
     }
 }

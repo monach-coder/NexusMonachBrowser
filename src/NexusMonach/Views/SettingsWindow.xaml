@@ -44,7 +44,7 @@
                 <CheckBox x:Name="GpcCheck" Content="Отправлять Global Privacy Control" />
                 <CheckBox x:Name="StripParametersCheck" Content="Удалять рекламные метки из ссылок (utm, fbclid, gclid и другие)" />
                 <CheckBox x:Name="BlockNotificationsCheck" Content="Блокировать запросы на уведомления" />
-                <CheckBox x:Name="SaveHistoryCheck" Content="Сохранять историю посещений" />
+                <CheckBox x:Name="KnowledgeGraphCheck" Content="Строить локальный граф знаний из посещённых страниц" />
                 <CheckBox x:Name="RestoreSessionCheck" Content="Восстанавливать вкладки после перезапуска" />
                 <CheckBox x:Name="ClearOnExitCheck" Content="Очищать данные сайтов при выходе" />
                 <CheckBox x:Name="MemorySaverCheck" Content="Экономить память, приостанавливая неактивные вкладки" />
@@ -91,7 +91,7 @@
                 <CheckBox x:Name="PreventWebRtcLeakCheck" Content="Запрещать WebRTC обходить прокси и раскрывать другой IP (требуется перезапуск)" />
                 <TextBlock Margin="0,4,0,0" TextWrapping="Wrap" FontSize="11"
                            Foreground="{StaticResource MutedTextBrush}"
-                           Text="Для определения внешнего IP, региона и репутационных признаков монитор обращается через браузер к Cloudflare и ipapi.is. Проверка WebRTC использует STUN Cloudflare. Ограничение WebRTC повышает приватность, но может ухудшить работу отдельных видеозвонков и P2P-сервисов." />
+                           Text="Privacy Dock работает локально: анализирует интерфейсы, маршрут, DNS Windows и ICE-кандидаты WebRTC без STUN/TURN. Фоновых запросов к Cloudflare, ipapi.is и другим IP-сервисам нет. Поэтому внешний IP и его достоверный регион не определяются; регион показывается только как оценка по настройкам Windows." />
 
                 <Separator Margin="0,18,0,18" Background="#2D4053" />
                 <TextBlock Text="Passkeys и Windows Hello" FontSize="16" FontWeight="SemiBold"

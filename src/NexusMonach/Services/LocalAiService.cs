@@ -100,6 +100,8 @@ public static class LocalAiService
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
                 WorkingDirectory = AiModelCatalog.LlamaRoot
             };
             foreach (var argument in new[]
@@ -147,10 +149,15 @@ public static class LocalAiService
     {
         const string assistantMarker = "<|im_start|>assistant";
         var assistant = value.LastIndexOf(assistantMarker, StringComparison.Ordinal);
-        if (assistant < 0) return string.Empty;
-        value = value[(assistant + assistantMarker.Length)..];
+        // llama-cli с --no-display-prompt возвращает только ответ модели, без маркера
+        // assistant. Прежняя проверка отбрасывала корректный ответ целиком, из-за чего
+        // переводчик, агент и DevTools AI выглядели неработающими.
+        if (assistant >= 0)
+            value = value[(assistant + assistantMarker.Length)..];
         value = Regex.Replace(value, @"<think>[\s\S]*?</think>", string.Empty,
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        value = Regex.Replace(value, @"(?im)^\s*(assistant|analysis|final)\s*[:：]\s*", string.Empty);
+        value = Regex.Replace(value, @"(?im)^\s*(llama_|main:|build:|system_info:).*$", string.Empty);
         var end = value.IndexOf("<|im_end|>", StringComparison.Ordinal);
         if (end >= 0) value = value[..end];
         var metrics = value.IndexOf("[ Prompt:", StringComparison.OrdinalIgnoreCase);

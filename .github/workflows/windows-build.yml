@@ -1,0 +1,26 @@
+name: Windows portable build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Build and package
+        shell: powershell
+        run: ./scripts/Build-Portable.ps1
+      - name: Upload portable archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: NexusMonach-Portable-win-x64
+          path: dist/NexusMonach-Portable-win-x64.zip
+          if-no-files-found: error

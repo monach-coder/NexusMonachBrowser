@@ -49,7 +49,7 @@ public partial class SettingsWindow : Window
         GpcCheck.IsChecked = settings.SendGlobalPrivacyControl;
         StripParametersCheck.IsChecked = settings.StripTrackingParameters;
         BlockNotificationsCheck.IsChecked = settings.BlockNotifications;
-        SaveHistoryCheck.IsChecked = settings.SaveHistory;
+        KnowledgeGraphCheck.IsChecked = settings.BuildKnowledgeGraph;
         RestoreSessionCheck.IsChecked = settings.RestoreSession;
         ClearOnExitCheck.IsChecked = settings.ClearBrowsingDataOnExit;
         MemorySaverCheck.IsChecked = settings.MemorySaver;
@@ -96,7 +96,7 @@ public partial class SettingsWindow : Window
         _settings.SendGlobalPrivacyControl = GpcCheck.IsChecked == true;
         _settings.StripTrackingParameters = StripParametersCheck.IsChecked == true;
         _settings.BlockNotifications = BlockNotificationsCheck.IsChecked == true;
-        _settings.SaveHistory = SaveHistoryCheck.IsChecked == true;
+        _settings.BuildKnowledgeGraph = KnowledgeGraphCheck.IsChecked == true;
         _settings.RestoreSession = RestoreSessionCheck.IsChecked == true;
         _settings.ClearBrowsingDataOnExit = ClearOnExitCheck.IsChecked == true;
         _settings.MemorySaver = MemorySaverCheck.IsChecked == true;

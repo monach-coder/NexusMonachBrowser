@@ -1,0 +1,28 @@
+name: Verify Windows build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Restore
+        run: dotnet restore NexusMonach.sln
+      - name: Build
+        run: dotnet build NexusMonach.sln --configuration Release --no-restore -warnaserror
+      - name: Ensure runtime code has no external AI endpoints
+        shell: pwsh
+        run: |
+          $hits = Get-ChildItem src/NexusMonach -Recurse -Include *.cs,*.js,*.mjs |
+            Select-String -Pattern '11434|api\.openai\.com|api\.anthropic\.com|api\.github\.com/repos/ggml-org|huggingface\.co/.*/resolve'
+          if ($hits) { $hits | Format-Table; throw 'External AI runtime endpoint found.' }
