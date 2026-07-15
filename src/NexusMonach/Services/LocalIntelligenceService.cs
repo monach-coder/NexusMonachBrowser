@@ -164,11 +164,14 @@ public static class LocalIntelligenceService
     {
         if (segments.Count == 0) return [];
         var result = new Dictionary<string, TranslationSegment>(StringComparer.Ordinal);
-        foreach (var original in segments.Where(x => LooksRussian(x.Text)))
-            result[original.Id] = new TranslationSegment { Id = original.Id, Text = original.Text };
+        foreach (var known in LocalTranslationDictionary.TranslateKnown(segments))
+            result[known.Id] = known;
 
-        var pending = segments.Where(x => !result.ContainsKey(x.Id)).ToArray();
-        foreach (var group in pending.Chunk(60))
+        // Russian text needs no DOM rewrite and must not inflate the progress
+        // counter. Unknown foreign text is sent in one large request so llama.cpp
+        // is not restarted dozens of times for a normal page.
+        var pending = segments.Where(x => !result.ContainsKey(x.Id) && !LooksRussian(x.Text)).ToArray();
+        foreach (var group in pending.Chunk(160))
         {
             try
             {
@@ -185,7 +188,11 @@ public static class LocalIntelligenceService
                     {
                         var translated = ValidateTranslation(item.Text);
                         if (!string.IsNullOrWhiteSpace(translated))
+                        {
                             result[item.Id] = new TranslationSegment { Id = item.Id, Text = translated };
+                            var source = group.First(x => x.Id.Equals(item.Id, StringComparison.Ordinal)).Text;
+                            LocalTranslationDictionary.Remember(source, translated);
+                        }
                     }
             }
             catch (OperationCanceledException) { throw; }
@@ -199,15 +206,20 @@ public static class LocalIntelligenceService
             // Untranslated nodes remain original and can be handled by a later pass.
         }
 
-        return segments.Where(x => result.ContainsKey(x.Id)).Select(x => result[x.Id]).ToArray();
+        return segments.Where(x => result.ContainsKey(x.Id) &&
+                                   !result[x.Id].Text.Equals(x.Text, StringComparison.Ordinal))
+            .Select(x => result[x.Id]).ToArray();
     }
 
     public static async Task<string> TranslateToRussianAsync(string text, CancellationToken cancellationToken = default)
     {
+        if (LocalTranslationDictionary.TryTranslate(text, out var known)) return known;
         var answer = await NexusFabricRuntime.AskTextAsync(
             "Определи язык и переведи текст на естественный русский, даже если исходный язык использует кириллицу. " +
             UntrustedDataRule + " Верни только перевод без пояснений, кавычек и Markdown.", text, cancellationToken);
-        return ValidateTranslation(answer);
+        var translated = ValidateTranslation(answer);
+        LocalTranslationDictionary.Remember(text, translated);
+        return translated;
     }
 
     public static async Task<string> DiagnoseAgentPageAsync(string query, string title, string url, string pageText,
@@ -249,6 +261,8 @@ public static class LocalIntelligenceService
             var parsed = JsonSerializer.Deserialize<SearchAnalysisResponse>(ExtractJson(answer), JsonOptions);
             if (parsed?.Items is null || parsed.Items.Count == 0) return fallback;
             var allowed = candidates.ToDictionary(x => NormalizeProductUrl(x.Url), StringComparer.OrdinalIgnoreCase);
+            var deterministicScores = fallback.Items.ToDictionary(x => NormalizeProductUrl(x.Url), x => x.Score,
+                StringComparer.OrdinalIgnoreCase);
             var items = parsed.Items
                 .Where(x => allowed.ContainsKey(NormalizeProductUrl(x.Url)))
                 .Select(x =>
@@ -257,7 +271,8 @@ public static class LocalIntelligenceService
                     return new NexusSearchItem(
                         string.IsNullOrWhiteSpace(x.Title) ? source.Title : x.Title.Trim(), source.Url,
                         CompactSearchText(source.Snippet, 320), CompactSearchText(x.Summary, 520),
-                        Math.Clamp(x.Score + source.LocalPreference + source.SemanticRelevance * 1.5, 0, 10));
+                        Math.Max(deterministicScores.GetValueOrDefault(NormalizeProductUrl(source.Url)),
+                            Math.Clamp(x.Score + source.LocalPreference + source.SemanticRelevance * 1.5, 0, 10)));
                 })
                 .GroupBy(x => x.Url, StringComparer.OrdinalIgnoreCase)
                 .Select(x => x.First())
@@ -464,13 +479,17 @@ public static class LocalIntelligenceService
 
     private static NexusSearchReport BuildSearchFallback(string query, IReadOnlyList<NexusSearchCandidate> candidates)
     {
-        var words = ExtractKeywords(query, 12);
+        var terms = ExtractSearchIntentTerms(query);
         var items = candidates.Select(item =>
             {
-                var text = (item.Title + " " + item.Snippet).ToLowerInvariant();
-                var matches = words.Count(text.Contains);
-                var score = 4 + (words.Count == 0 ? 0 : matches * 3.0 / words.Count) +
-                            item.SemanticRelevance * 2.5 + item.LocalPreference;
+                var host = Uri.TryCreate(item.Url, UriKind.Absolute, out var uri) ? uri.Host : string.Empty;
+                var titleAndHost = CanonicalSearchText(item.Title + " " + host);
+                var body = CanonicalSearchText(item.Snippet);
+                var titleCoverage = SearchCoverage(terms, titleAndHost);
+                var bodyCoverage = SearchCoverage(terms, body);
+                var score = 2.5 + titleCoverage * 5.5 + bodyCoverage * 1.2 +
+                            item.SemanticRelevance * 1.5 + item.LocalPreference;
+                if (terms.Count > 0 && titleCoverage >= .88) score = Math.Max(score, 9.2 + item.LocalPreference);
                 return new NexusSearchItem(item.Title, item.Url, CompactSearchText(item.Snippet, 320),
                     CompactSearchText(item.Snippet, 520), Math.Clamp(score, 0, 10));
             })
@@ -482,6 +501,52 @@ public static class LocalIntelligenceService
                 "Nexus отобрал наиболее близкие к запросу страницы. Откройте источник, чтобы продолжить анализ внутри сайта.",
             items,
             "Ссылки обнаружены выбранной поисковой системой; содержимое страниц очищено, ранжировано и проанализировано локально. Выбор источника сохраняется только на этом устройстве.");
+    }
+
+    private static IReadOnlyList<string> ExtractSearchIntentTerms(string query)
+    {
+        string[] stop = ["сайт", "сайты", "страница", "страницы", "открой", "открыть", "найди", "найти",
+            "покажи", "показать", "пожалуйста", "мне", "нужен", "нужны", "search", "find", "show", "open",
+            "website", "websites"];
+        return Regex.Matches(query.ToLowerInvariant(), @"[\p{L}\p{N}]{3,}")
+            .Select(x => CanonicalSearchToken(x.Value))
+            .Where(x => x.Length >= 3 && !stop.Contains(x, StringComparer.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase).Take(12).ToArray();
+    }
+
+    private static double SearchCoverage(IReadOnlyList<string> terms, string searchable)
+    {
+        if (terms.Count == 0) return .5;
+        double matched = 0;
+        var words = searchable.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var term in terms)
+        {
+            if (words.Contains(term, StringComparer.OrdinalIgnoreCase)) matched += 1;
+            else if (term.Length >= 5 && words.Any(word => word.StartsWith(term, StringComparison.OrdinalIgnoreCase) ||
+                                                          term.StartsWith(word, StringComparison.OrdinalIgnoreCase))) matched += .9;
+            else if (searchable.Contains(term, StringComparison.OrdinalIgnoreCase)) matched += .72;
+        }
+        return Math.Clamp(matched / terms.Count, 0, 1);
+    }
+
+    private static string CanonicalSearchText(string value) =>
+        Regex.Replace(string.Join(' ', Regex.Matches(value.ToLowerInvariant(), @"[\p{L}\p{N}]+")
+            .Select(x => CanonicalSearchToken(x.Value))), @"\s+", " ").Trim();
+
+    private static string CanonicalSearchToken(string token)
+    {
+        if (token.StartsWith("новост", StringComparison.OrdinalIgnoreCase)) return "news";
+        if (token.StartsWith("английск", StringComparison.OrdinalIgnoreCase)) return "english";
+        if (token.StartsWith("язык", StringComparison.OrdinalIgnoreCase)) return "language";
+        const string source = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя";
+        string[] target = ["a","b","v","g","d","e","e","zh","z","i","y","k","l","m","n","o","p","r","s","t","u","f","h","c","ch","sh","sch","","y","","e","yu","ya"];
+        var builder = new System.Text.StringBuilder(token.Length * 2);
+        foreach (var character in token.ToLowerInvariant())
+        {
+            var index = source.IndexOf(character);
+            builder.Append(index >= 0 ? target[index] : character);
+        }
+        return builder.ToString();
     }
 
     private static string CompactSearchText(string? value, int maximum)

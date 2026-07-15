@@ -30,7 +30,7 @@
     const status=document.getElementById('status'), answer=document.getElementById('answer'), results=document.getElementById('results');
     status.style.display='none'; answer.style.display='block'; answer.querySelector('span').textContent=report.directAnswer||''; results.textContent='';
     for(const item of report.items||[]){const card=document.createElement('article');card.className='result';card.tabIndex=0;
-      const score=document.createElement('span');score.className='score';score.textContent=`совпадение ${Math.round(item.score*10)}%`;
+      const score=document.createElement('span');score.className='score';score.textContent=`релевантность ${Math.round(item.score*10)}%`;
       const title=document.createElement('h2');title.textContent=item.title;const url=document.createElement('div');url.className='url';url.textContent=item.url;
       const text=document.createElement('p');text.textContent=item.answer||item.snippet;card.append(score,title,url,text);
       const open=()=>send({type:'result-open',value:item.url,query:report.query});card.addEventListener('click',open);card.addEventListener('keydown',e=>{if(e.key==='Enter')open()});results.append(card)}

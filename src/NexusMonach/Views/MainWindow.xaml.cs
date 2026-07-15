@@ -240,6 +240,8 @@ public partial class MainWindow : Window
                 _ = tab.Core.ExecuteScriptAsync("window.nexusStatus?.(" + JsonSerializer.Serialize(message) + ")");
             });
             var report = await NexusSearchService.SearchAsync(query, progress, cancellation.Token);
+            if (!_isPrivate)
+                await KnowledgeGraphService.RecordResearchAsync(report, cancellation.Token);
             if (tab.Core is null || !tab.CurrentUrl.StartsWith("https://nexus.local/search.html", StringComparison.OrdinalIgnoreCase)) return;
             var json = JsonSerializer.Serialize(report, WebJson);
             await tab.Core.ExecuteScriptAsync("window.nexusRender?.(" + json + ")");

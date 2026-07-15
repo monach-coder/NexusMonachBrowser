@@ -11,6 +11,10 @@ public partial class SettingsWindow : Window
     {
         public override string ToString() => Label;
     }
+    private sealed record SearchChoice(string Label, SearchEngineKind Value, string Description)
+    {
+        public override string ToString() => Label;
+    }
 
     private readonly BrowserSettings _settings;
     public BrowserSettings? ResultSettings { get; private set; }
@@ -21,11 +25,20 @@ public partial class SettingsWindow : Window
         InitializeComponent();
         var searchChoices = new[]
         {
-            new Choice<SearchEngineKind>("DuckDuckGo", SearchEngineKind.DuckDuckGo),
-            new Choice<SearchEngineKind>("Brave Search", SearchEngineKind.Brave),
-            new Choice<SearchEngineKind>("Startpage", SearchEngineKind.Startpage),
-            new Choice<SearchEngineKind>("Google", SearchEngineKind.Google),
-            new Choice<SearchEngineKind>("Яндекс", SearchEngineKind.Yandex)
+            new SearchChoice("DuckDuckGo", SearchEngineKind.DuckDuckGo,
+                "Релевантность 4/5 · объём 4/5 · фильтрация средняя. Универсальная приватная отправная точка без персонального профиля."),
+            new SearchChoice("Brave Search", SearchEngineKind.Brave,
+                "Релевантность 4/5 · объём 4/5 · фильтрация ниже средней. Собственный индекс и хороший баланс независимости и покрытия."),
+            new SearchChoice("Startpage", SearchEngineKind.Startpage,
+                "Релевантность 4/5 · объём 5/5 · фильтрация средняя. Прокси-доступ к крупной выдаче без прямой передачи поиску профиля Nexus."),
+            new SearchChoice("Google", SearchEngineKind.Google,
+                "Релевантность 5/5 · объём 5/5 · фильтрация/персонализация высокая. Максимальное покрытие, но больше региональных и профильных факторов."),
+            new SearchChoice("Яндекс", SearchEngineKind.Yandex,
+                "Релевантность 4/5 для русскоязычного веба · объём 5/5 · региональная фильтрация высокая."),
+            new SearchChoice("Bing", SearchEngineKind.Bing,
+                "Релевантность 4/5 · объём 5/5 · фильтрация средне-высокая. Полезен как крупный альтернативный индекс."),
+            new SearchChoice("Mojeek", SearchEngineKind.Mojeek,
+                "Релевантность 3/5 · объём 3/5 · фильтрация низкая. Независимый индекс без персонального ранжирования; результаты могут заметно отличаться.")
         };
         var privacyChoices = new[]
         {
@@ -41,7 +54,7 @@ public partial class SettingsWindow : Window
         SearchEngineCombo.ItemsSource = searchChoices;
         PrivacyLevelCombo.ItemsSource = privacyChoices;
         ProxyTypeCombo.ItemsSource = proxyChoices;
-        SearchEngineCombo.SelectedItem = searchChoices.First(x => x.Value == settings.SearchEngine);
+        SearchEngineCombo.SelectedItem = searchChoices.FirstOrDefault(x => x.Value == settings.SearchEngine) ?? searchChoices[0];
         PrivacyLevelCombo.SelectedItem = privacyChoices.First(x => x.Value == settings.PrivacyLevel);
         ProxyTypeCombo.SelectedItem = proxyChoices.First(x => x.Value == settings.ProxyKind);
         HomePageBox.Text = settings.HomePage;
@@ -62,6 +75,14 @@ public partial class SettingsWindow : Window
         ProxyBypassBox.Text = settings.ProxyBypassList;
         PrivacyMonitorCheck.IsChecked = settings.ShowPrivacyMonitor;
         PreventWebRtcLeakCheck.IsChecked = settings.PreventWebRtcIpLeak;
+    }
+
+    private void SearchEngineCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (SearchEngineDescriptionText is null) return;
+        SearchEngineDescriptionText.Text = SearchEngineCombo.SelectedItem is SearchChoice choice
+            ? choice.Description + " Оценки ориентировочные: Nexus использует эту систему только для стартовых ссылок, затем читает и ранжирует источники локально."
+            : string.Empty;
     }
 
     private void Save_Click(object sender, RoutedEventArgs e)
@@ -87,7 +108,7 @@ public partial class SettingsWindow : Window
             return;
         }
 
-        _settings.SearchEngine = SearchEngineCombo.SelectedItem is Choice<SearchEngineKind> search
+        _settings.SearchEngine = SearchEngineCombo.SelectedItem is SearchChoice search
             ? search.Value : SearchEngineKind.DuckDuckGo;
         _settings.PrivacyLevel = PrivacyLevelCombo.SelectedItem is Choice<PrivacyLevel> level
             ? level.Value : PrivacyLevel.Balanced;

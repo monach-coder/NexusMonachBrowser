@@ -108,8 +108,8 @@ public static class LocalAiService
             };
             foreach (var argument in new[]
                      {
-                         "-m", AiModelCatalog.TextModel!, "-f", promptPath, "-n", "3072",
-                         "-c", "8192", "--temp", "0.2", "--no-display-prompt", "--simple-io",
+                         "-m", AiModelCatalog.TextModel!, "-f", promptPath, "-n", "4096",
+                         "-c", "12288", "--temp", "0.2", "--no-display-prompt", "--simple-io",
                          "--single-turn", "--log-disable"
                      })
                 start.ArgumentList.Add(argument);

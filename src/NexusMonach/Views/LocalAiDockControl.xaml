@@ -35,9 +35,9 @@
                                    Foreground="{StaticResource AccentBrush}" Text="Проверка Nexus AI…" />
                     </StackPanel>
                     <StackPanel Grid.Column="1" VerticalAlignment="Center" HorizontalAlignment="Right">
-                        <TextBlock Text="LOCAL AI · PAGE AGENT" HorizontalAlignment="Right"
+                        <TextBlock Text="LOCAL AI · СЛЕДОПЫТ" HorizontalAlignment="Right"
                                    FontSize="9" Foreground="{StaticResource MutedTextBrush}" />
-                        <Button Content="Проверить AI" Margin="0,5,0,0" Padding="8,4"
+                        <Button x:Name="TestLocalAiButton" Content="Проверить AI" Margin="0,5,0,0" Padding="8,4"
                                 FontSize="9.5" Click="TestLocalAi_Click" />
                     </StackPanel>
                 </Grid>
