@@ -185,8 +185,7 @@
                     ToolTip="Локальный перевод страницы или субтитров видео" Click="TranslateMenu_Click">
                 <Button.ContextMenu>
                     <ContextMenu>
-                        <MenuItem Header="Перевести текст прямо на странице" Click="TranslateTop_Click" />
-                        <MenuItem Header="Перевести субтитры активного видео" Click="TranslateVideo_Click" />
+                        <MenuItem Header="Перевести страницу" Click="TranslateTop_Click" />
                         <MenuItem Header="Переводить звук видео в RU-субтитры" Click="TranslateVideoAudio_Click" />
                     </ContextMenu>
                 </Button.ContextMenu>

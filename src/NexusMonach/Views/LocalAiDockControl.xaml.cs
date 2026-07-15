@@ -4,6 +4,7 @@ using System.Windows.Input;
 using System.Text.Json;
 using System.Windows.Threading;
 using Microsoft.Win32;
+using NexusMonach.Intelligence;
 using NexusMonach.Models;
 using NexusMonach.Services;
 
@@ -15,8 +16,12 @@ public partial class LocalAiDockControl : UserControl
     private string? _model;
     private string? _pageUrl;
     private CancellationTokenSource? _cancellation;
+    private CancellationTokenSource? _videoCancellation;
     private readonly DispatcherTimer _devHelpTimer;
     private string? _pendingDevHelp;
+    private IReadOnlyList<NexusResearchDocument> _lastResearchDocuments = [];
+    private IReadOnlyList<string> _lastResearchNotes = [];
+    private string _lastResearchQuery = string.Empty;
 
     public LocalAiDockControl()
     {
@@ -133,27 +138,28 @@ public partial class LocalAiDockControl : UserControl
                 "Перевод звука видео", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
-        _cancellation?.Cancel();
-        _cancellation = new CancellationTokenSource();
+        StopVideoTranslation();
+        var session = new CancellationTokenSource();
+        _videoCancellation = session;
         await tab.BeginLiveAudioTranslationAsync();
         try
         {
             var progress = new Progress<string>(value => _ = tab.UpdateLiveAudioTranslationStatusAsync(value));
-            var preparation = WhisperService.EnsureInstalledAsync(progress, _cancellation.Token);
+            var preparation = WhisperService.EnsureInstalledAsync(progress, session.Token);
             while (!preparation.IsCompleted)
             {
                 await tab.UpdateLiveAudioTranslationStatusAsync(WhisperService.Status);
-                await Task.Delay(1000, _cancellation.Token);
+                await Task.Delay(1000, session.Token);
             }
             await preparation;
             var useSystemLoopback = false;
-            while (!_cancellation.IsCancellationRequested && !await tab.ShouldStopLiveAudioTranslationAsync())
+            while (!session.IsCancellationRequested && !await tab.ShouldStopLiveAudioTranslationAsync())
             {
                 byte[] wav;
                 if (!useSystemLoopback)
                 {
                     await tab.UpdateLiveAudioTranslationStatusAsync("Слушаю аудиодорожку текущего видео…");
-                    var capture = await tab.CaptureActiveVideoAudioAsync(7, _cancellation.Token);
+                    var capture = await tab.CaptureActiveVideoAudioAsync(7, session.Token);
                     if (capture.Success)
                         wav = Convert.FromBase64String(capture.WavBase64);
                     else
@@ -161,45 +167,52 @@ public partial class LocalAiDockControl : UserControl
                         useSystemLoopback = true;
                         await tab.UpdateLiveAudioTranslationStatusAsync(
                             "Плеер не отдал дорожку. Слушаю системный выход Windows 7 секунд…");
-                        wav = await SystemAudioCaptureService.CaptureWavAsync(7, _cancellation.Token);
+                        wav = await SystemAudioCaptureService.CaptureWavAsync(7, session.Token);
                     }
                 }
                 else
                 {
                     await tab.UpdateLiveAudioTranslationStatusAsync("Слушаю системный выход Windows 7 секунд…");
-                    wav = await SystemAudioCaptureService.CaptureWavAsync(7, _cancellation.Token);
+                    wav = await SystemAudioCaptureService.CaptureWavAsync(7, session.Token);
                 }
                 await tab.UpdateLiveAudioTranslationStatusAsync("Whisper распознаёт речь локально…");
-                var transcript = await WhisperService.TranscribeAsync(wav, _cancellation.Token);
+                var transcript = await WhisperService.TranscribeAsync(wav, session.Token);
                 if (string.IsNullOrWhiteSpace(transcript)) continue;
                 await tab.UpdateLiveAudioTranslationStatusAsync("Nexus Fast Intelligence переводит реплику…");
-                var translated = await LocalIntelligenceService.TranslateSegmentsAsync(
-                    [new TranslationSegment { Id = "speech", Text = transcript }], _cancellation.Token);
-                var text = translated.FirstOrDefault()?.Text;
+                var text = await LocalIntelligenceService.TranslateToRussianAsync(transcript, session.Token);
                 if (!string.IsNullOrWhiteSpace(text))
                     await tab.ShowLiveVideoSubtitleAsync(text);
             }
             await tab.EndLiveAudioTranslationAsync("Перевод звука остановлен.");
         }
-        catch (OperationCanceledException)
-        { await tab.EndLiveAudioTranslationAsync("Перевод звука остановлен."); }
+        catch (OperationCanceledException) { }
         catch (Exception ex)
         {
-            await tab.EndLiveAudioTranslationAsync("Ошибка: " + ex.Message);
-            GlassDialogWindow.Show(ex.Message, "Перевод звука видео", MessageBoxButton.OK, MessageBoxImage.Information);
+            if (ReferenceEquals(Volatile.Read(ref _videoCancellation), session))
+                GlassDialogWindow.Show(ex.Message, "Перевод звука видео", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        finally
+        {
+            Interlocked.CompareExchange(ref _videoCancellation, null, session);
+            session.Dispose();
+            try { await tab.EndLiveAudioTranslationAsync("Перевод звука остановлен."); } catch { }
         }
     }
+
+    public void StopVideoTranslation() => Interlocked.Exchange(ref _videoCancellation, null)?.Cancel();
 
     public async Task PrepareShoppingAgentAsync(BrowserTab tab)
     {
         await ShowForTabAsync(tab);
-        ModeTitleText.Text = "AI · СРАВНЕНИЕ ТОВАРОВ";
+        ModeTitleText.Text = "AI · АГЕНТ И ИССЛЕДОВАНИЕ";
         DeveloperAnalyzeButton.Visibility = Visibility.Collapsed;
         DeveloperGuidePanel.Visibility = Visibility.Collapsed;
         ShoppingAgentPanel.Visibility = Visibility.Visible;
-        ShoppingQueryBox.Text = "Что ищем на этом сайте?";
-        ResultBox.Text = "Агент использует поиск текущего сайта, соберёт видимые цены, рейтинги и число покупок. Корзина и оформление заказа не затрагиваются.";
-        StatusText.Text = "Введи товар и нажми «Собрать».";
+        ShoppingQueryBox.Text = "Что ищем или исследуем?";
+        ResultBox.Text = "Выберите режим: сравнение товаров, глубокий анализ открытой страницы, углублённый поиск по связанным страницам текущего сайта или итоговая сводка агента. Формы, вход, корзина и оформление заказа не затрагиваются.";
+        StatusText.Text = NexusFabricRuntime.IsAvailable
+            ? "Nexus Intelligence Fabric готов. Введите вопрос и выберите режим."
+            : NexusFabricRuntime.Status.Message;
         ShoppingQueryBox.Focus();
         ShoppingQueryBox.SelectAll();
     }
@@ -396,6 +409,222 @@ public partial class LocalAiDockControl : UserControl
         catch (OperationCanceledException) { StatusText.Text = "Сбор остановлен."; }
         catch (Exception ex) { ResultBox.Text = ex.Message; StatusText.Text = "Агент не собрал сравнение."; }
         finally { CancelButton.IsEnabled = false; }
+    }
+
+    private async void DeepAnalysis_Click(object sender, RoutedEventArgs e) => await RunDeepAnalysisAsync();
+    private async void DeepResearch_Click(object sender, RoutedEventArgs e) => await RunDeepResearchAsync();
+    private async void AgentSummary_Click(object sender, RoutedEventArgs e) => await RunAgentSummaryAsync();
+
+    private async Task RunDeepAnalysisAsync()
+    {
+        if (!TryPrepareFabricOperation(out var tab)) return;
+        var query = GetAgentQuery("Подробно проанализируй эту страницу: ключевые факты, аргументы, ограничения и практический вывод.");
+        BeginAgentOperation("Собираю очищенный текст текущей страницы…");
+        var cancellation = _cancellation!;
+        try
+        {
+            var document = await CaptureResearchDocumentAsync(tab, "s1", 1, cancellation.Token);
+            if (document is null) throw new InvalidOperationException("На странице недостаточно читаемого текста для анализа.");
+            _lastResearchDocuments = [document];
+            _lastResearchQuery = query;
+            StatusText.Text = "Nexus Intelligence Fabric выполняет глубокий анализ…";
+            var response = await NexusFabricRuntime.ExecuteAsync(
+                NexusFabricRequest.Create(NexusFabricOperations.DeepPageAnalysis,
+                    new NexusDeepAnalysisRequest(query, document)), cancellation.Token);
+            var summary = ReadFabricSummary(response);
+            _lastResearchNotes = BuildAgentNotes(summary);
+            ResultBox.Text = FormatAgentSummary(summary, _lastResearchDocuments);
+            ResultBox.ScrollToHome();
+            StatusText.Text = "Глубокий анализ завершён локально.";
+        }
+        catch (OperationCanceledException) { StatusText.Text = "Глубокий анализ остановлен."; }
+        catch (Exception ex) { ResultBox.Text = ex.Message; StatusText.Text = "Глубокий анализ не завершён."; }
+        finally { CancelButton.IsEnabled = false; }
+    }
+
+    private async Task RunDeepResearchAsync()
+    {
+        if (!TryPrepareFabricOperation(out var tab)) return;
+        var query = GetAgentQuery("Найди и сопоставь наиболее важную информацию по теме открытой страницы.");
+        var startUrl = tab.CurrentUrl;
+        BeginAgentOperation("Готовлю безопасный маршрут исследования…");
+        var cancellation = _cancellation!;
+        var documents = new List<NexusResearchDocument>();
+        try
+        {
+            var first = await CaptureResearchDocumentAsync(tab, "s1", 1, cancellation.Token);
+            if (first is not null) documents.Add(first);
+            var links = await tab.GetResearchLinksAsync(query, 12);
+            var sourceRank = 2;
+            foreach (var link in links.Take(6))
+            {
+                cancellation.Token.ThrowIfCancellationRequested();
+                StatusText.Text = $"Углублённый поиск: источник {sourceRank} из {Math.Min(7, links.Count + 1)}…";
+                if (!await tab.NavigateAndWaitAsync(link, TimeSpan.FromSeconds(20))) continue;
+                await Task.Delay(700, cancellation.Token);
+                var document = await CaptureResearchDocumentAsync(tab, $"s{sourceRank}", sourceRank, cancellation.Token);
+                if (document is not null && documents.All(x => !x.Url.Equals(document.Url, StringComparison.OrdinalIgnoreCase)))
+                {
+                    documents.Add(document);
+                    sourceRank++;
+                }
+            }
+            if (documents.Count == 0) throw new InvalidOperationException("Не удалось получить читаемые источники на текущем сайте.");
+            _lastResearchDocuments = documents;
+            _lastResearchQuery = query;
+            StatusText.Text = $"Fabric сопоставляет {documents.Count} источников и ищет противоречия…";
+            var response = await NexusFabricRuntime.ExecuteAsync(
+                NexusFabricRequest.Create(NexusFabricOperations.DeepResearch,
+                    new NexusDeepResearchRequest(query, documents, documents.Count)), cancellation.Token);
+            var summary = ReadFabricSummary(response);
+            _lastResearchNotes = BuildAgentNotes(summary);
+            ResultBox.Text = FormatAgentSummary(summary, documents);
+            ResultBox.ScrollToHome();
+            StatusText.Text = $"Углублённый поиск завершён. Проверено источников: {documents.Count}.";
+        }
+        catch (OperationCanceledException) { StatusText.Text = "Углублённый поиск остановлен."; }
+        catch (Exception ex) { ResultBox.Text = ex.Message; StatusText.Text = "Углублённый поиск не завершён."; }
+        finally
+        {
+            CancelButton.IsEnabled = false;
+            var resultStatus = StatusText.Text;
+            if (!string.Equals(tab.CurrentUrl, startUrl, StringComparison.OrdinalIgnoreCase))
+            {
+                StatusText.Text = resultStatus + " Возвращаю исходную страницу…";
+                try
+                {
+                    var restored = await tab.NavigateAndWaitAsync(startUrl, TimeSpan.FromSeconds(20));
+                    StatusText.Text = resultStatus + (restored
+                        ? " Исходная страница восстановлена."
+                        : " Не удалось автоматически вернуть исходную страницу.");
+                }
+                catch { StatusText.Text = resultStatus + " Не удалось автоматически вернуть исходную страницу."; }
+            }
+        }
+    }
+
+    private async Task RunAgentSummaryAsync()
+    {
+        if (!TryPrepareFabricOperation(out _)) return;
+        if (_lastResearchDocuments.Count == 0)
+        {
+            ResultBox.Text = "Сначала выполните «Глубокий анализ» или «Углублённый поиск». Сводка использует только уже собранные локально материалы.";
+            StatusText.Text = "Нет материалов для сводки.";
+            return;
+        }
+        var query = GetAgentQuery(string.IsNullOrWhiteSpace(_lastResearchQuery) ? "Подготовь итоговую сводку." : _lastResearchQuery);
+        BeginAgentOperation("Агент сводит выводы, источники, противоречия и пробелы…");
+        var cancellation = _cancellation!;
+        try
+        {
+            var response = await NexusFabricRuntime.ExecuteAsync(
+                NexusFabricRequest.Create(NexusFabricOperations.AgentResearchSummary,
+                    new NexusAgentSummaryRequest(query, _lastResearchDocuments, _lastResearchNotes)), cancellation.Token);
+            var summary = ReadFabricSummary(response);
+            _lastResearchQuery = query;
+            _lastResearchNotes = BuildAgentNotes(summary);
+            ResultBox.Text = FormatAgentSummary(summary, _lastResearchDocuments);
+            ResultBox.ScrollToHome();
+            StatusText.Text = "Сводка агента готова.";
+        }
+        catch (OperationCanceledException) { StatusText.Text = "Подготовка сводки остановлена."; }
+        catch (Exception ex) { ResultBox.Text = ex.Message; StatusText.Text = "Сводка агента не подготовлена."; }
+        finally { CancelButton.IsEnabled = false; }
+    }
+
+    private bool TryPrepareFabricOperation(out BrowserTab tab)
+    {
+        tab = _tab!;
+        if (_tab is null || UrlService.IsInternal(_tab.CurrentUrl))
+        {
+            StatusText.Text = "Откройте обычную веб-страницу.";
+            return false;
+        }
+        if (!NexusFabricRuntime.IsAvailable)
+        {
+            ResultBox.Text = NexusFabricRuntime.Status.Message +
+                "\n\nNexus Intelligence Fabric входит в открытый исходный код браузера. " +
+                "Проверьте готовность локальных моделей и целостность установленной сборки.";
+            StatusText.Text = "Открытый Fabric не инициализирован.";
+            return false;
+        }
+        tab = _tab;
+        return true;
+    }
+
+    private void BeginAgentOperation(string status)
+    {
+        _cancellation?.Cancel();
+        _cancellation = new CancellationTokenSource();
+        CancelButton.IsEnabled = true;
+        ResultBox.Clear();
+        StatusText.Text = status;
+    }
+
+    private string GetAgentQuery(string fallback)
+    {
+        var query = ShoppingQueryBox.Text.Trim();
+        return string.IsNullOrWhiteSpace(query) || query.StartsWith("Что ищем", StringComparison.Ordinal)
+            ? fallback
+            : query;
+    }
+
+    private static async Task<NexusResearchDocument?> CaptureResearchDocumentAsync(
+        BrowserTab tab, string id, int sourceRank, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var text = (await tab.GetReadablePageTextAsync()).Trim();
+        cancellationToken.ThrowIfCancellationRequested();
+        if (text.Length < 80) return null;
+        if (text.Length > 12000) text = text[..12000];
+        return new NexusResearchDocument(id, tab.Title, tab.CurrentUrl, text, sourceRank);
+    }
+
+    private static NexusAgentSummary ReadFabricSummary(NexusFabricResponse response)
+    {
+        if (!response.Success) throw new InvalidOperationException(response.Error ?? "Fabric не вернул результат.");
+        return response.ReadPayload<NexusAgentSummary>()
+            ?? throw new InvalidOperationException("Fabric вернул повреждённую сводку.");
+    }
+
+    private static IReadOnlyList<string> BuildAgentNotes(NexusAgentSummary summary)
+    {
+        var notes = new List<string> { summary.Summary, summary.Recommendation };
+        notes.AddRange(summary.Conflicts ?? []);
+        notes.AddRange(summary.MissingInformation ?? []);
+        return notes.Where(x => !string.IsNullOrWhiteSpace(x)).Take(24).ToArray();
+    }
+
+    private static string FormatAgentSummary(
+        NexusAgentSummary summary, IReadOnlyList<NexusResearchDocument> documents)
+    {
+        var sourceMap = documents.ToDictionary(x => x.Id, x => x, StringComparer.OrdinalIgnoreCase);
+        var lines = new List<string> { "СВОДКА NEXUS INTELLIGENCE FABRIC", summary.Summary };
+        var findings = summary.Findings ?? [];
+        var conflicts = summary.Conflicts ?? [];
+        var missingInformation = summary.MissingInformation ?? [];
+        if (findings.Count > 0)
+        {
+            lines.Add("\nКЛЮЧЕВЫЕ ВЫВОДЫ");
+            var index = 1;
+            foreach (var finding in findings)
+            {
+                var sources = string.Join(", ", (finding.SourceIds ?? [])
+                    .Where(sourceMap.ContainsKey).Select(id => id.ToUpperInvariant()));
+                lines.Add($"{index++}. {finding.Claim}\n   Уверенность: {finding.Confidence}" +
+                          (string.IsNullOrWhiteSpace(sources) ? string.Empty : $" · Источники: {sources}"));
+            }
+        }
+        if (conflicts.Count > 0)
+            lines.Add("\nПРОТИВОРЕЧИЯ\n" + string.Join("\n", conflicts.Select(x => "• " + x)));
+        if (missingInformation.Count > 0)
+            lines.Add("\nЧЕГО НЕ ХВАТАЕТ\n" + string.Join("\n", missingInformation.Select(x => "• " + x)));
+        if (!string.IsNullOrWhiteSpace(summary.Recommendation))
+            lines.Add("\nИТОГ АГЕНТА\n" + summary.Recommendation);
+        lines.Add("\nИСТОЧНИКИ");
+        lines.AddRange(documents.Select(x => $"{x.Id.ToUpperInvariant()}. {x.Title}\n   {x.Url}"));
+        lines.Add("\nАгент ничего не вводил в формы, не авторизовывался и не совершал действий от имени пользователя.");
+        return string.Join("\n", lines);
     }
 
     private async void DeveloperAnalyze_Click(object sender, RoutedEventArgs e) => await RunDeveloperAnalysisAsync();

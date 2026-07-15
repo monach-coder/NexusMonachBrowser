@@ -46,16 +46,30 @@
             <Grid Grid.Row="2" Margin="0,12,0,0">
                 <Button x:Name="DeveloperAnalyzeButton" Content="Повторить анализ и подсветку" Visibility="Collapsed"
                         Padding="14,8" HorizontalAlignment="Left" Click="DeveloperAnalyze_Click" />
-                <Grid x:Name="ShoppingAgentPanel" Visibility="Collapsed">
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                    <TextBox x:Name="ShoppingQueryBox" Padding="10,8" MinHeight="38"
-                             Text="Что ищем на этом сайте?" GotKeyboardFocus="ShoppingQueryBox_GotKeyboardFocus"
-                             KeyDown="ShoppingQueryBox_KeyDown" />
-                    <Button Grid.Column="1" Content="Собрать" Padding="13,8" Margin="7,0,0,0"
-                            Click="ShoppingAgent_Click" />
-                    <Button Grid.Column="2" Content="Фото…" Padding="11,8" Margin="7,0,0,0"
-                            ToolTip="Распознать фотографию или рисунок локальной моделью" Click="ShoppingImage_Click" />
-                </Grid>
+                <StackPanel x:Name="ShoppingAgentPanel" Visibility="Collapsed">
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                        <TextBox x:Name="ShoppingQueryBox" Padding="10,8" MinHeight="38"
+                                 Text="Что ищем или исследуем?" GotKeyboardFocus="ShoppingQueryBox_GotKeyboardFocus"
+                                 KeyDown="ShoppingQueryBox_KeyDown" />
+                        <Button Grid.Column="1" Content="Фото…" Padding="11,8" Margin="7,0,0,0"
+                                ToolTip="Распознать фотографию или рисунок локальной моделью" Click="ShoppingImage_Click" />
+                    </Grid>
+                    <WrapPanel Margin="0,8,0,0">
+                        <Button Content="Сравнить товары" Padding="10,6" Margin="0,0,6,6"
+                                ToolTip="Собрать цены, рейтинги и отзывы на страницах текущего сайта"
+                                Click="ShoppingAgent_Click" />
+                        <Button Content="Глубокий анализ" Padding="10,6" Margin="0,0,6,6"
+                                ToolTip="Подробно разобрать открытую страницу по вашему вопросу"
+                                Click="DeepAnalysis_Click" />
+                        <Button Content="Углублённый поиск" Padding="10,6" Margin="0,0,6,6"
+                                ToolTip="Пройти по связанным страницам этого сайта без форм, входа и покупок"
+                                Click="DeepResearch_Click" />
+                        <Button Content="Сводка агента" Padding="10,6" Margin="0,0,0,6"
+                                ToolTip="Свести найденное, источники, противоречия и пробелы"
+                                Click="AgentSummary_Click" />
+                    </WrapPanel>
+                </StackPanel>
             </Grid>
 
             <StackPanel x:Name="DeveloperGuidePanel" Grid.Row="3" Margin="0,11,0,0" Visibility="Collapsed">

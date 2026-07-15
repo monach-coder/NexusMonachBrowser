@@ -10,6 +10,9 @@ $publish = Join-Path $dist "NexusMonach-Portable"
 $archive = Join-Path $dist "NexusMonach-Portable-win-x64.zip"
 $ai = Join-Path $root "src\NexusMonach\AI"
 
+& (Join-Path $PSScriptRoot "Test-LicenseBoundary.ps1") -Root $root
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
     Write-Host "The .NET 8 SDK was not found." -ForegroundColor Red
     Write-Host "Install it from: https://dotnet.microsoft.com/download/dotnet/8.0"
@@ -73,8 +76,13 @@ if (-not (Test-Path $executable)) {
 
 New-Item -ItemType File -Force -Path (Join-Path $publish "portable.flag") | Out-Null
 Copy-Item (Join-Path $root "README.md") $publish
+Copy-Item (Join-Path $root "CHANGELOG.md") $publish
 Copy-Item (Join-Path $root "PRIVACY.md") $publish
 Copy-Item (Join-Path $root "SECURITY.md") $publish
+Copy-Item (Join-Path $root "LICENSE") $publish
+Copy-Item (Join-Path $root "NOTICE.md") $publish
+Copy-Item (Join-Path $root "TRADEMARKS.md") $publish
+Copy-Item (Join-Path $root "THIRD_PARTY_NOTICES.md") $publish
 
 Compress-Archive -Path (Join-Path $publish "*") -DestinationPath $archive -CompressionLevel Optimal
 

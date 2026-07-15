@@ -13,3 +13,9 @@ src/NexusMonach/AI/**/*.bin
 src/NexusMonach/AI/**/*.onnx
 src/NexusMonach/AI/**/*.exe
 src/NexusMonach/AI/**/*.dll
+
+# Сертификаты подписи и приватные ключи никогда не хранятся в Git.
+*.pfx
+*.p12
+*.snk
+*.key

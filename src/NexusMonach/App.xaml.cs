@@ -28,6 +28,7 @@ public partial class App : Application
         ShutdownMode = ShutdownMode.OnLastWindowClose;
         AppPaths.Initialize(e.Args);
         DevToolsAiBridgeService.Start();
+        NexusFabricRuntime.Initialize();
 
         var splash = new SplashWindow();
         splash.Show();
@@ -67,6 +68,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         DevToolsAiBridgeService.Stop();
+        NexusFabricRuntime.Shutdown();
         SemanticEmbeddingService.Stop();
         base.OnExit(e);
     }

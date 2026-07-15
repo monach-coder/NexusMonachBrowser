@@ -4,6 +4,10 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NexusMonach", "src\NexusMonach\NexusMonach.csproj", "{9C32C9B4-29D5-4C9A-BBA9-381AC28EE762}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nexus.Intelligence.Contracts", "src\Nexus.Intelligence.Contracts\Nexus.Intelligence.Contracts.csproj", "{6B6526CD-7C37-4E57-BC91-2FB04C13A6E8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nexus.Intelligence.Fabric", "src\Nexus.Intelligence.Fabric\Nexus.Intelligence.Fabric.csproj", "{42185D92-9E73-4F3B-87E4-F99993B417AC}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -14,5 +18,13 @@ Global
 		{9C32C9B4-29D5-4C9A-BBA9-381AC28EE762}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{9C32C9B4-29D5-4C9A-BBA9-381AC28EE762}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{9C32C9B4-29D5-4C9A-BBA9-381AC28EE762}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6B6526CD-7C37-4E57-BC91-2FB04C13A6E8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6B6526CD-7C37-4E57-BC91-2FB04C13A6E8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6B6526CD-7C37-4E57-BC91-2FB04C13A6E8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6B6526CD-7C37-4E57-BC91-2FB04C13A6E8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{42185D92-9E73-4F3B-87E4-F99993B417AC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{42185D92-9E73-4F3B-87E4-F99993B417AC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{42185D92-9E73-4F3B-87E4-F99993B417AC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{42185D92-9E73-4F3B-87E4-F99993B417AC}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

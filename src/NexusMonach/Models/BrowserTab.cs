@@ -124,6 +124,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     public event EventHandler? NavigationSucceeded;
     public event EventHandler<UrlRequestedEventArgs>? OpenUrlRequested;
     public event EventHandler? SettingsRequested;
+    public event Action<string>? StatusMessageRequested;
     public Func<string, Task<CoreWebView2?>>? CreatePopupAsync { get; set; }
 
     public Task InitializeAsync() => _initializationTask ??= InitializeCoreAsync();
@@ -275,12 +276,48 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         catch { return string.Empty; }
     }
 
-    public async Task<string> GetSelectedTextAsync()
+    public async Task<IReadOnlyList<string>> GetResearchLinksAsync(string query, int maximum = 12)
     {
-        if (Core is null || UrlService.IsInternal(CurrentUrl)) return string.Empty;
-        var json = await Core.ExecuteScriptAsync("window.getSelection?.().toString().trim().slice(0, 12000) || ''");
-        try { return JsonSerializer.Deserialize<string>(json) ?? string.Empty; }
-        catch { return string.Empty; }
+        if (Core is null || UrlService.IsInternal(CurrentUrl)) return [];
+        maximum = Math.Clamp(maximum, 1, 30);
+        var queryJson = JsonSerializer.Serialize(query ?? string.Empty);
+        var json = await Core.ExecuteScriptAsync($$"""
+            (() => {
+              const query = {{queryJson}}.toLocaleLowerCase();
+              const maximum = {{maximum}};
+              const terms = query.split(/[^\p{L}\p{N}]+/u).filter(x => x.length > 2).slice(0, 12);
+              const blocked = /(login|signin|sign-in|account|profile|cart|basket|checkout|payment|pay|order|logout|register|auth)/i;
+              const current = new URL(location.href);
+              const visible = element => {
+                const style = getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+              };
+              const unique = new Map();
+              for (const anchor of document.querySelectorAll('a[href]')) {
+                if (!visible(anchor)) continue;
+                let url;
+                try { url = new URL(anchor.href, location.href); } catch (_) { continue; }
+                if (!/^https?:$/.test(url.protocol) || url.origin !== current.origin) continue;
+                url.hash = '';
+                if (url.href === current.href || blocked.test(url.pathname + url.search)) continue;
+                const text = ((anchor.innerText || anchor.getAttribute('aria-label') || anchor.title || '') + ' ' +
+                  (anchor.closest('article,main,section,li')?.innerText || '')).replace(/\s+/g, ' ').trim().slice(0, 900);
+                if (text.length < 8) continue;
+                let score = anchor.closest('article,main') ? 3 : 0;
+                for (const term of terms) if (text.toLocaleLowerCase().includes(term)) score += 4;
+                if (/article|story|news|guide|docs|help|wiki|blog|review|research|report/i.test(url.pathname)) score += 2;
+                const existing = unique.get(url.href);
+                if (!existing || existing.score < score) unique.set(url.href, { url: url.href, score });
+              }
+              return [...unique.values()]
+                .sort((a, b) => b.score - a.score || a.url.localeCompare(b.url))
+                .slice(0, maximum)
+                .map(x => x.url);
+            })();
+            """);
+        try { return JsonSerializer.Deserialize<List<string>>(json) ?? []; }
+        catch { return []; }
     }
 
     public async Task<IReadOnlyList<TranslationSegment>> CaptureTranslationSegmentsAsync()
@@ -497,7 +534,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         if (Core is null || string.IsNullOrWhiteSpace(translatedText)) return;
         await Core.ExecuteScriptAsync("""
             ((text)=>{const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];if(!video)return;
-              let track=[...video.textTracks].find(x=>x.label==='Nexus Live RU');if(!track)track=video.addTextTrack('subtitles','Nexus Live RU','ru');track.mode='showing';const now=video.currentTime;try{track.addCue(new VTTCue(now,now+12,text))}catch{}
+              for(const track of video.textTracks)if(track.label==='Nexus Live RU')track.mode='disabled';
               let overlay=document.getElementById('nexus-live-subtitle-overlay');if(!overlay){overlay=document.createElement('div');overlay.id='nexus-live-subtitle-overlay';overlay.dataset.nexusTranslationUi='true';overlay.style.cssText='position:fixed;z-index:2147483646;max-width:80%;padding:7px 12px;border-radius:8px;background:#a8000000;color:#fff;text-align:center;font:600 18px/1.35 Segoe UI,sans-serif;text-shadow:0 1px 2px #000;pointer-events:none';document.documentElement.append(overlay)}
               const r=video.getBoundingClientRect();overlay.style.left=Math.max(8,r.left+r.width*.1)+'px';overlay.style.width=Math.max(180,r.width*.8)+'px';overlay.style.top=Math.max(8,r.bottom-70)+'px';overlay.textContent=text;clearTimeout(window.__nexusSubtitleTimer);window.__nexusSubtitleTimer=setTimeout(()=>overlay.textContent='',11000);
             })(__TEXT__);
@@ -917,6 +954,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
 
     private void AttachEvents(CoreWebView2 core)
     {
+        SelectedTextTranslationService.Attach(this, core, message => StatusMessageRequested?.Invoke(message));
         core.NavigationStarting += (_, e) =>
         {
             ResetNetworkSnapshot(e.Uri);
