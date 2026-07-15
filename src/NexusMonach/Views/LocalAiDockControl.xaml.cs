@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using System.Text.Json;
 using System.Windows.Threading;
 using Microsoft.Win32;
@@ -22,6 +23,7 @@ public partial class LocalAiDockControl : UserControl
     private IReadOnlyList<NexusResearchDocument> _lastResearchDocuments = [];
     private IReadOnlyList<string> _lastResearchNotes = [];
     private string _lastResearchQuery = string.Empty;
+    private string? _shoppingImagePath;
 
     public LocalAiDockControl()
     {
@@ -71,7 +73,9 @@ public partial class LocalAiDockControl : UserControl
             segments = await tab.CaptureTranslationSegmentsAsync();
             if (segments.Count == 0) throw new InvalidOperationException("На странице нет видимого текста для перевода.");
             await tab.BeginInPageTranslationAsync(segments.Count);
-            foreach (var batch in segments.Chunk(12))
+            // One local model start per sizeable batch. The previous 12/6 nesting
+            // restarted llama.cpp dozens of times on ordinary pages.
+            foreach (var batch in segments.Chunk(60))
             {
                 var translated = await LocalIntelligenceService.TranslateSegmentsAsync(batch, _cancellation.Token);
                 completed += translated.Count;
@@ -83,48 +87,6 @@ public partial class LocalAiDockControl : UserControl
         { await tab.CompleteInPageTranslationAsync(completed, segments.Count, "остановлен пользователем"); }
         catch (Exception ex)
         { await tab.CompleteInPageTranslationAsync(completed, segments.Count, ex.Message); }
-    }
-
-    public async Task TranslateVideoSubtitlesAsync(BrowserTab tab)
-    {
-        Visibility = Visibility.Collapsed;
-        _tab = tab;
-        await EnsureModelAsync();
-        if (_model is null)
-        {
-            GlassDialogWindow.Show(AiModelCatalog.MissingTextRuntimeMessage,
-                "Перевод видео", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-        _cancellation?.Cancel();
-        _cancellation = new CancellationTokenSource();
-        try
-        {
-            await tab.ShowVideoTranslationStatusAsync("Nexus ищет дорожку субтитров…");
-            var source = await tab.CaptureVideoCaptionSegmentsAsync();
-            if (source.Count == 0)
-                throw new InvalidOperationException("У активного видео нет доступной дорожки субтитров. Для роликов без субтитров потребуется локальный Whisper.");
-            var translatedById = new Dictionary<string, string>(StringComparer.Ordinal);
-            var processed = 0;
-            foreach (var batch in source.Chunk(80))
-            {
-                foreach (var item in await LocalIntelligenceService.TranslateSegmentsAsync(batch, _cancellation.Token))
-                    translatedById[item.Id] = item.Text;
-                processed += batch.Length;
-                await tab.ShowVideoTranslationStatusAsync($"Перевод субтитров: {Math.Min(processed, source.Count)} / {source.Count}");
-            }
-            var captions = source.Where(x => translatedById.ContainsKey(x.Id)).Select(x => new VideoCaptionSegment
-            {
-                Id = x.Id, Text = translatedById[x.Id], Start = x.Start, End = x.End
-            }).ToArray();
-            if (captions.Length == 0) throw new InvalidOperationException("Локальная модель не вернула пригодные реплики.");
-            await tab.ApplyRussianVideoCaptionsAsync(captions);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            await tab.ShowVideoTranslationStatusAsync(ex.Message, warning: true);
-            GlassDialogWindow.Show(ex.Message, "Перевод видео", MessageBoxButton.OK, MessageBoxImage.Information);
-        }
     }
 
     public async Task TranslateVideoAudioAsync(BrowserTab tab)
@@ -153,6 +115,7 @@ public partial class LocalAiDockControl : UserControl
             }
             await preparation;
             var useSystemLoopback = false;
+            var lastSubtitle = string.Empty;
             while (!session.IsCancellationRequested && !await tab.ShouldStopLiveAudioTranslationAsync())
             {
                 byte[] wav;
@@ -176,12 +139,16 @@ public partial class LocalAiDockControl : UserControl
                     wav = await SystemAudioCaptureService.CaptureWavAsync(7, session.Token);
                 }
                 await tab.UpdateLiveAudioTranslationStatusAsync("Whisper распознаёт речь локально…");
-                var transcript = await WhisperService.TranscribeAsync(wav, session.Token);
+                var transcript = await NexusFabricRuntime.TranscribeSpeechAsync(wav, session.Token);
                 if (string.IsNullOrWhiteSpace(transcript)) continue;
                 await tab.UpdateLiveAudioTranslationStatusAsync("Nexus Fast Intelligence переводит реплику…");
                 var text = await LocalIntelligenceService.TranslateToRussianAsync(transcript, session.Token);
-                if (!string.IsNullOrWhiteSpace(text))
+                if (!string.IsNullOrWhiteSpace(text) &&
+                    !text.Equals(lastSubtitle, StringComparison.OrdinalIgnoreCase))
+                {
+                    lastSubtitle = text;
                     await tab.ShowLiveVideoSubtitleAsync(text);
+                }
             }
             await tab.EndLiveAudioTranslationAsync("Перевод звука остановлен.");
         }
@@ -208,10 +175,12 @@ public partial class LocalAiDockControl : UserControl
         DeveloperAnalyzeButton.Visibility = Visibility.Collapsed;
         DeveloperGuidePanel.Visibility = Visibility.Collapsed;
         ShoppingAgentPanel.Visibility = Visibility.Visible;
-        ShoppingQueryBox.Text = "Что ищем или исследуем?";
-        ResultBox.Text = "Выберите режим: сравнение товаров, глубокий анализ открытой страницы, углублённый поиск по связанным страницам текущего сайта или итоговая сводка агента. Формы, вход, корзина и оформление заказа не затрагиваются.";
+        ShoppingQueryBox.Text = "Что нужно найти?";
+        _shoppingImagePath = null;
+        ShoppingImageNameText.Text = "Фото не выбрано";
+        ShowTextResult("Введите описание товара или выберите фотографию, затем нажмите «Начать поиск». Nexus просмотрит до пяти страниц текущего сайта и покажет 3–5 наиболее подходящих карточек. Корзина, вход и оформление заказа не затрагиваются.");
         StatusText.Text = NexusFabricRuntime.IsAvailable
-            ? "Nexus Intelligence Fabric готов. Введите вопрос и выберите режим."
+            ? "Nexus Intelligence Fabric готов к поиску."
             : NexusFabricRuntime.Status.Message;
         ShoppingQueryBox.Focus();
         ShoppingQueryBox.SelectAll();
@@ -227,6 +196,30 @@ public partial class LocalAiDockControl : UserControl
         await RunDeveloperAnalysisAsync();
     }
 
+    public async Task ShowSearchFollowUpAsync(BrowserTab tab, string query)
+    {
+        await ShowForTabAsync(tab);
+        ModeTitleText.Text = "NEXUS · ИССЛЕДОВАТЕЛЬ";
+        DeveloperAnalyzeButton.Visibility = Visibility.Collapsed;
+        DeveloperGuidePanel.Visibility = Visibility.Collapsed;
+        ShoppingAgentPanel.Visibility = Visibility.Collapsed;
+        ShowTextResult("Анализирую выбранную страницу по исходному запросу…");
+        _cancellation?.Cancel();
+        _cancellation = new CancellationTokenSource();
+        CancelButton.IsEnabled = true;
+        try
+        {
+            var pageText = await tab.GetReadablePageTextAsync();
+            var answer = await LocalIntelligenceService.AnswerFromSelectedPageAsync(
+                query, tab.Title, tab.CurrentUrl, pageText, _cancellation.Token);
+            ShowTextResult(answer);
+            StatusText.Text = "Выжимка по выбранному источнику готова. Анализ выполнен локально.";
+        }
+        catch (OperationCanceledException) { StatusText.Text = "Анализ выбранной страницы остановлен."; }
+        catch (Exception ex) { ShowTextResult(ex.Message); StatusText.Text = "Не удалось подготовить выжимку."; }
+        finally { CancelButton.IsEnabled = false; }
+    }
+
     private async Task EnsureModelAsync()
     {
         StatusText.Text = "Проверка автономного AI-комплекта…";
@@ -236,7 +229,7 @@ public partial class LocalAiDockControl : UserControl
             ModelNameText.Text = _model ?? "AI-комплект неполный";
             ModelSetupPanel.Visibility = _model is null ? Visibility.Visible : Visibility.Collapsed;
             StatusText.Text = _model is null ? AiModelCatalog.ReadinessSummary :
-                "Автономный AI готов · " + AiModelCatalog.ReadinessSummary;
+                NexusFabricRuntime.ModelRoutingSummary;
         }
         catch (Exception ex)
         {
@@ -257,7 +250,7 @@ public partial class LocalAiDockControl : UserControl
         try
         {
             StatusText.Text = "Проверка генерации — первый запуск модели может занять до минуты…";
-            var answer = await LocalAiService.AskAsync(_model,
+            var answer = await NexusFabricRuntime.AskTextAsync(
                 "Ответь строго JSON: {\"status\":\"ok\"}.", "Проверка локальной модели.", _cancellation.Token);
             using var document = JsonDocument.Parse(LocalIntelligenceService.ExtractJson(answer));
             ResultBox.Text = document.RootElement.TryGetProperty("status", out var status) && status.GetString() == "ok"
@@ -275,7 +268,7 @@ public partial class LocalAiDockControl : UserControl
 
     private async void ShoppingAgent_Click(object sender, RoutedEventArgs e) => await RunShoppingAgentAsync();
 
-    private async void ShoppingImage_Click(object sender, RoutedEventArgs e)
+    private void ShoppingImage_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new OpenFileDialog
         {
@@ -284,27 +277,9 @@ public partial class LocalAiDockControl : UserControl
             CheckFileExists = true
         };
         if (dialog.ShowDialog() != true) return;
-        if (_model is null) { await EnsureModelAsync(); if (_model is null) return; }
-        _cancellation?.Cancel();
-        _cancellation = new CancellationTokenSource();
-        CancelButton.IsEnabled = true;
-        try
-        {
-            StatusText.Text = "Nexus Vision анализирует изображение…";
-            var answer = await LocalAiService.DescribeImageForSearchAsync(
-                _model, await File.ReadAllBytesAsync(dialog.FileName, _cancellation.Token), _cancellation.Token);
-            using var document = JsonDocument.Parse(LocalIntelligenceService.ExtractJson(answer));
-            var query = document.RootElement.TryGetProperty("query", out var q) ? q.GetString() : null;
-            var details = document.RootElement.TryGetProperty("details", out var d) ? d.GetString() : null;
-            if (string.IsNullOrWhiteSpace(query)) throw new InvalidOperationException("Модель не составила поисковый запрос.");
-            ShoppingQueryBox.Text = query;
-            ResultBox.Text = "РАСПОЗНАНО ПО ИЗОБРАЖЕНИЮ:\n" + (details ?? query) +
-                             "\n\nЗапрос можно уточнить вручную, затем нажать «Собрать».";
-            StatusText.Text = "Изображение распознано локально.";
-        }
-        catch (OperationCanceledException) { StatusText.Text = "Распознавание остановлено."; }
-        catch (Exception ex) { ResultBox.Text = ex.Message; StatusText.Text = "Не удалось распознать изображение."; }
-        finally { CancelButton.IsEnabled = false; }
+        _shoppingImagePath = dialog.FileName;
+        ShoppingImageNameText.Text = "Фото: " + Path.GetFileName(dialog.FileName);
+        StatusText.Text = "Фото выбрано. Нажмите «Начать поиск».";
     }
 
     private async void ShoppingQueryBox_KeyDown(object sender, KeyEventArgs e)
@@ -316,7 +291,7 @@ public partial class LocalAiDockControl : UserControl
 
     private void ShoppingQueryBox_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
     {
-        if (ShoppingQueryBox.Text.StartsWith("Что ищем", StringComparison.Ordinal)) ShoppingQueryBox.Clear();
+        if (ShoppingQueryBox.Text.StartsWith("Что нужно", StringComparison.Ordinal)) ShoppingQueryBox.Clear();
     }
 
     private async Task RunShoppingAgentAsync()
@@ -324,13 +299,26 @@ public partial class LocalAiDockControl : UserControl
         if (_tab is null || UrlService.IsInternal(_tab.CurrentUrl))
         { StatusText.Text = "Открой сайт магазина или каталога."; return; }
         var query = ShoppingQueryBox.Text.Trim();
-        if (string.IsNullOrWhiteSpace(query) || query.StartsWith("Что ищем", StringComparison.Ordinal))
-        { StatusText.Text = "Напиши, что нужно найти."; return; }
+        if (query.StartsWith("Что нужно", StringComparison.Ordinal)) query = string.Empty;
+        if (string.IsNullOrWhiteSpace(query) && string.IsNullOrWhiteSpace(_shoppingImagePath))
+        { StatusText.Text = "Введите описание товара или выберите фотографию."; return; }
         if (_model is null) { await EnsureModelAsync(); if (_model is null) return; }
         _cancellation?.Cancel(); _cancellation = new CancellationTokenSource();
         CancelButton.IsEnabled = true; ResultBox.Clear();
         try
         {
+            if (!string.IsNullOrWhiteSpace(_shoppingImagePath))
+            {
+                StatusText.Text = "Nexus Vision локально распознаёт товар на фото…";
+                var imageAnswer = await NexusFabricRuntime.UnderstandImageAsync(
+                    await File.ReadAllBytesAsync(_shoppingImagePath, _cancellation.Token), _cancellation.Token);
+                using var imageDocument = JsonDocument.Parse(LocalIntelligenceService.ExtractJson(imageAnswer));
+                var imageQuery = imageDocument.RootElement.TryGetProperty("query", out var q) ? q.GetString() : null;
+                if (string.IsNullOrWhiteSpace(imageQuery))
+                    throw new InvalidOperationException("Nexus Vision не смог составить запрос по фотографии.");
+                query = string.IsNullOrWhiteSpace(query) ? imageQuery : query + ". По фотографии: " + imageQuery;
+                ShoppingQueryBox.Text = query;
+            }
             StatusText.Text = "Поиск на текущем сайте…";
             var searched = await _tab.SearchCurrentSiteForAgentAsync(query);
             if (searched) await Task.Delay(TimeSpan.FromSeconds(5), _cancellation.Token);
@@ -393,22 +381,71 @@ public partial class LocalAiDockControl : UserControl
             StatusText.Text = $"Nexus Fast Intelligence сравнивает {count} результатов с {pages} страниц…";
             var report = await LocalIntelligenceService.AnalyzeShoppingResultsAsync(
                 query, _tab.CurrentHost, cards, _cancellation.Token);
-            var lines = new List<string>();
-            for (var i = 0; i < report.Items.Count; i++)
-            {
-                var item = report.Items[i];
-                lines.Add($"{i + 1}. {item.Name}\n   Цена: {item.Price} · Рейтинг: {item.Rating} · Купили/отзывы: {item.Buyers}\n" +
-                          $"   Плюсы: {item.Strengths}\n   Минусы: {item.Weaknesses}\n   Оценка: {item.Score:0.0}/10" +
-                          (string.IsNullOrWhiteSpace(item.Url) ? string.Empty : $"\n   {item.Url}"));
-            }
-            ResultBox.Text = string.Join("\n\n", lines) + "\n\nВЫВОД NEXUS AI:\n" + report.Recommendation +
-                             (string.IsNullOrWhiteSpace(report.Caveat) ? string.Empty : "\n\nОграничение: " + report.Caveat);
-            ResultBox.ScrollToHome();
+            ShowShoppingCards(report);
             StatusText.Text = $"Готово. Просмотрено страниц: {pages}; вариантов в выводе: {report.Items.Count}.";
         }
         catch (OperationCanceledException) { StatusText.Text = "Сбор остановлен."; }
         catch (Exception ex) { ResultBox.Text = ex.Message; StatusText.Text = "Агент не собрал сравнение."; }
         finally { CancelButton.IsEnabled = false; }
+    }
+
+    private void ShowTextResult(string text)
+    {
+        ShoppingCardsScroll.Visibility = Visibility.Collapsed;
+        ResultBox.Visibility = Visibility.Visible;
+        ResultBox.Text = text;
+        ResultBox.ScrollToHome();
+    }
+
+    private void ShowShoppingCards(ShoppingReport report)
+    {
+        ResultBox.Visibility = Visibility.Collapsed;
+        ShoppingCardsScroll.Visibility = Visibility.Visible;
+        ShoppingCardsPanel.Children.Clear();
+        ShoppingCardsPanel.Children.Add(new TextBlock
+        {
+            Text = "Найдено вариантов: " + report.Items.Count,
+            Foreground = Brushes.White,
+            FontSize = 16,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(2, 0, 2, 9)
+        });
+        foreach (var item in report.Items.Take(5))
+        {
+            var content = new StackPanel();
+            content.Children.Add(new TextBlock { Text = item.Name, TextWrapping = TextWrapping.Wrap, FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White });
+            content.Children.Add(new TextBlock { Text = $"Цена: {item.Price}   Рейтинг: {item.Rating}", Margin = new Thickness(0, 6, 0, 0), Foreground = new SolidColorBrush(Color.FromRgb(127, 245, 231)) });
+            content.Children.Add(new TextBlock { Text = "Купили/отзывы: " + item.Buyers, Margin = new Thickness(0, 3, 0, 0), Foreground = new SolidColorBrush(Color.FromRgb(200, 205, 213)) });
+            if (!string.IsNullOrWhiteSpace(item.Url))
+            {
+                var open = new Button { Content = "Открыть товар", Tag = item.Url, Margin = new Thickness(0, 8, 0, 0), Padding = new Thickness(10, 6, 10, 6), HorizontalAlignment = HorizontalAlignment.Left };
+                open.Click += ShoppingProductOpen_Click;
+                content.Children.Add(open);
+            }
+            ShoppingCardsPanel.Children.Add(new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(105, 16, 16, 16)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(120, 255, 255, 255)),
+                BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(12),
+                Padding = new Thickness(12), Margin = new Thickness(0, 0, 0, 9), Child = content
+            });
+        }
+        ShoppingCardsPanel.Children.Add(new TextBlock
+        {
+            Text = "ВЫВОД NEXUS AI\n" + report.Recommendation +
+                   (string.IsNullOrWhiteSpace(report.Caveat) ? string.Empty : "\n\nОграничение: " + report.Caveat),
+            TextWrapping = TextWrapping.Wrap, Foreground = Brushes.White, Margin = new Thickness(3, 5, 3, 12)
+        });
+        ShoppingCardsScroll.ScrollToHome();
+    }
+
+    private void ShoppingProductOpen_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string url } || _tab?.Core is null) return;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var target) ||
+            !Uri.TryCreate(_tab.CurrentUrl, UriKind.Absolute, out var current) ||
+            !target.Host.Equals(current.Host, StringComparison.OrdinalIgnoreCase)) return;
+        _tab.Core.Navigate(target.AbsoluteUri);
     }
 
     private async void DeepAnalysis_Click(object sender, RoutedEventArgs e) => await RunDeepAnalysisAsync();

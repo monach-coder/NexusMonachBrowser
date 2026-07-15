@@ -2,6 +2,8 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Net.NetworkInformation;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -42,6 +44,13 @@ public partial class MainWindow : Window
     private LocalPortInfo[] _localPortDetails = [];
     private bool _localPortsAvailable;
     private readonly Dictionary<BrowserTab, string> _lastKnowledgeUrl = [];
+    private readonly Dictionary<BrowserTab, CancellationTokenSource> _searchOperations = [];
+    private readonly Dictionary<BrowserTab, string> _pendingSearchFollowUp = [];
+    private static readonly JsonSerializerOptions WebJson = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
 
     public ObservableCollection<BrowserTab> Tabs { get; } = [];
     private BrowserTab? ActiveTab => TabsList.SelectedItem as BrowserTab;
@@ -116,6 +125,12 @@ public partial class MainWindow : Window
                 _lastKnowledgeUrl[tab] = current;
                 _ = IndexKnowledgeAsync(tab, current, previous);
             }
+            if (_pendingSearchFollowUp.Remove(tab, out var searchQuery) && !UrlService.IsInternal(tab.CurrentUrl))
+                Dispatcher.Invoke(() =>
+                {
+                    if (ReferenceEquals(ActiveTab, tab))
+                        _ = LocalAiDock.ShowSearchFollowUpAsync(tab, searchQuery);
+                });
             Dispatcher.Invoke(SyncUi);
         };
         tab.OpenUrlRequested += async (_, e) =>
@@ -124,6 +139,14 @@ public partial class MainWindow : Window
                 await OpenTabAsync(e.Value);
             else
                 NavigateActive(e.Value);
+        };
+        tab.NexusSearchRequested += async (_, e) => await RunNexusSearchAsync(tab, e.Value);
+        tab.SearchResultRequested += async (_, e) =>
+        {
+            if (!NexusSearchService.IsAllowedResultUrl(e.Url) || !Uri.TryCreate(e.Url, UriKind.Absolute, out var target)) return;
+            if (!_isPrivate) await NexusSearchService.RecordChoiceAsync(e.Query, target.AbsoluteUri);
+            _pendingSearchFollowUp[tab] = e.Query;
+            tab.Navigate(target.AbsoluteUri);
         };
         tab.SettingsRequested += (_, _) => Dispatcher.Invoke(ShowSettings);
         tab.StatusMessageRequested += message => Dispatcher.Invoke(() => NetworkStatusText.Text = message);
@@ -179,6 +202,62 @@ public partial class MainWindow : Window
         if (ActiveTab?.Core is null) return;
         ActiveTab.Navigate(UrlService.Resolve(input));
         Keyboard.ClearFocus();
+    }
+
+    private async Task NavigateOrSearchAsync(string input)
+    {
+        var tab = ActiveTab;
+        if (tab?.Core is null) return;
+        Keyboard.ClearFocus();
+        if (UrlService.IsSearchQuery(input))
+            await RunNexusSearchAsync(tab, input);
+        else
+            tab.Navigate(UrlService.Resolve(input));
+    }
+
+    private async Task RunNexusSearchAsync(BrowserTab tab, string query)
+    {
+        query = query.Trim();
+        if (query.Length < 2) return;
+        if (_searchOperations.Remove(tab, out var previous))
+        {
+            previous.Cancel();
+            previous.Dispose();
+        }
+        var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(55));
+        _searchOperations[tab] = cancellation;
+        try
+        {
+            var internalUrl = "https://nexus.local/search.html?q=" + Uri.EscapeDataString(query);
+            if (!await tab.NavigateInternalAndWaitAsync(internalUrl, TimeSpan.FromSeconds(12)))
+                throw new InvalidOperationException("Не удалось открыть локальную страницу результатов Nexus.");
+            var progress = new Progress<string>(message =>
+            {
+                if (tab.Core is null || !tab.CurrentUrl.StartsWith("https://nexus.local/search.html", StringComparison.OrdinalIgnoreCase)) return;
+                _ = tab.Core.ExecuteScriptAsync("window.nexusStatus?.(" + JsonSerializer.Serialize(message) + ")");
+            });
+            var report = await NexusSearchService.SearchAsync(query, progress, cancellation.Token);
+            if (tab.Core is null || !tab.CurrentUrl.StartsWith("https://nexus.local/search.html", StringComparison.OrdinalIgnoreCase)) return;
+            var json = JsonSerializer.Serialize(report, WebJson);
+            await tab.Core.ExecuteScriptAsync("window.nexusRender?.(" + json + ")");
+            NetworkStatusText.Text = $"Nexus Search: проанализировано источников {report.Items.Count}";
+        }
+        catch (OperationCanceledException)
+        {
+            if (tab.Core is not null && tab.CurrentUrl.StartsWith("https://nexus.local/search.html", StringComparison.OrdinalIgnoreCase))
+                await tab.Core.ExecuteScriptAsync("window.nexusStatus?.('Поиск остановлен или превысил лимит времени.')");
+        }
+        catch (Exception ex)
+        {
+            if (tab.Core is not null && tab.CurrentUrl.StartsWith("https://nexus.local/search.html", StringComparison.OrdinalIgnoreCase))
+                await tab.Core.ExecuteScriptAsync("window.nexusStatus?.(" + JsonSerializer.Serialize(ex.Message) + ")");
+        }
+        finally
+        {
+            if (_searchOperations.TryGetValue(tab, out var current) && ReferenceEquals(current, cancellation))
+                _searchOperations.Remove(tab);
+            cancellation.Dispose();
+        }
     }
 
     private void SyncUi()
@@ -405,6 +484,8 @@ public partial class MainWindow : Window
         if (ReferenceEquals(BrowserHost.Content, tab.View))
             BrowserHost.Content = null;
         _lastKnowledgeUrl.Remove(tab);
+        _pendingSearchFollowUp.Remove(tab);
+        if (_searchOperations.Remove(tab, out var search)) { search.Cancel(); search.Dispose(); }
         Tabs.Remove(tab);
         tab.Dispose();
 
@@ -414,15 +495,15 @@ public partial class MainWindow : Window
             TabsList.SelectedIndex = Math.Min(index, Tabs.Count - 1);
     }
 
-    private void AddressBox_KeyDown(object sender, KeyEventArgs e)
+    private async void AddressBox_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter) return;
         e.Handled = true;
-        NavigateActive(AddressBox.Text);
+        await NavigateOrSearchAsync(AddressBox.Text);
     }
 
     private void AddressBox_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e) => AddressBox.SelectAll();
-    private void SearchButton_Click(object sender, RoutedEventArgs e) => NavigateActive(AddressBox.Text);
+    private async void SearchButton_Click(object sender, RoutedEventArgs e) => await NavigateOrSearchAsync(AddressBox.Text);
     private void Back_Click(object sender, RoutedEventArgs e) => ActiveTab?.GoBack();
     private void Forward_Click(object sender, RoutedEventArgs e) => ActiveTab?.GoForward();
     private void Reload_Click(object sender, RoutedEventArgs e) => ActiveTab?.ReloadOrStop();
@@ -768,6 +849,8 @@ public partial class MainWindow : Window
         _closing = true;
         _memoryTimer.Stop();
         _networkPerformanceTimer.Stop();
+        LocalAiDock.StopVideoTranslation();
+        foreach (var search in _searchOperations.Values) search.Cancel();
 
         if (!_isPrivate && _restartRequested)
         {

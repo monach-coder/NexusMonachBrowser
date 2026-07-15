@@ -10,14 +10,12 @@ public static class SelectedTextTranslationService
 
     public static void Attach(BrowserTab tab, CoreWebView2 core, Action<string> reportStatus)
     {
-        core.ContextMenuRequested += async (_, args) =>
+        core.ContextMenuRequested += (_, args) =>
         {
             using var deferral = args.GetDeferral();
             try
             {
                 var location = args.Location;
-                var translatedId = await FindTranslationAtAsync(core, location.X, location.Y);
-
                 if (!string.IsNullOrWhiteSpace(args.ContextMenuTarget.SelectionText))
                 {
                     var translate = core.Environment.CreateContextMenuItem(
@@ -25,22 +23,6 @@ public static class SelectedTextTranslationService
                     translate.CustomItemSelected += async (_, _) =>
                         await TranslateSelectionAsync(tab, core, reportStatus);
                     args.MenuItems.Insert(0, translate);
-                }
-
-                if (!string.IsNullOrWhiteSpace(translatedId))
-                {
-                    var restore = core.Environment.CreateContextMenuItem(
-                        "Вернуть оригинал", null, CoreWebView2ContextMenuItemKind.Command);
-                    restore.CustomItemSelected += async (_, _) =>
-                    {
-                        try
-                        {
-                            var restored = await RestoreAsync(core, translatedId);
-                            reportStatus(restored ? "Оригинальный фрагмент восстановлен." : "Переведённый элемент больше не существует.");
-                        }
-                        catch (Exception ex) { reportStatus("Не удалось вернуть оригинал: " + ex.Message); }
-                    };
-                    args.MenuItems.Insert(0, restore);
                 }
 
                 var inspect = core.Environment.CreateContextMenuItem(
@@ -96,41 +78,22 @@ public static class SelectedTextTranslationService
         }
     }
 
-    private static async Task<string> FindTranslationAtAsync(CoreWebView2 core, int x, int y)
-    {
-        var json = await core.ExecuteScriptAsync($$"""
-            (()=>document.elementFromPoint({{x}},{{y}})?.closest('[data-nexus-inline-translation]')?.dataset.nexusInlineTranslation||'')()
-            """);
-        return JsonSerializer.Deserialize<string>(json) ?? string.Empty;
-    }
-
     private static async Task<bool> ApplyTranslationAsync(CoreWebView2 core, string id, string translated)
     {
         var json = await core.ExecuteScriptAsync("""
             ((id,text)=>{const state=window.__nexusInlineTranslations,entry=state?.pending?.get(id);
-              if(!entry||entry.document!==document||!entry.start.isConnected||!entry.end.isConnected)return false;
-              const range=document.createRange();range.setStartAfter(entry.start);range.setEndBefore(entry.end);
-              const original=range.cloneContents();range.deleteContents();
-              const span=document.createElement('span');span.dataset.nexusInlineTranslation=id;span.title=entry.text;span.textContent=text;
-              range.insertNode(span);entry.start.remove();entry.end.remove();state.pending.delete(id);state.originals.set(id,original);return true})(__ID__,__TEXT__)
+              if(!entry||entry.document!==document||!entry.node?.isConnected||entry.node.nodeValue!==entry.original)return false;
+              entry.node.nodeValue=entry.original.slice(0,entry.start)+text+entry.original.slice(entry.end);
+              state.pending.delete(id);return true})(__ID__,__TEXT__)
             """.Replace("__ID__", JsonSerializer.Serialize(id), StringComparison.Ordinal)
                 .Replace("__TEXT__", JsonSerializer.Serialize(translated), StringComparison.Ordinal));
         return bool.TryParse(json, out var applied) && applied;
     }
 
-    private static async Task<bool> RestoreAsync(CoreWebView2 core, string id)
-    {
-        var json = await core.ExecuteScriptAsync("""
-            ((id)=>{const state=window.__nexusInlineTranslations,span=document.querySelector('[data-nexus-inline-translation="'+CSS.escape(id)+'"]'),fragment=state?.originals?.get(id);
-              if(!span||!fragment)return false;span.replaceWith(fragment);state.originals.delete(id);return true})(__ID__)
-            """.Replace("__ID__", JsonSerializer.Serialize(id), StringComparison.Ordinal));
-        return bool.TryParse(json, out var restored) && restored;
-    }
-
     private static async Task CancelPendingAsync(CoreWebView2 core, string id) =>
         await core.ExecuteScriptAsync("""
             ((id)=>{const state=window.__nexusInlineTranslations,entry=state?.pending?.get(id);if(!entry)return;
-              entry.start?.remove();entry.end?.remove();state.pending.delete(id)})(__ID__)
+              state.pending.delete(id)})(__ID__)
             """.Replace("__ID__", JsonSerializer.Serialize(id), StringComparison.Ordinal));
 
     private static async Task InspectAtAsync(CoreWebView2 core, int x, int y, Action<string> reportStatus)
@@ -162,12 +125,11 @@ public static class SelectedTextTranslationService
           const forbidden='script,style,input,textarea,select,option,[contenteditable]:not([contenteditable="false"]),a,button,[role="button"],[role="link"],[tabindex]';
           const ancestor=node=>(node.nodeType===Node.ELEMENT_NODE?node:node.parentElement)?.closest?.(forbidden);
           if(ancestor(range.startContainer)||ancestor(range.endContainer))return null;
-          for(const element of document.querySelectorAll(forbidden))if(range.intersectsNode(element))return null;
-          const id=crypto.randomUUID(),start=document.createComment('nexus-inline-start:'+id),end=document.createComment('nexus-inline-end:'+id);
-          const endRange=range.cloneRange();endRange.collapse(false);endRange.insertNode(end);
-          const startRange=range.cloneRange();startRange.collapse(true);startRange.insertNode(start);
-          window.__nexusInlineTranslations??={pending:new Map(),originals:new Map()};
-          window.__nexusInlineTranslations.pending.set(id,{document,start,end,text});selection.removeAllRanges();
+          if(range.startContainer!==range.endContainer||range.startContainer.nodeType!==Node.TEXT_NODE)return null;
+          const node=range.startContainer,original=node.nodeValue||'',start=range.startOffset,end=range.endOffset;
+          if(start<0||end<=start||end>original.length)return null;
+          const id=crypto.randomUUID();window.__nexusInlineTranslations??={pending:new Map()};
+          window.__nexusInlineTranslations.pending.set(id,{document,node,original,start,end,text});selection.removeAllRanges();
           return {id,text};})()
         """;
 }

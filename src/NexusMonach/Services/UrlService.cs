@@ -65,6 +65,15 @@ public static class UrlService
         Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
         uri.Host.Equals("nexus.local", StringComparison.OrdinalIgnoreCase);
 
+    public static bool IsSearchQuery(string? input)
+    {
+        input = input?.Trim();
+        if (string.IsNullOrWhiteSpace(input)) return false;
+        if (Uri.TryCreate(input, UriKind.Absolute, out var absolute) &&
+            absolute.Scheme is "http" or "https" or "file" or "about") return false;
+        return input.Contains(' ') || !LooksLikeHost(input);
+    }
+
     private static string BuildSearchUrl(string query)
     {
         var escaped = Uri.EscapeDataString(query);

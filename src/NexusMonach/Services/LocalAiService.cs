@@ -11,6 +11,7 @@ namespace NexusMonach.Services;
 /// </summary>
 public static class LocalAiService
 {
+    private const string ResponseMarker = "NEXUS_RESULT_BEGIN_7F3A";
     private static readonly SemaphoreSlim InferenceGate = new(1, 1);
 
     public static Task<IReadOnlyList<string>> GetModelsAsync(CancellationToken cancellationToken = default) =>
@@ -91,7 +92,8 @@ public static class LocalAiService
         {
             var prompt = "<|im_start|>system\n" + systemPrompt.Trim() +
                          "\nОтвечай без рассуждений и служебных тегов. /no_think<|im_end|>\n" +
-                         "<|im_start|>user\n" + userPrompt.Trim() + "<|im_end|>\n<|im_start|>assistant\n";
+                         "<|im_start|>user\n" + userPrompt.Trim() + "<|im_end|>\n<|im_start|>assistant\n" +
+                         ResponseMarker + "\n";
             await File.WriteAllTextAsync(promptPath, prompt, new UTF8Encoding(false), cancellationToken);
 
             var start = new ProcessStartInfo(AiModelCatalog.LlamaCli!)
@@ -106,7 +108,7 @@ public static class LocalAiService
             };
             foreach (var argument in new[]
                      {
-                         "-m", AiModelCatalog.TextModel!, "-f", promptPath, "-n", "1600",
+                         "-m", AiModelCatalog.TextModel!, "-f", promptPath, "-n", "3072",
                          "-c", "8192", "--temp", "0.2", "--no-display-prompt", "--simple-io",
                          "--single-turn", "--log-disable"
                      })
@@ -121,7 +123,8 @@ public static class LocalAiService
                 var line = await process.StandardOutput.ReadLineAsync(cancellationToken);
                 if (line is null) break;
                 output.AppendLine(line);
-                progress?.Report(CleanOutput(output.ToString()));
+                var partial = CleanOutput(output.ToString());
+                if (!string.IsNullOrWhiteSpace(partial)) progress?.Report(partial);
             }
             try { await process.WaitForExitAsync(cancellationToken); }
             catch (OperationCanceledException)
@@ -147,8 +150,14 @@ public static class LocalAiService
 
     private static string CleanOutput(string value)
     {
+        value = Regex.Replace(value, "\\x1B(?:[@-Z\\\\-_]|\\[[0-?]*[ -/]*[@-~])", string.Empty,
+            RegexOptions.CultureInvariant).Replace("\0", string.Empty, StringComparison.Ordinal);
+        var response = value.LastIndexOf(ResponseMarker, StringComparison.Ordinal);
+        if (response >= 0)
+            value = value[(response + ResponseMarker.Length)..];
+
         const string assistantMarker = "<|im_start|>assistant";
-        var assistant = value.LastIndexOf(assistantMarker, StringComparison.Ordinal);
+        var assistant = response >= 0 ? -1 : value.LastIndexOf(assistantMarker, StringComparison.Ordinal);
         // llama-cli с --no-display-prompt возвращает только ответ модели, без маркера
         // assistant. Прежняя проверка отбрасывала корректный ответ целиком, из-за чего
         // переводчик, агент и DevTools AI выглядели неработающими.
@@ -157,7 +166,10 @@ public static class LocalAiService
         value = Regex.Replace(value, @"<think>[\s\S]*?</think>", string.Empty,
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         value = Regex.Replace(value, @"(?im)^\s*(assistant|analysis|final)\s*[:：]\s*", string.Empty);
-        value = Regex.Replace(value, @"(?im)^\s*(llama_|main:|build:|system_info:).*$", string.Empty);
+        value = Regex.Replace(value, @"(?im)^\s*(?:loading model.*|llama_|main:|build\s*:|model\s*:|ftype\s*:|modalities\s*:|system_info:|available commands:|/exit.*|/regen.*|/clear.*|/read.*|/glob.*).*$", string.Empty);
+        value = Regex.Replace(value, @"(?m)^\s*[▄▀█]+(?:\s+[▄▀█]+)*\s*$", string.Empty);
+        value = Regex.Replace(value, @"<\|im_(?:start|end)\|>[^\r\n]*", string.Empty,
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         var end = value.IndexOf("<|im_end|>", StringComparison.Ordinal);
         if (end >= 0) value = value[..end];
         var metrics = value.IndexOf("[ Prompt:", StringComparison.OrdinalIgnoreCase);

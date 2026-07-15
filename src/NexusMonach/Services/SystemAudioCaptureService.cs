@@ -13,21 +13,23 @@ public static class SystemAudioCaptureService
     public static async Task<byte[]> CaptureWavAsync(int seconds, CancellationToken cancellationToken = default)
     {
         seconds = Math.Clamp(seconds, 3, 15);
-        using var capture = new WasapiLoopbackCapture();
         using var rawAudio = new MemoryStream();
+        using var capture = new WasapiLoopbackCapture();
         var stopped = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         Exception? recordingError = null;
 
-        capture.DataAvailable += (_, e) =>
+        void DataAvailable(object? _, WaveInEventArgs e)
         {
             if (e.BytesRecorded > 0)
                 rawAudio.Write(e.Buffer, 0, e.BytesRecorded);
-        };
-        capture.RecordingStopped += (_, e) =>
+        }
+        void RecordingStopped(object? _, StoppedEventArgs e)
         {
             recordingError = e.Exception;
             stopped.TrySetResult(true);
-        };
+        }
+        capture.DataAvailable += DataAvailable;
+        capture.RecordingStopped += RecordingStopped;
 
         capture.StartRecording();
         try
@@ -38,7 +40,14 @@ public static class SystemAudioCaptureService
         {
             try { capture.StopRecording(); } catch { }
         }
-        await stopped.Task.WaitAsync(TimeSpan.FromSeconds(3), CancellationToken.None);
+        try { await stopped.Task.WaitAsync(TimeSpan.FromSeconds(3), CancellationToken.None); }
+        catch (TimeoutException) when (cancellationToken.IsCancellationRequested) { }
+        finally
+        {
+            capture.DataAvailable -= DataAvailable;
+            capture.RecordingStopped -= RecordingStopped;
+        }
+        cancellationToken.ThrowIfCancellationRequested();
         if (recordingError is not null)
             throw new InvalidOperationException("Windows не передал системный звук: " + recordingError.Message,
                 recordingError);

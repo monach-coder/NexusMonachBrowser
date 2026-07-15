@@ -15,6 +15,12 @@ public sealed class UrlRequestedEventArgs(string value) : EventArgs
     public bool OpenInNewTab { get; init; }
 }
 
+public sealed class SearchResultRequestedEventArgs(string query, string url) : EventArgs
+{
+    public string Query { get; } = query;
+    public string Url { get; } = url;
+}
+
 public sealed record TabNetworkSnapshot(
     IReadOnlyList<string> ContactedHosts,
     IReadOnlyList<string> ThirdPartyHosts,
@@ -123,6 +129,8 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     public event EventHandler? StateChanged;
     public event EventHandler? NavigationSucceeded;
     public event EventHandler<UrlRequestedEventArgs>? OpenUrlRequested;
+    public event EventHandler<UrlRequestedEventArgs>? NexusSearchRequested;
+    public event EventHandler<SearchResultRequestedEventArgs>? SearchResultRequested;
     public event EventHandler? SettingsRequested;
     public event Action<string>? StatusMessageRequested;
     public Func<string, Task<CoreWebView2?>>? CreatePopupAsync { get; set; }
@@ -325,23 +333,21 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         if (Core is null || UrlService.IsInternal(CurrentUrl)) return [];
         var json = await Core.ExecuteScriptAsync("""
             (() => {
-              document.querySelectorAll('span[data-nexus-translation-id]').forEach(span => {
-                span.replaceWith(document.createTextNode(span.dataset.nexusOriginal || span.textContent || ''));
-              });
-              document.body?.normalize();
+              const previous=window.__nexusPageTranslation;
+              if(previous?.originals) for(const entry of previous.originals.values())
+                if(entry.node?.isConnected) entry.node.nodeValue=entry.original;
+              const state={nodes:new Map(),originals:new Map()};window.__nexusPageTranslation=state;
               const root=document.body; if(!root) return [];
               const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
               const nodes=[]; let node,total=0;
-              while((node=walker.nextNode()) && nodes.length<420 && total<18000){
+              while((node=walker.nextNode()) && nodes.length<180 && total<9000){
                 const parent=node.parentElement, raw=node.nodeValue||'', text=raw.trim();
                 if(!parent||text.length<2||parent.closest('script,style,noscript,textarea,code,pre,svg,canvas,[contenteditable="true"],[data-nexus-translation-ui]')) continue;
                 const style=getComputedStyle(parent); if(style.display==='none'||style.visibility==='hidden'||style.opacity==='0'||parent.getClientRects().length===0) continue;
                 nodes.push({node,raw,text}); total+=text.length;
               }
               return nodes.map((item,index)=>{
-                const id='n'+(index+1), span=document.createElement('span');
-                span.dataset.nexusTranslationId=id; span.dataset.nexusOriginal=item.raw;
-                span.textContent=item.raw; item.node.replaceWith(span);
+                const id='n'+(index+1);state.nodes.set(id,item.node);state.originals.set(id,{node:item.node,original:item.raw});
                 return {Id:id,Text:item.text};
               });
             })();
@@ -362,7 +368,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
               const status=document.createElement('span'); status.id='nexus-translation-status'; status.textContent='Перевод: 0 / '+{{total}};
               const restore=document.createElement('button'); restore.textContent='Вернуть оригинал';
               restore.style.cssText='border:1px solid #66ffffff;border-radius:8px;background:#26ffffff;color:#fff;padding:6px 9px;cursor:pointer;';
-              restore.onclick=()=>{document.querySelectorAll('span[data-nexus-translation-id]').forEach(s=>s.replaceWith(document.createTextNode(s.dataset.nexusOriginal||s.textContent||'')));document.body?.normalize();box.remove();};
+              restore.onclick=()=>{const state=window.__nexusPageTranslation;if(state?.originals)for(const entry of state.originals.values())if(entry.node?.isConnected)entry.node.nodeValue=entry.original;window.__nexusPageTranslation=null;box.remove();};
               const close=document.createElement('button'); close.textContent='×'; close.title='Скрыть панель, оставив перевод';
               close.style.cssText='border:0;background:transparent;color:#fff;font-size:18px;cursor:pointer;padding:2px 5px;'; close.onclick=()=>box.remove();
               box.append(status,restore,close); document.documentElement.append(box);
@@ -376,11 +382,12 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         await Core.ExecuteScriptAsync($$"""
             (() => {
               const items={{JsonSerializer.Serialize(translated)}};
+              const state=window.__nexusPageTranslation;if(!state)return;
               for(const item of items){
-                const span=document.querySelector('span[data-nexus-translation-id="'+CSS.escape(item.Id)+'"]'); if(!span) continue;
-                const original=span.dataset.nexusOriginal||span.textContent||'';
+                const node=state.nodes.get(item.Id),entry=state.originals.get(item.Id);if(!node?.isConnected||!entry)continue;
+                const original=entry.original||node.nodeValue||'';
                 const lead=original.match(/^\s*/)?.[0]||'', tail=original.match(/\s*$/)?.[0]||'';
-                span.textContent=lead+item.Text+tail; span.title='Оригинал: '+original.trim();
+                node.nodeValue=lead+item.Text+tail;
               }
               const status=document.getElementById('nexus-translation-status'); if(status) status.textContent='Перевод: '+{{completed}}+' / '+{{total}};
             })();
@@ -395,70 +402,6 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
               status.textContent={{JsonSerializer.Serialize(error is null ? $"Переведено элементов: {translated} из {total}" : "Перевод остановлен: " + error)}};
               status.style.color={{JsonSerializer.Serialize(error is null ? "#7ff5e7" : "#ffcb6b")}};
               }
-            })();
-            """);
-    }
-
-    public async Task<IReadOnlyList<VideoCaptionSegment>> CaptureVideoCaptionSegmentsAsync()
-    {
-        if (Core is null || UrlService.IsInternal(CurrentUrl)) return [];
-        var json = await Core.ExecuteScriptAsync("""
-            (async () => {
-              const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0)
-                .sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
-              const video=videos.find(v=>!v.paused)||videos[0]; if(!video) return [];
-              const candidates=[];
-              for(const track of video.textTracks){
-                if(track.label==='Nexus RU') continue;
-                if(track.kind==='subtitles'||track.kind==='captions'){
-                  track.mode='hidden'; candidates.push(track);
-                }
-              }
-              if(candidates.length && !candidates.some(t=>t.cues?.length)) await new Promise(resolve=>setTimeout(resolve,900));
-              const selected=candidates.find(t=>t.cues?.length);
-              if(!selected?.cues?.length) return [];
-              return [...selected.cues].slice(0,900).map((cue,index)=>({
-                Id:'v'+(index+1), Text:(cue.text||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim(),
-                Start:Number(cue.startTime)||0, End:Number(cue.endTime)||0
-              })).filter(x=>x.Text);
-            })();
-            """);
-        try { return JsonSerializer.Deserialize<List<VideoCaptionSegment>>(json) ?? []; }
-        catch { return []; }
-    }
-
-    public async Task ApplyRussianVideoCaptionsAsync(IReadOnlyList<VideoCaptionSegment> captions)
-    {
-        if (Core is null || captions.Count == 0) return;
-        await Core.ExecuteScriptAsync($$"""
-            (() => {
-              const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0)
-                .sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
-              const video=videos.find(v=>!v.paused)||videos[0]; if(!video) return false;
-              for(const old of video.textTracks) if(old.label==='Nexus RU') old.mode='disabled';
-              const track=video.addTextTrack('subtitles','Nexus RU','ru'); track.mode='showing';
-              for(const item of {{JsonSerializer.Serialize(captions)}}){
-                try { track.addCue(new VTTCue(item.Start,item.End,item.Text)); } catch {}
-              }
-              let badge=document.getElementById('nexus-video-translation-badge');
-              if(!badge){badge=document.createElement('div');badge.id='nexus-video-translation-badge';badge.dataset.nexusTranslationUi='true';
-                badge.style.cssText='position:fixed;right:22px;top:22px;z-index:2147483647;padding:9px 12px;border:1px solid #80ffffff;border-radius:12px;background:#b3101010;color:#fff;font:600 13px Segoe UI,Arial,sans-serif;backdrop-filter:blur(12px);';document.documentElement.append(badge);}
-              badge.textContent='RU-субтитры Nexus включены · '+{{captions.Count}}+' реплик';
-              setTimeout(()=>badge?.remove(),5000); return true;
-            })();
-            """);
-    }
-
-    public async Task ShowVideoTranslationStatusAsync(string message, bool warning = false)
-    {
-        if (Core is null) return;
-        await Core.ExecuteScriptAsync($$"""
-            (() => {
-              let badge=document.getElementById('nexus-video-translation-badge');
-              if(!badge){badge=document.createElement('div');badge.id='nexus-video-translation-badge';badge.dataset.nexusTranslationUi='true';
-                badge.style.cssText='position:fixed;right:22px;top:22px;z-index:2147483647;padding:9px 12px;border:1px solid #80ffffff;border-radius:12px;background:#b3101010;color:#fff;font:600 13px Segoe UI,Arial,sans-serif;backdrop-filter:blur(12px);';document.documentElement.append(badge);}
-              badge.textContent={{JsonSerializer.Serialize(message)}};
-              badge.style.color={{JsonSerializer.Serialize(warning ? "#ffcb6b" : "#ffffff")}};
             })();
             """);
     }
@@ -509,6 +452,9 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         if (Core is null) return;
         await Core.ExecuteScriptAsync("""
             (()=>{window.__nexusStopAudioTranslation=false;let badge=document.getElementById('nexus-live-translation');
+              const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
+              const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];window.__nexusSourceCaptionModes=[];
+              if(video)for(const track of video.textTracks)if(track.label!=='Nexus Live RU'&&track.label!=='Nexus RU'){window.__nexusSourceCaptionModes.push({track,mode:track.mode});track.mode='disabled'}
               if(!badge){badge=document.createElement('div');badge.id='nexus-live-translation';badge.dataset.nexusTranslationUi='true';badge.style.cssText='position:fixed;right:22px;top:22px;z-index:2147483647;display:flex;gap:10px;align-items:center;padding:10px 12px;border:1px solid #80ffffff;border-radius:12px;background:#b3101010;color:#fff;font:600 13px Segoe UI,sans-serif;backdrop-filter:blur(12px);';
               const text=document.createElement('span');text.id='nexus-live-translation-status';badge.append(text);const stop=document.createElement('button');stop.textContent='Остановить';stop.style.cssText='border:1px solid #66ffffff;border-radius:8px;background:#26ffffff;color:#fff;padding:6px 9px;cursor:pointer';stop.onclick=()=>{window.__nexusStopAudioTranslation=true;text.textContent='Остановка после текущего фрагмента…'};badge.append(stop);document.documentElement.append(badge)}
               document.getElementById('nexus-live-translation-status').textContent='Подготовка перевода звука…';})();
@@ -543,7 +489,14 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
 
     public async Task EndLiveAudioTranslationAsync(string status)
     {
-        await UpdateLiveAudioTranslationStatusAsync(status);
+        if (Core is null) return;
+        await Core.ExecuteScriptAsync("""
+            ((status)=>{for(const entry of window.__nexusSourceCaptionModes||[])try{entry.track.mode=entry.mode}catch{}
+              window.__nexusSourceCaptionModes=[];window.__nexusStopAudioTranslation=true;
+              document.getElementById('nexus-live-subtitle-overlay')?.remove();
+              const badge=document.getElementById('nexus-live-translation');const text=document.getElementById('nexus-live-translation-status');
+              if(text)text.textContent=status;if(badge)setTimeout(()=>badge.remove(),1800)})(__STATUS__)
+            """.Replace("__STATUS__", JsonSerializer.Serialize(status), StringComparison.Ordinal));
     }
 
     public async Task<string> GetAgentDomSnapshotAsync()
@@ -782,6 +735,17 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         if (Core is null || !Uri.TryCreate(url, UriKind.Absolute, out var target) ||
             !Uri.TryCreate(CurrentUrl, UriKind.Absolute, out var current) ||
             !target.Host.Equals(current.Host, StringComparison.OrdinalIgnoreCase)) return false;
+        var source = new TaskCompletionSource<CoreWebView2NavigationCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Handler(object? _, CoreWebView2NavigationCompletedEventArgs e) => source.TrySetResult(e);
+        Core.NavigationCompleted += Handler;
+        try { Core.Navigate(url); return (await source.Task.WaitAsync(timeout)).IsSuccess; }
+        catch (TimeoutException) { return false; }
+        finally { Core.NavigationCompleted -= Handler; }
+    }
+
+    public async Task<bool> NavigateInternalAndWaitAsync(string url, TimeSpan timeout)
+    {
+        if (Core is null || !UrlService.IsInternal(url)) return false;
         var source = new TaskCompletionSource<CoreWebView2NavigationCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
         void Handler(object? _, CoreWebView2NavigationCompletedEventArgs e) => source.TrySetResult(e);
         Core.NavigationCompleted += Handler;
@@ -1101,11 +1065,24 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
             using var json = JsonDocument.Parse(e.WebMessageAsJson);
             var root = json.RootElement;
             var type = root.TryGetProperty("type", out var t) ? t.GetString() : null;
-            if (type is "navigate" or "search")
+            if (type == "navigate")
             {
                 var value = root.TryGetProperty("value", out var v) ? v.GetString() : null;
                 if (!string.IsNullOrWhiteSpace(value))
                     OpenUrlRequested?.Invoke(this, new UrlRequestedEventArgs(value) { OpenInNewTab = false });
+            }
+            else if (type == "search")
+            {
+                var value = root.TryGetProperty("value", out var v) ? v.GetString() : null;
+                if (!string.IsNullOrWhiteSpace(value))
+                    NexusSearchRequested?.Invoke(this, new UrlRequestedEventArgs(value));
+            }
+            else if (type == "result-open")
+            {
+                var value = root.TryGetProperty("value", out var v) ? v.GetString() : null;
+                var query = root.TryGetProperty("query", out var q) ? q.GetString() : null;
+                if (!string.IsNullOrWhiteSpace(value) && !string.IsNullOrWhiteSpace(query))
+                    SearchResultRequested?.Invoke(this, new SearchResultRequestedEventArgs(query, value));
             }
             else if (type == "settings")
             {

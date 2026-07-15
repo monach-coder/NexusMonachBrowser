@@ -50,25 +50,17 @@
                     <Grid>
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                         <TextBox x:Name="ShoppingQueryBox" Padding="10,8" MinHeight="38"
-                                 Text="Что ищем или исследуем?" GotKeyboardFocus="ShoppingQueryBox_GotKeyboardFocus"
+                                 Text="Что нужно найти?" GotKeyboardFocus="ShoppingQueryBox_GotKeyboardFocus"
                                  KeyDown="ShoppingQueryBox_KeyDown" />
                         <Button Grid.Column="1" Content="Фото…" Padding="11,8" Margin="7,0,0,0"
                                 ToolTip="Распознать фотографию или рисунок локальной моделью" Click="ShoppingImage_Click" />
                     </Grid>
-                    <WrapPanel Margin="0,8,0,0">
-                        <Button Content="Сравнить товары" Padding="10,6" Margin="0,0,6,6"
-                                ToolTip="Собрать цены, рейтинги и отзывы на страницах текущего сайта"
-                                Click="ShoppingAgent_Click" />
-                        <Button Content="Глубокий анализ" Padding="10,6" Margin="0,0,6,6"
-                                ToolTip="Подробно разобрать открытую страницу по вашему вопросу"
-                                Click="DeepAnalysis_Click" />
-                        <Button Content="Углублённый поиск" Padding="10,6" Margin="0,0,6,6"
-                                ToolTip="Пройти по связанным страницам этого сайта без форм, входа и покупок"
-                                Click="DeepResearch_Click" />
-                        <Button Content="Сводка агента" Padding="10,6" Margin="0,0,0,6"
-                                ToolTip="Свести найденное, источники, противоречия и пробелы"
-                                Click="AgentSummary_Click" />
-                    </WrapPanel>
+                    <TextBlock x:Name="ShoppingImageNameText" Margin="2,6,2,0" FontSize="10"
+                               Foreground="{StaticResource MutedTextBrush}" Text="Фото не выбрано" />
+                    <Button Content="Начать поиск" Padding="14,8" Margin="0,8,0,0"
+                            HorizontalAlignment="Stretch"
+                            ToolTip="Найти на текущем сайте 3–5 подходящих товаров по тексту и/или фотографии"
+                            Click="ShoppingAgent_Click" />
                 </StackPanel>
             </Grid>
 
@@ -94,11 +86,17 @@
                 </Grid>
             </StackPanel>
 
-            <TextBox x:Name="ResultBox" Grid.Row="4" Margin="0,12,0,0" Padding="12"
-                     Background="#80101010" BorderBrush="#66FFFFFF" Foreground="{StaticResource TextBrush}"
-                     IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
-                     VerticalScrollBarVisibility="Auto"
-                     Text="Открой DevTools через F12 или нажми AI для сравнения товаров." />
+            <Grid Grid.Row="4" Margin="0,12,0,0">
+                <TextBox x:Name="ResultBox" Padding="12"
+                         Background="#80101010" BorderBrush="#66FFFFFF" Foreground="{StaticResource TextBrush}"
+                         IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
+                         VerticalScrollBarVisibility="Auto"
+                         Text="Открой DevTools через F12 или нажми AI для поиска товаров." />
+                <ScrollViewer x:Name="ShoppingCardsScroll" Visibility="Collapsed"
+                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel x:Name="ShoppingCardsPanel" />
+                </ScrollViewer>
+            </Grid>
 
             <Grid Grid.Row="5" Margin="0,10,0,0">
                 <TextBlock x:Name="StatusText" VerticalAlignment="Center" FontSize="10.5"
