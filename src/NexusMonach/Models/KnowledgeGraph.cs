@@ -34,6 +34,16 @@ public sealed class KnowledgeGraphData
 {
     public List<KnowledgeNode> Nodes { get; set; } = [];
     public List<KnowledgeEdge> Edges { get; set; } = [];
+    public List<KnowledgeResearchSession> ResearchSessions { get; set; } = [];
+}
+
+public sealed class KnowledgeResearchSession
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string Query { get; set; } = string.Empty;
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public List<string> ResultNodeIds { get; set; } = [];
+    public string? SelectedNodeId { get; set; }
 }
 
 public sealed class KnowledgeSearchHit

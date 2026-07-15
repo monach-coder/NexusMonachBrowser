@@ -192,7 +192,7 @@
             </Button>
             <Button Grid.Column="7" Content="AI" Style="{StaticResource IconButton}" FontFamily="Segoe UI"
                     FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}"
-                    ToolTip="AI-агент: найти и сравнить товары на текущем сайте" Click="ShoppingAgentTop_Click" />
+                    ToolTip="Nexus Следопыт: найти, проверить и сравнить информацию" Click="ShoppingAgentTop_Click" />
 
             <Button x:Name="MenuButton" Grid.Column="8" Content="&#xE712;"
                     Style="{StaticResource IconButton}" ToolTip="Меню" Click="MenuButton_Click">

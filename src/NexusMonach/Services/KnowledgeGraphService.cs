@@ -18,6 +18,7 @@ public static class KnowledgeGraphService
         _data = await JsonStore.ReadAsync<KnowledgeGraphData>(AppPaths.KnowledgeGraphFile) ?? new KnowledgeGraphData();
         _data.Nodes ??= [];
         _data.Edges ??= [];
+        _data.ResearchSessions ??= [];
         NormalizeLoadedData();
         await ImportLegacyHistoryAsync();
     }
@@ -30,7 +31,8 @@ public static class KnowledgeGraphService
             return new KnowledgeGraphData
             {
                 Nodes = _data.Nodes.Select(Clone).ToList(),
-                Edges = _data.Edges.Select(Clone).ToList()
+                Edges = _data.Edges.Select(Clone).ToList(),
+                ResearchSessions = _data.ResearchSessions.Select(Clone).ToList()
             };
         }
         finally { Gate.Release(); }
@@ -128,6 +130,103 @@ public static class KnowledgeGraphService
             .Take(180).ToArray();
     }
 
+    public static async Task RecordResearchAsync(NexusSearchReport report,
+        CancellationToken cancellationToken = default, string pageKind = "источник поиска")
+    {
+        if (!SettingsService.Current.BuildKnowledgeGraph || report.Items.Count == 0 ||
+            IsSensitiveResearchQuery(report.Query)) return;
+        await Gate.WaitAsync(cancellationToken);
+        try
+        {
+            var now = DateTime.UtcNow;
+            var queryWords = ExtractQueryWords(report.Query);
+            var nodeIds = new List<string>();
+            foreach (var item in report.Items.Take(8))
+            {
+                if (!Uri.TryCreate(item.Url, UriKind.Absolute, out var uri) || uri.Scheme is not "http" and not "https")
+                    continue;
+                var url = NormalizeUrl(item.Url);
+                var node = _data.Nodes.FirstOrDefault(x => x.Url.Equals(url, StringComparison.OrdinalIgnoreCase));
+                if (node is null)
+                {
+                    node = new KnowledgeNode
+                    {
+                        Title = item.Title, Url = url, Domain = GetDomain(url), Summary = item.Answer,
+                        PageKind = pageKind, Topic = queryWords.FirstOrDefault() ?? GetDomain(url),
+                        CreatedAtUtc = now, LastVisitedAtUtc = now, VisitCount = 0, RecentVisitsUtc = []
+                    };
+                    _data.Nodes.Add(node);
+                }
+                else if (string.IsNullOrWhiteSpace(node.Summary) || node.PageKind == "источник поиска")
+                {
+                    node.Title = string.IsNullOrWhiteSpace(item.Title) ? node.Title : item.Title;
+                    node.Summary = string.IsNullOrWhiteSpace(item.Answer) ? item.Snippet : item.Answer;
+                }
+                node.Keywords = node.Keywords.Concat(queryWords).Distinct(StringComparer.OrdinalIgnoreCase).Take(16).ToList();
+                nodeIds.Add(node.Id);
+            }
+
+            if (nodeIds.Count == 0) return;
+            var hub = nodeIds[0];
+            foreach (var target in nodeIds.Skip(1))
+            {
+                var edge = _data.Edges.FirstOrDefault(x => x.Kind == "research" && x.SourceId == hub && x.TargetId == target);
+                if (edge is null)
+                    _data.Edges.Add(new KnowledgeEdge
+                    {
+                        SourceId = hub, TargetId = target, Kind = "research",
+                        Relation = "поиск: " + report.Query[..Math.Min(report.Query.Length, 90)],
+                        Evidence = queryWords.Take(6).ToList(), Score = .68, LastSeenAtUtc = now
+                    });
+                else
+                {
+                    edge.Strength++;
+                    edge.LastSeenAtUtc = now;
+                    edge.Score = Math.Min(1, edge.Score + .04);
+                }
+            }
+            _data.ResearchSessions.Add(new KnowledgeResearchSession
+            {
+                Query = report.Query, CreatedAtUtc = now, ResultNodeIds = nodeIds.Distinct().ToList()
+            });
+            if (_data.ResearchSessions.Count > 300)
+                _data.ResearchSessions.RemoveRange(0, _data.ResearchSessions.Count - 300);
+            DeduplicateEdges();
+            TrimGraph();
+            await JsonStore.WriteAsync(AppPaths.KnowledgeGraphFile, _data);
+        }
+        finally { Gate.Release(); }
+    }
+
+    public static Task RecordShoppingResearchAsync(ShoppingReport shopping,
+        CancellationToken cancellationToken = default)
+    {
+        var report = new NexusSearchReport(shopping.Query, shopping.Recommendation,
+            shopping.Items.Where(x => !string.IsNullOrWhiteSpace(x.Url)).Select(x =>
+                new NexusSearchItem(x.Name, x.Url,
+                    $"Цена: {x.Price}; рейтинг: {x.Rating}; купили/отзывы: {x.Buyers}",
+                    x.Strengths, x.Score)).ToArray(),
+            "Карточки извлечены Nexus Следопытом из DOM каталога и обработаны локально.");
+        return RecordResearchAsync(report, cancellationToken, "товар");
+    }
+
+    public static async Task RecordResearchChoiceAsync(string query, string url)
+    {
+        if (string.IsNullOrWhiteSpace(query) || string.IsNullOrWhiteSpace(url)) return;
+        await Gate.WaitAsync();
+        try
+        {
+            var node = _data.Nodes.FirstOrDefault(x => x.Url.Equals(NormalizeUrl(url), StringComparison.OrdinalIgnoreCase));
+            var session = _data.ResearchSessions.LastOrDefault(x =>
+                x.Query.Equals(query, StringComparison.OrdinalIgnoreCase) &&
+                (node is null || x.ResultNodeIds.Contains(node.Id)));
+            if (session is null || node is null) return;
+            session.SelectedNodeId = node.Id;
+            await JsonStore.WriteAsync(AppPaths.KnowledgeGraphFile, _data);
+        }
+        finally { Gate.Release(); }
+    }
+
     public static async Task SetPinnedAsync(string nodeId, bool pinned)
     {
         await Gate.WaitAsync();
@@ -165,7 +264,8 @@ public static class KnowledgeGraphService
 
     private static void RebuildSemanticEdgesFor(KnowledgeNode node)
     {
-        _data.Edges.RemoveAll(x => x.Kind != "navigation" && (x.SourceId == node.Id || x.TargetId == node.Id));
+        _data.Edges.RemoveAll(x => (x.Kind is "semantic" or "domain") &&
+                                   (x.SourceId == node.Id || x.TargetId == node.Id));
         var own = node.Keywords.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var candidates = new List<(KnowledgeNode Node, double Score, string[] Common, bool SameDomain)>();
         foreach (var other in _data.Nodes.Where(x => x.Id != node.Id))
@@ -231,6 +331,9 @@ public static class KnowledgeGraphService
             .Take(_data.Nodes.Count - 1800).Select(x => x.Id).ToHashSet();
         _data.Nodes.RemoveAll(x => remove.Contains(x.Id));
         _data.Edges.RemoveAll(x => remove.Contains(x.SourceId) || remove.Contains(x.TargetId));
+        foreach (var session in _data.ResearchSessions)
+            session.ResultNodeIds.RemoveAll(remove.Contains);
+        _data.ResearchSessions.RemoveAll(x => x.ResultNodeIds.Count == 0);
     }
 
     private static async Task ImportLegacyHistoryAsync()
@@ -266,12 +369,13 @@ public static class KnowledgeGraphService
 
     private static void NormalizeLoadedData()
     {
+        _data.ResearchSessions ??= [];
         foreach (var node in _data.Nodes)
         {
             node.Keywords ??= [];
             node.Embedding ??= [];
             node.RecentVisitsUtc ??= [];
-            if (node.RecentVisitsUtc.Count == 0) node.RecentVisitsUtc.Add(node.LastVisitedAtUtc);
+            if (node.RecentVisitsUtc.Count == 0 && node.VisitCount > 0) node.RecentVisitsUtc.Add(node.LastVisitedAtUtc);
             node.Domain = string.IsNullOrWhiteSpace(node.Domain) ? GetDomain(node.Url) : node.Domain;
             node.PageKind = string.IsNullOrWhiteSpace(node.PageKind) ? ClassifyPage(node.Url, node.Title, string.Empty) : node.PageKind;
             node.Topic = string.IsNullOrWhiteSpace(node.Topic) ? PickTopic(node) : node.Topic;
@@ -298,6 +402,17 @@ public static class KnowledgeGraphService
         SourceId = x.SourceId, TargetId = x.TargetId, Relation = x.Relation, Kind = x.Kind,
         Evidence = x.Evidence.ToList(), Score = x.Score, Strength = x.Strength, LastSeenAtUtc = x.LastSeenAtUtc
     };
+
+    private static KnowledgeResearchSession Clone(KnowledgeResearchSession x) => new()
+    {
+        Id = x.Id, Query = x.Query, CreatedAtUtc = x.CreatedAtUtc,
+        ResultNodeIds = x.ResultNodeIds.ToList(), SelectedNodeId = x.SelectedNodeId
+    };
+
+    private static bool IsSensitiveResearchQuery(string query) =>
+        System.Text.RegularExpressions.Regex.IsMatch(query,
+            @"(?:[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|\b\d{7,}\b|парол|password|одноразов\p{L}*\s+код|otp)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     private static double Cosine(IReadOnlyList<float> left, IReadOnlyList<float> right)
     {

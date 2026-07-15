@@ -57,28 +57,34 @@ public partial class KnowledgeGraphWindow : Window
         EmptyPanel.Visibility = nodes.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         if (nodes.Count == 0)
         {
-            StatsText.Text = $"Узлов: {_graph.Nodes.Count} · связей: {_graph.Edges.Count}";
+            StatsText.Text = $"Узлов: {_graph.Nodes.Count} · связей: {_graph.Edges.Count} · исследований: {_graph.ResearchSessions.Count}";
             return;
         }
 
         var ids = nodes.Select(x => x.Id).ToHashSet();
         var edges = _graph.Edges.Where(x => ids.Contains(x.SourceId) && ids.Contains(x.TargetId))
-            .OrderByDescending(x => x.Kind == "navigation").ThenByDescending(x => x.Score).Take(650).ToArray();
+            .OrderByDescending(x => x.Kind == "navigation").ThenByDescending(x => x.Kind == "research")
+            .ThenByDescending(x => x.Score).Take(650).ToArray();
         var positions = CalculateLayout(nodes, edges);
 
         foreach (var edge in edges)
         {
             if (!positions.TryGetValue(edge.SourceId, out var a) || !positions.TryGetValue(edge.TargetId, out var b)) continue;
             var navigation = edge.Kind == "navigation";
+            var research = edge.Kind == "research";
             var line = new Line
             {
                 X1 = a.X, Y1 = a.Y, X2 = b.X, Y2 = b.Y,
                 Stroke = navigation ? new SolidColorBrush(Color.FromArgb(150, 218, 185, 106)) :
+                    research ? new SolidColorBrush(Color.FromArgb(165, 156, 122, 255)) :
                     new SolidColorBrush(Color.FromArgb((byte)Math.Clamp(35 + edge.Score * 150, 35, 190), 54, 215, 196)),
-                StrokeThickness = navigation ? 1.8 + Math.Min(2, edge.Strength * 0.25) : 0.8 + edge.Score * 2.4,
-                ToolTip = navigation ? $"Маршрут · переходов: {edge.Strength}" : edge.Relation
+                StrokeThickness = navigation ? 1.8 + Math.Min(2, edge.Strength * 0.25) :
+                    research ? 1.4 + edge.Score * 1.7 : 0.8 + edge.Score * 2.4,
+                ToolTip = navigation ? $"Маршрут · переходов: {edge.Strength}" :
+                    research ? "Исследование · " + edge.Relation : edge.Relation
             };
             if (navigation) line.StrokeDashArray = new DoubleCollection { 5, 4 };
+            if (research) line.StrokeDashArray = new DoubleCollection { 2, 3 };
             GraphCanvas.Children.Add(line);
         }
 
@@ -119,7 +125,7 @@ public partial class KnowledgeGraphWindow : Window
             Canvas.SetTop(button, point.Y - button.Height / 2);
             GraphCanvas.Children.Add(button);
         }
-        StatsText.Text = $"Память: {_graph.Nodes.Count} страниц · {_graph.Edges.Count} связей · на карте: {nodes.Count}";
+        StatsText.Text = $"Память: {_graph.Nodes.Count} страниц · {_graph.Edges.Count} связей · исследований: {_graph.ResearchSessions.Count} · на карте: {nodes.Count}";
     }
 
     private static Dictionary<string, Point> CalculateLayout(IReadOnlyList<KnowledgeNode> nodes,

@@ -63,7 +63,7 @@ public static class SystemAudioCaptureService
         {
             1 => samples,
             2 => new StereoToMonoSampleProvider(samples) { LeftVolume = 0.5f, RightVolume = 0.5f },
-            _ => throw new InvalidOperationException($"Неподдерживаемое число системных аудиоканалов: {samples.WaveFormat.Channels}.")
+            _ => new MultiChannelToMonoSampleProvider(samples)
         };
         if (samples.WaveFormat.SampleRate != 16_000)
             samples = new WdlResamplingSampleProvider(samples, 16_000);
@@ -78,5 +78,43 @@ public static class SystemAudioCaptureService
                     writer.WriteSample(buffer[index]);
         }
         return wav.ToArray();
+    }
+
+    /// <summary>
+    /// Windows/HDMI often exposes the loopback endpoint as 5.1 or 7.1 even when
+    /// the current video is stereo. Whisper needs mono, so average every channel
+    /// instead of rejecting perfectly valid system audio.
+    /// </summary>
+    private sealed class MultiChannelToMonoSampleProvider : ISampleProvider
+    {
+        private readonly ISampleProvider _source;
+        private readonly int _channels;
+        private float[] _sourceBuffer = [];
+
+        public MultiChannelToMonoSampleProvider(ISampleProvider source)
+        {
+            _source = source;
+            _channels = source.WaveFormat.Channels;
+            WaveFormat = WaveFormat.CreateIeeeFloatWaveFormat(source.WaveFormat.SampleRate, 1);
+        }
+
+        public WaveFormat WaveFormat { get; }
+
+        public int Read(float[] buffer, int offset, int count)
+        {
+            var required = count * _channels;
+            if (_sourceBuffer.Length < required) _sourceBuffer = new float[required];
+            var sourceRead = _source.Read(_sourceBuffer, 0, required);
+            var frames = sourceRead / _channels;
+            for (var frame = 0; frame < frames; frame++)
+            {
+                float sum = 0;
+                var sourceOffset = frame * _channels;
+                for (var channel = 0; channel < _channels; channel++)
+                    sum += _sourceBuffer[sourceOffset + channel];
+                buffer[offset + frame] = sum / _channels;
+            }
+            return frames;
+        }
     }
 }

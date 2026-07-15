@@ -15,7 +15,9 @@ public enum SearchEngineKind
     Brave,
     Startpage,
     Google,
-    Yandex
+    Yandex,
+    Bing,
+    Mojeek
 }
 
 public enum ProxyKind

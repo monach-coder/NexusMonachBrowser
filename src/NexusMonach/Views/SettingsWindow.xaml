@@ -28,7 +28,9 @@
 
                 <TextBlock Text="Поиск" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
                 <TextBlock Text="Поисковая система по умолчанию" Margin="0,12,0,5" />
-                <ComboBox x:Name="SearchEngineCombo" />
+                <ComboBox x:Name="SearchEngineCombo" SelectionChanged="SearchEngineCombo_SelectionChanged" />
+                <TextBlock x:Name="SearchEngineDescriptionText" TextWrapping="Wrap" Margin="0,6,0,0"
+                           FontSize="11" Foreground="{StaticResource MutedTextBrush}" />
                 <TextBlock Text="Домашняя страница" Margin="0,14,0,5" />
                 <TextBox x:Name="HomePageBox" Padding="9,7" />
                 <TextBlock Text="Оставьте app://newtab для встроенной стартовой страницы."

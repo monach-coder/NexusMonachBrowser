@@ -66,6 +66,7 @@ public partial class LocalAiDockControl : UserControl
         }
         _cancellation?.Cancel();
         _cancellation = new CancellationTokenSource();
+        _cancellation.CancelAfter(TimeSpan.FromMinutes(2));
         var completed = 0;
         IReadOnlyList<TranslationSegment> segments = [];
         try
@@ -73,14 +74,14 @@ public partial class LocalAiDockControl : UserControl
             segments = await tab.CaptureTranslationSegmentsAsync();
             if (segments.Count == 0) throw new InvalidOperationException("На странице нет видимого текста для перевода.");
             await tab.BeginInPageTranslationAsync(segments.Count);
-            // One local model start per sizeable batch. The previous 12/6 nesting
-            // restarted llama.cpp dozens of times on ordinary pages.
-            foreach (var batch in segments.Chunk(60))
-            {
-                var translated = await LocalIntelligenceService.TranslateSegmentsAsync(batch, _cancellation.Token);
-                completed += translated.Count;
-                await tab.ApplyTranslationSegmentsAsync(translated, completed, segments.Count);
-            }
+            // Tier 0 is visible immediately and never starts a model. Only the
+            // unknown text goes to the generative correction pass.
+            var immediate = LocalTranslationDictionary.TranslateKnown(segments);
+            completed += await tab.ApplyTranslationSegmentsAsync(immediate, completed, segments.Count);
+            var knownIds = immediate.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
+            var pending = segments.Where(x => !knownIds.Contains(x.Id)).ToArray();
+            var translated = await LocalIntelligenceService.TranslateSegmentsAsync(pending, _cancellation.Token);
+            completed += await tab.ApplyTranslationSegmentsAsync(translated, completed, segments.Count);
             await tab.CompleteInPageTranslationAsync(completed, segments.Count);
         }
         catch (OperationCanceledException)
@@ -104,6 +105,7 @@ public partial class LocalAiDockControl : UserControl
         var session = new CancellationTokenSource();
         _videoCancellation = session;
         await tab.BeginLiveAudioTranslationAsync();
+        var finalStatus = "Перевод звука остановлен.";
         try
         {
             var progress = new Progress<string>(value => _ = tab.UpdateLiveAudioTranslationStatusAsync(value));
@@ -134,19 +136,18 @@ public partial class LocalAiDockControl : UserControl
                     await tab.ShowLiveVideoSubtitleAsync(text);
                 }
             }
-            await tab.EndLiveAudioTranslationAsync("Перевод звука остановлен.");
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) { finalStatus = "Перевод звука остановлен."; }
         catch (Exception ex)
         {
             if (ReferenceEquals(Volatile.Read(ref _videoCancellation), session))
-                await tab.EndLiveAudioTranslationAsync("Ошибка перевода: " + ex.Message);
+                finalStatus = "Ошибка перевода: " + ex.Message;
         }
         finally
         {
             Interlocked.CompareExchange(ref _videoCancellation, null, session);
             session.Dispose();
-            try { await tab.EndLiveAudioTranslationAsync("Перевод звука остановлен."); } catch { }
+            try { await tab.EndLiveAudioTranslationAsync(finalStatus); } catch { }
         }
     }
 
@@ -155,7 +156,8 @@ public partial class LocalAiDockControl : UserControl
     public async Task PrepareShoppingAgentAsync(BrowserTab tab)
     {
         await ShowForTabAsync(tab);
-        ModeTitleText.Text = "AI · АГЕНТ И ИССЛЕДОВАНИЕ";
+        ModeTitleText.Text = "NEXUS СЛЕДОПЫТ";
+        TestLocalAiButton.Visibility = Visibility.Collapsed;
         DeveloperAnalyzeButton.Visibility = Visibility.Collapsed;
         DeveloperGuidePanel.Visibility = Visibility.Collapsed;
         ShoppingAgentPanel.Visibility = Visibility.Visible;
@@ -174,6 +176,7 @@ public partial class LocalAiDockControl : UserControl
     {
         await ShowForTabAsync(tab);
         ModeTitleText.Text = "DEVTOOLS AI";
+        TestLocalAiButton.Visibility = Visibility.Visible;
         ShoppingAgentPanel.Visibility = Visibility.Collapsed;
         DeveloperAnalyzeButton.Visibility = Visibility.Visible;
         DeveloperGuidePanel.Visibility = Visibility.Visible;
@@ -294,6 +297,9 @@ public partial class LocalAiDockControl : UserControl
             if (!string.IsNullOrWhiteSpace(_shoppingImagePath))
             {
                 StatusText.Text = "Nexus Vision локально распознаёт товар на фото…";
+                var imageInfo = new FileInfo(_shoppingImagePath);
+                if (!imageInfo.Exists || imageInfo.Length > 20 * 1024 * 1024)
+                    throw new InvalidOperationException("Изображение не найдено или превышает безопасный лимит 20 МБ.");
                 var imageAnswer = await NexusFabricRuntime.UnderstandImageAsync(
                     await File.ReadAllBytesAsync(_shoppingImagePath, _cancellation.Token), _cancellation.Token);
                 using var imageDocument = JsonDocument.Parse(LocalIntelligenceService.ExtractJson(imageAnswer));
@@ -303,7 +309,7 @@ public partial class LocalAiDockControl : UserControl
                 query = string.IsNullOrWhiteSpace(query) ? imageQuery : query + ". По фотографии: " + imageQuery;
                 ShoppingQueryBox.Text = query;
             }
-            StatusText.Text = "DOM-агент находит поиск и ждёт обновления каталога…";
+            StatusText.Text = "Nexus Следопыт находит каталог и ждёт обновления DOM…";
             var searched = await _tab.SearchCurrentSiteForAgentAsync(query, _cancellation.Token);
             if (!searched)
                 StatusText.Text = "Поле поиска не найдено — анализирую открытый каталог и его страницы…";
@@ -367,11 +373,13 @@ public partial class LocalAiDockControl : UserControl
             StatusText.Text = $"Nexus Intelligence сопоставляет точные, похожие и частичные названия среди {count} карточек…";
             var report = await LocalIntelligenceService.AnalyzeShoppingResultsAsync(
                 query, _tab.CurrentHost, cards, _cancellation.Token);
+            if (!_tab.IsPrivate)
+                await KnowledgeGraphService.RecordShoppingResearchAsync(report, _cancellation.Token);
             ShowShoppingCards(report);
             StatusText.Text = $"Готово. Просмотрено страниц: {pages}; вариантов в выводе: {report.Items.Count}.";
         }
         catch (OperationCanceledException) { StatusText.Text = "Сбор остановлен."; }
-        catch (Exception ex) { ResultBox.Text = ex.Message; StatusText.Text = "Агент не собрал сравнение."; }
+        catch (Exception ex) { ResultBox.Text = ex.Message; StatusText.Text = "Nexus Следопыт не собрал сравнение."; }
         finally { CancelButton.IsEnabled = false; }
     }
 
@@ -430,7 +438,11 @@ public partial class LocalAiDockControl : UserControl
         if (sender is not Button { Tag: string url } || _tab?.Core is null) return;
         if (!Uri.TryCreate(url, UriKind.Absolute, out var target) ||
             !Uri.TryCreate(_tab.CurrentUrl, UriKind.Absolute, out var current) ||
-            !target.Host.Equals(current.Host, StringComparison.OrdinalIgnoreCase)) return;
+            !(target.Host.Equals(current.Host, StringComparison.OrdinalIgnoreCase) ||
+              target.Host.EndsWith('.' + current.Host, StringComparison.OrdinalIgnoreCase) ||
+              current.Host.EndsWith('.' + target.Host, StringComparison.OrdinalIgnoreCase))) return;
+        if (!_tab.IsPrivate)
+            _ = KnowledgeGraphService.RecordResearchChoiceAsync(ShoppingQueryBox.Text.Trim(), target.AbsoluteUri);
         _tab.Core.Navigate(target.AbsoluteUri);
     }
 
@@ -536,7 +548,7 @@ public partial class LocalAiDockControl : UserControl
             return;
         }
         var query = GetAgentQuery(string.IsNullOrWhiteSpace(_lastResearchQuery) ? "Подготовь итоговую сводку." : _lastResearchQuery);
-        BeginAgentOperation("Агент сводит выводы, источники, противоречия и пробелы…");
+        BeginAgentOperation("Nexus Следопыт сводит выводы, источники, противоречия и пробелы…");
         var cancellation = _cancellation!;
         try
         {
@@ -548,10 +560,10 @@ public partial class LocalAiDockControl : UserControl
             _lastResearchNotes = BuildAgentNotes(summary);
             ResultBox.Text = FormatAgentSummary(summary, _lastResearchDocuments);
             ResultBox.ScrollToHome();
-            StatusText.Text = "Сводка агента готова.";
+            StatusText.Text = "Сводка Nexus Следопыта готова.";
         }
         catch (OperationCanceledException) { StatusText.Text = "Подготовка сводки остановлена."; }
-        catch (Exception ex) { ResultBox.Text = ex.Message; StatusText.Text = "Сводка агента не подготовлена."; }
+        catch (Exception ex) { ResultBox.Text = ex.Message; StatusText.Text = "Сводка Nexus Следопыта не подготовлена."; }
         finally { CancelButton.IsEnabled = false; }
     }
 
@@ -643,10 +655,10 @@ public partial class LocalAiDockControl : UserControl
         if (missingInformation.Count > 0)
             lines.Add("\nЧЕГО НЕ ХВАТАЕТ\n" + string.Join("\n", missingInformation.Select(x => "• " + x)));
         if (!string.IsNullOrWhiteSpace(summary.Recommendation))
-            lines.Add("\nИТОГ АГЕНТА\n" + summary.Recommendation);
+            lines.Add("\nИТОГ NEXUS СЛЕДОПЫТА\n" + summary.Recommendation);
         lines.Add("\nИСТОЧНИКИ");
         lines.AddRange(documents.Select(x => $"{x.Id.ToUpperInvariant()}. {x.Title}\n   {x.Url}"));
-        lines.Add("\nАгент ничего не вводил в формы, не авторизовывался и не совершал действий от имени пользователя.");
+        lines.Add("\nNexus Следопыт ничего не вводил в формы, не авторизовывался и не совершал действий от имени пользователя.");
         return string.Join("\n", lines);
     }
 

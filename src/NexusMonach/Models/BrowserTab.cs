@@ -74,6 +74,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     public WebView2 View { get; }
     public CoreWebView2? Core => View.CoreWebView2;
     public bool IsInitialized => Core is not null;
+    public bool IsPrivate => _isPrivate;
     public DateTime LastActivatedUtc { get; private set; } = DateTime.UtcNow;
     public bool IsSuspended => _isSuspended;
     public double VisualOpacity
@@ -340,14 +341,14 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
               const root=document.body; if(!root) return [];
               const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
               const nodes=[]; let node,total=0;
-              while((node=walker.nextNode()) && nodes.length<180 && total<9000){
+              while((node=walker.nextNode()) && nodes.length<140 && total<7000){
                 const parent=node.parentElement, raw=node.nodeValue||'', text=raw.trim();
                 if(!parent||text.length<2||parent.closest('script,style,noscript,textarea,code,pre,svg,canvas,[contenteditable="true"],[data-nexus-translation-ui]')) continue;
                 const style=getComputedStyle(parent); if(style.display==='none'||style.visibility==='hidden'||style.opacity==='0'||parent.getClientRects().length===0) continue;
                 nodes.push({node,raw,text}); total+=text.length;
               }
               return nodes.map((item,index)=>{
-                const id='n'+(index+1);state.nodes.set(id,item.node);state.originals.set(id,{node:item.node,original:item.raw});
+                const id='n'+(index+1);state.nodes.set(id,item.node);state.originals.set(id,{node:item.node,original:item.raw,text:item.text});
                 return {Id:id,Text:item.text};
               });
             })();
@@ -376,22 +377,33 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
             """);
     }
 
-    public async Task ApplyTranslationSegmentsAsync(IReadOnlyList<TranslationSegment> translated, int completed, int total)
+    public async Task<int> ApplyTranslationSegmentsAsync(IReadOnlyList<TranslationSegment> translated, int completedBefore, int total)
     {
-        if (Core is null || translated.Count == 0) return;
-        await Core.ExecuteScriptAsync($$"""
+        if (Core is null || translated.Count == 0) return 0;
+        var json = await Core.ExecuteScriptAsync($$"""
             (() => {
               const items={{JsonSerializer.Serialize(translated)}};
-              const state=window.__nexusPageTranslation;if(!state)return;
+              const state=window.__nexusPageTranslation;if(!state)return 0;
+              let applied=0;
               for(const item of items){
-                const node=state.nodes.get(item.Id),entry=state.originals.get(item.Id);if(!node?.isConnected||!entry)continue;
+                let node=state.nodes.get(item.Id);const entry=state.originals.get(item.Id);if(!entry)continue;
+                // React/Vue pages may replace text nodes while the local model is
+                // working. Rebind to the current visible node with the same source
+                // text instead of reporting a translation that was never shown.
+                if(!node?.isConnected){
+                  const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let candidate;
+                  while((candidate=walker.nextNode())) { const parent=candidate.parentElement;if(!parent||parent.closest('[data-nexus-translation-ui],script,style,noscript,textarea,code,pre'))continue;if((candidate.nodeValue||'').trim()===entry.text){node=candidate;state.nodes.set(item.Id,node);entry.node=node;break;} }
+                }
+                if(!node?.isConnected)continue;
                 const original=entry.original||node.nodeValue||'';
                 const lead=original.match(/^\s*/)?.[0]||'', tail=original.match(/\s*$/)?.[0]||'';
-                node.nodeValue=lead+item.Text+tail;
+                node.nodeValue=lead+item.Text+tail;applied++;
               }
-              const status=document.getElementById('nexus-translation-status'); if(status) status.textContent='Перевод: '+{{completed}}+' / '+{{total}};
+              const status=document.getElementById('nexus-translation-status'); if(status) status.textContent='Перевод: '+({{completedBefore}}+applied)+' / '+{{total}};
+              return applied;
             })();
             """);
+        return int.TryParse(json, out var applied) ? applied : 0;
     }
 
     public async Task CompleteInPageTranslationAsync(int translated, int total, string? error = null)
@@ -451,23 +463,24 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     {
         if (Core is null) return;
         await Core.ExecuteScriptAsync("""
-            (()=>{window.__nexusStopAudioTranslation=false;let badge=document.getElementById('nexus-live-translation');
+            (()=>{window.__nexusStopAudioTranslation=false;
               const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
               const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];window.__nexusSourceCaptionModes=[];
               if(video)for(const track of video.textTracks)if(track.label!=='Nexus Live RU'&&track.label!=='Nexus RU'){window.__nexusSourceCaptionModes.push({track,mode:track.mode});track.mode='disabled'}
-              const fullscreen=document.fullscreenElement;let host=fullscreen||(video?.parentElement)||document.body;
-              if(host!==document.body&&host!==document.documentElement&&getComputedStyle(host).position==='static'){host.dataset.nexusTranslationPosition='static';host.style.position='relative'}
-              window.__nexusVideoTranslationHost=host;
-              if(!badge){badge=document.createElement('div');badge.id='nexus-live-translation';badge.dataset.nexusTranslationUi='true';badge.style.cssText=(host===document.body||host===document.documentElement?'position:fixed':'position:absolute')+';right:12px;top:12px;z-index:2147483647;display:flex;gap:8px;align-items:center;padding:7px 9px;border:1px solid #66ffffff;border-radius:10px;background:#99000000;color:#fff;font:600 12px Segoe UI,sans-serif;backdrop-filter:blur(8px);pointer-events:auto;';
-              const text=document.createElement('span');text.id='nexus-live-translation-status';badge.append(text);const stop=document.createElement('button');stop.textContent='Стоп';stop.style.cssText='border:1px solid #66ffffff;border-radius:7px;background:#22ffffff;color:#fff;padding:4px 7px;cursor:pointer';stop.onclick=()=>{window.__nexusStopAudioTranslation=true;text.textContent='Остановка…'};badge.append(stop);host.append(badge)}
-              document.getElementById('nexus-live-translation-status').textContent='Подготовка перевода звука…';})();
+              let overlay=document.getElementById('nexus-live-subtitle-overlay');
+              if(!overlay){overlay=document.createElement('div');overlay.id='nexus-live-subtitle-overlay';overlay.dataset.nexusTranslationUi='true';overlay.style.cssText='position:fixed;z-index:2147483647;padding:8px 12px;border-radius:8px;background:#d0000000;color:#fff;text-align:center;font:600 clamp(15px,1.8vw,23px)/1.35 Segoe UI,sans-serif;text-shadow:0 1px 3px #000;pointer-events:none;box-sizing:border-box';document.documentElement.append(overlay)}
+              let stop=document.getElementById('nexus-live-translation-stop');
+              if(!stop){stop=document.createElement('button');stop.id='nexus-live-translation-stop';stop.dataset.nexusTranslationUi='true';stop.textContent='Стоп';stop.style.cssText='position:fixed;z-index:2147483647;border:1px solid #66ffffff;border-radius:7px;background:#d0000000;color:#fff;padding:4px 8px;cursor:pointer;font:600 12px Segoe UI,sans-serif';stop.onclick=()=>{window.__nexusStopAudioTranslation=true;overlay.textContent='Остановка…'};document.documentElement.append(stop)}
+              const place=()=>{const v=[...document.querySelectorAll('video')].filter(x=>x.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight))[0];if(!v)return;const r=v.getBoundingClientRect();overlay.style.left=Math.max(8,r.left+r.width*.08)+'px';overlay.style.width=Math.max(180,r.width*.84)+'px';overlay.style.bottom=Math.max(8,innerHeight-r.bottom+r.height*.055)+'px';stop.style.right=Math.max(8,innerWidth-r.right+8)+'px';stop.style.top=Math.max(8,r.top+8)+'px'};
+              if(window.__nexusPlaceLiveTranslation){removeEventListener('resize',window.__nexusPlaceLiveTranslation);removeEventListener('scroll',window.__nexusPlaceLiveTranslation)}
+              window.__nexusPlaceLiveTranslation=place;place();addEventListener('resize',place,{passive:true});addEventListener('scroll',place,{passive:true});overlay.textContent='Подготовка перевода звука…';})();
             """);
     }
 
     public async Task UpdateLiveAudioTranslationStatusAsync(string text)
     {
         if (Core is null) return;
-        await Core.ExecuteScriptAsync("(()=>{const e=document.getElementById('nexus-live-translation-status');if(e)e.textContent=" +
+        await Core.ExecuteScriptAsync("(()=>{const e=document.getElementById('nexus-live-subtitle-overlay');if(e)e.textContent=" +
                                       JsonSerializer.Serialize(text) + "})()");
     }
 
@@ -484,14 +497,8 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         await Core.ExecuteScriptAsync("""
             ((text)=>{const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];if(!video)return;
               for(const track of video.textTracks)if(track.label==='Nexus Live RU')track.mode='disabled';
-              const fullscreen=document.fullscreenElement;let host=fullscreen||window.__nexusVideoTranslationHost||video.parentElement||document.body;
-              if(!host.isConnected)host=video.parentElement||document.body;
-              if(host!==document.body&&host!==document.documentElement&&getComputedStyle(host).position==='static'){host.dataset.nexusTranslationPosition='static';host.style.position='relative'}
-              window.__nexusVideoTranslationHost=host;
               let overlay=document.getElementById('nexus-live-subtitle-overlay');
-              if(overlay&&overlay.parentElement!==host){overlay.remove();overlay=null}
-              if(!overlay){overlay=document.createElement('div');overlay.id='nexus-live-subtitle-overlay';overlay.dataset.nexusTranslationUi='true';overlay.style.cssText=(host===document.body||host===document.documentElement?'position:fixed':'position:absolute')+';left:8%;right:8%;bottom:6%;z-index:2147483646;padding:7px 12px;border-radius:8px;background:#b0000000;color:#fff;text-align:center;font:600 clamp(16px,2vw,24px)/1.35 Segoe UI,sans-serif;text-shadow:0 1px 3px #000;pointer-events:none;box-sizing:border-box';host.append(overlay)}
-              if(host===document.body||host===document.documentElement){const r=video.getBoundingClientRect();overlay.style.left=Math.max(8,r.left+r.width*.08)+'px';overlay.style.right='auto';overlay.style.width=Math.max(180,r.width*.84)+'px';overlay.style.bottom=Math.max(8,innerHeight-r.bottom+r.height*.06)+'px'}
+              if(!overlay)return;window.__nexusPlaceLiveTranslation?.();
               overlay.textContent=text;clearTimeout(window.__nexusSubtitleTimer);window.__nexusSubtitleTimer=setTimeout(()=>overlay.textContent='',11000);
             })(__TEXT__);
             """.Replace("__TEXT__", JsonSerializer.Serialize(translatedText), StringComparison.Ordinal));
@@ -503,10 +510,10 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         await Core.ExecuteScriptAsync("""
             ((status)=>{for(const entry of window.__nexusSourceCaptionModes||[])try{entry.track.mode=entry.mode}catch{}
               window.__nexusSourceCaptionModes=[];window.__nexusStopAudioTranslation=true;
-              document.getElementById('nexus-live-subtitle-overlay')?.remove();
-              const badge=document.getElementById('nexus-live-translation');const text=document.getElementById('nexus-live-translation-status');
-              if(text)text.textContent=status;if(badge)setTimeout(()=>badge.remove(),1800);
-              const host=window.__nexusVideoTranslationHost;if(host?.dataset?.nexusTranslationPosition==='static'){host.style.removeProperty('position');delete host.dataset.nexusTranslationPosition}window.__nexusVideoTranslationHost=null})(__STATUS__)
+              const overlay=document.getElementById('nexus-live-subtitle-overlay');if(overlay){overlay.textContent=status;setTimeout(()=>overlay.remove(),1800)}
+              document.getElementById('nexus-live-translation-stop')?.remove();
+              if(window.__nexusPlaceLiveTranslation){removeEventListener('resize',window.__nexusPlaceLiveTranslation);removeEventListener('scroll',window.__nexusPlaceLiveTranslation)}
+              window.__nexusPlaceLiveTranslation=null})(__STATUS__)
             """.Replace("__STATUS__", JsonSerializer.Serialize(status), StringComparison.Ordinal));
     }
 

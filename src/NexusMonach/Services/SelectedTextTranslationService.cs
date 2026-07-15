@@ -55,7 +55,10 @@ public static class SelectedTextTranslationService
             reportStatus("Локальный перевод выделения…");
             // Текст страницы — недоверенные данные. Сервис перевода получает только текст,
             // а системный prompt LocalIntelligenceService запрещает выполнять инструкции из DOM.
-            var translated = await LocalIntelligenceService.TranslateToRussianAsync(prepared.Text);
+            using var translationBudget = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+            var translated = LocalTranslationDictionary.TryTranslate(prepared.Text, out var instant)
+                ? instant
+                : await LocalIntelligenceService.TranslateToRussianAsync(prepared.Text, translationBudget.Token);
             if (!ReferenceEquals(tab.Core, core) || !string.Equals(core.Source, source, StringComparison.Ordinal))
             {
                 reportStatus("Перевод отменён: вкладка перешла на другую страницу.");

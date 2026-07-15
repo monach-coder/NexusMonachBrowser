@@ -33,13 +33,20 @@ public static partial class NexusSearchService
 
         progress?.Report("Получаю кандидатов у выбранной поисковой системы…");
         using var client = CreateClient();
-        var discovered = await DiscoverAsync(client, BuildDiscoveryQuery(query), cancellationToken);
+        var discovered = await DiscoverWithFallbackAsync(client, BuildDiscoveryQuery(query), progress, cancellationToken);
         if (discovered.Count == 0)
             throw new InvalidOperationException("Поисковая система не вернула читаемых ссылок. Попробуйте другой запрос или провайдера в настройках.");
 
-        progress?.Report($"Читаю {Math.Min(MaximumResults, discovered.Count)} наиболее подходящих страниц…");
+        progress?.Report($"Crawl Engine читает {Math.Min(MaximumResults, discovered.Count)} наиболее подходящих страниц (не более двух одновременно)…");
         var candidates = discovered.Take(MaximumResults).ToArray();
-        var fetchTasks = candidates.Select(item => EnrichAsync(client, item, cancellationToken)).ToArray();
+        using var crawlerSlots = new SemaphoreSlim(2, 2);
+        async Task<NexusSearchCandidate?> EnrichBoundedAsync(NexusSearchCandidate item)
+        {
+            await crawlerSlots.WaitAsync(cancellationToken);
+            try { return await EnrichAsync(client, item, cancellationToken); }
+            finally { crawlerSlots.Release(); }
+        }
+        var fetchTasks = candidates.Select(EnrichBoundedAsync).ToArray();
         var enriched = (await Task.WhenAll(fetchTasks)).Where(x => x is not null).Cast<NexusSearchCandidate>().ToList();
         if (enriched.Count == 0) enriched.AddRange(candidates.Take(MaximumResults));
 
@@ -97,6 +104,7 @@ public static partial class NexusSearchService
             var key = PreferenceKey(query, url);
             values[key] = values.TryGetValue(key, out var count) ? Math.Min(100, count + 1) : 1;
             await JsonStore.WriteAsync(FeedbackFile, values);
+            await KnowledgeGraphService.RecordResearchChoiceAsync(query, url);
         }
         finally { FeedbackGate.Release(); }
     }
@@ -125,10 +133,37 @@ public static partial class NexusSearchService
         return client;
     }
 
-    private static async Task<List<NexusSearchCandidate>> DiscoverAsync(HttpClient client, string query,
-        CancellationToken cancellationToken)
+    private static async Task<List<NexusSearchCandidate>> DiscoverWithFallbackAsync(HttpClient client, string query,
+        IProgress<string>? progress, CancellationToken cancellationToken)
     {
-        var providerUrl = BuildProviderUrl(query);
+        var configured = SettingsService.Current.SearchEngine;
+        SearchEngineKind[] fallbackOrder = [configured, SearchEngineKind.DuckDuckGo,
+            SearchEngineKind.Bing, SearchEngineKind.Mojeek];
+        Exception? lastError = null;
+        foreach (var provider in fallbackOrder.Distinct())
+        {
+            using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            budget.CancelAfter(TimeSpan.FromSeconds(11));
+            try
+            {
+                progress?.Report($"Получаю стартовые ссылки: {ProviderName(provider)}…");
+                var result = await DiscoverAsync(client, query, provider, budget.Token);
+                if (result.Count > 0) return result;
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            { lastError = new TimeoutException($"{ProviderName(provider)} не ответил вовремя."); }
+            catch (HttpRequestException ex) { lastError = ex; }
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        throw new InvalidOperationException(
+            "Ни одна доступная поисковая система не вернула читаемые стартовые ссылки. " +
+            "Проверьте соединение или выберите другую систему в настройках.", lastError);
+    }
+
+    private static async Task<List<NexusSearchCandidate>> DiscoverAsync(HttpClient client, string query,
+        SearchEngineKind provider, CancellationToken cancellationToken)
+    {
+        var providerUrl = BuildProviderUrl(provider, query);
         var html = await client.GetStringAsync(providerUrl, cancellationToken);
         var providerHost = new Uri(providerUrl).Host;
         var result = new List<NexusSearchCandidate>();
@@ -173,18 +208,31 @@ public static partial class NexusSearchService
         catch { return candidate; }
     }
 
-    private static string BuildProviderUrl(string query)
+    private static string BuildProviderUrl(SearchEngineKind provider, string query)
     {
         var escaped = Uri.EscapeDataString(query);
-        return SettingsService.Current.SearchEngine switch
+        return provider switch
         {
             SearchEngineKind.Brave => $"https://search.brave.com/search?q={escaped}&source=web",
             SearchEngineKind.Startpage => $"https://www.startpage.com/sp/search?query={escaped}",
             SearchEngineKind.Google => $"https://www.google.com/search?q={escaped}&num=10",
             SearchEngineKind.Yandex => $"https://yandex.ru/search/?text={escaped}",
+            SearchEngineKind.Bing => $"https://www.bing.com/search?q={escaped}&count=10",
+            SearchEngineKind.Mojeek => $"https://www.mojeek.com/search?q={escaped}",
             _ => $"https://html.duckduckgo.com/html/?q={escaped}"
         };
     }
+
+    private static string ProviderName(SearchEngineKind provider) => provider switch
+    {
+        SearchEngineKind.Brave => "Brave Search",
+        SearchEngineKind.Startpage => "Startpage",
+        SearchEngineKind.Google => "Google",
+        SearchEngineKind.Yandex => "Яндекс",
+        SearchEngineKind.Bing => "Bing",
+        SearchEngineKind.Mojeek => "Mojeek",
+        _ => "DuckDuckGo"
+    };
 
     private static string UnwrapResultUrl(string value)
     {
@@ -199,6 +247,23 @@ public static partial class NexusSearchService
         {
             var match = Regex.Match(uri.Query, @"(?:^|[?&])q=([^&]+)", RegexOptions.IgnoreCase);
             if (match.Success) return Uri.UnescapeDataString(match.Groups[1].Value.Replace('+', ' '));
+        }
+        if (uri.Host.Contains("bing.", StringComparison.OrdinalIgnoreCase) && uri.AbsolutePath.StartsWith("/ck/", StringComparison.OrdinalIgnoreCase))
+        {
+            var match = Regex.Match(uri.Query, @"(?:^|[?&])u=([^&]+)", RegexOptions.IgnoreCase);
+            if (match.Success)
+            {
+                var encoded = Uri.UnescapeDataString(match.Groups[1].Value);
+                if (encoded.StartsWith("a1", StringComparison.Ordinal)) encoded = encoded[2..];
+                encoded = encoded.Replace('-', '+').Replace('_', '/');
+                encoded = encoded.PadRight(encoded.Length + (4 - encoded.Length % 4) % 4, '=');
+                try
+                {
+                    var decoded = Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+                    if (Uri.TryCreate(decoded, UriKind.Absolute, out var target)) return target.AbsoluteUri;
+                }
+                catch (FormatException) { }
+            }
         }
         return uri.AbsoluteUri;
     }
@@ -229,6 +294,8 @@ public static partial class NexusSearchService
         host.Contains("startpage.", StringComparison.OrdinalIgnoreCase) ||
         host.Contains("google.", StringComparison.OrdinalIgnoreCase) ||
         host.Contains("yandex.", StringComparison.OrdinalIgnoreCase) ||
+        host.Contains("bing.", StringComparison.OrdinalIgnoreCase) ||
+        host.Contains("mojeek.", StringComparison.OrdinalIgnoreCase) ||
         host.Contains("brave.", StringComparison.OrdinalIgnoreCase);
 
     private static string ExtractReadableText(string html, int maximum)

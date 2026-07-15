@@ -83,6 +83,8 @@ public static class UrlService
             Models.SearchEngineKind.Startpage => $"https://www.startpage.com/sp/search?query={escaped}",
             Models.SearchEngineKind.Google => $"https://www.google.com/search?q={escaped}",
             Models.SearchEngineKind.Yandex => $"https://yandex.ru/search/?text={escaped}",
+            Models.SearchEngineKind.Bing => $"https://www.bing.com/search?q={escaped}",
+            Models.SearchEngineKind.Mojeek => $"https://www.mojeek.com/search?q={escaped}",
             _ => $"https://duckduckgo.com/?q={escaped}"
         };
     }
