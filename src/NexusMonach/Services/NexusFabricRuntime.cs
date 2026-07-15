@@ -20,6 +20,33 @@ public static class NexusFabricRuntime
 
     public static bool IsAvailable => Status.IsAvailable;
 
+    public static string ModelRoutingSummary =>
+        "Fabric Router · " +
+        $"Qwen: текст/перевод {(AiModelCatalog.TextReady ? "✓" : "—")} · " +
+        $"Whisper: речь {(AiModelCatalog.SpeechReady ? "✓" : "—")} · " +
+        $"SmolVLM: фото {(AiModelCatalog.VisionReady ? "✓" : "—")} · " +
+        $"E5: смысл {(AiModelCatalog.SemanticReady ? "✓" : "—")} · по требованию";
+
+    public static async Task<string> AskTextAsync(string systemPrompt, string userPrompt,
+        CancellationToken cancellationToken = default)
+    {
+        var model = await LocalAiService.GetPreferredModelAsync(cancellationToken)
+                    ?? throw new InvalidOperationException(AiModelCatalog.MissingTextRuntimeMessage);
+        return await LocalAiService.AskAsync(model, systemPrompt, userPrompt, cancellationToken);
+    }
+
+    public static Task<string> UnderstandImageAsync(byte[] image,
+        CancellationToken cancellationToken = default) =>
+        LocalAiService.DescribeImageForSearchAsync(AiModelCatalog.VisionModelId, image, cancellationToken);
+
+    public static Task<string> TranscribeSpeechAsync(byte[] wav,
+        CancellationToken cancellationToken = default) =>
+        WhisperService.TranscribeAsync(wav, cancellationToken);
+
+    public static Task<List<float>> EmbedSemanticsAsync(string text,
+        CancellationToken cancellationToken = default) =>
+        SemanticEmbeddingService.EmbedAsync(text, cancellationToken);
+
     public static void Initialize()
     {
         lock (Sync)

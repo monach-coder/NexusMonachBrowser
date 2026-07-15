@@ -182,7 +182,7 @@
 
             <Button Grid.Column="6" Content="RU" Style="{StaticResource IconButton}" FontFamily="Segoe UI"
                     FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource GoldBrush}"
-                    ToolTip="Локальный перевод страницы или субтитров видео" Click="TranslateMenu_Click">
+                    ToolTip="Локальный перевод страницы или звука видео" Click="TranslateMenu_Click">
                 <Button.ContextMenu>
                     <ContextMenu>
                         <MenuItem Header="Перевести страницу" Click="TranslateTop_Click" />

@@ -99,8 +99,25 @@ public sealed class NexusIntelligenceFabric : INexusIntelligenceFabric
                               "{\"summary\":\"...\",\"findings\":[{\"claim\":\"...\",\"sourceIds\":[\"s1\"],\"confidence\":\"высокая|средняя|низкая\"}]," +
                               "\"conflicts\":[\"...\"],\"missingInformation\":[\"...\"],\"recommendation\":\"...\"}.";
         var answer = await _host!.AskLocalTextModelAsync(system, userPrompt, cancellationToken);
-        var result = JsonSerializer.Deserialize<NexusAgentSummary>(ExtractJson(answer), JsonOptions)
-                     ?? throw new InvalidOperationException("Модель не вернула исследовательскую сводку.");
+        NexusAgentSummary result;
+        try
+        {
+            result = JsonSerializer.Deserialize<NexusAgentSummary>(ExtractJson(answer), JsonOptions)
+                     ?? throw new JsonException("Пустой JSON.");
+        }
+        catch (JsonException)
+        {
+            var plain = Regex.Replace(answer, "[{}\\[\\]\\\"]", " ")
+                .Replace("\\n", " ", StringComparison.Ordinal)
+                .Replace("\\r", " ", StringComparison.Ordinal);
+            plain = Regex.Replace(plain, @"\s{2,}", " ").Trim();
+            if (string.IsNullOrWhiteSpace(plain))
+                throw new InvalidOperationException("Локальная модель вернула пустой анализ.");
+            result = new NexusAgentSummary(
+                plain[..Math.Min(plain.Length, 6_000)], [], [],
+                ["Маленькая модель не смогла сформировать структурированный JSON; показан безопасный текстовый результат."],
+                "Проверьте ключевые выводы по указанным источникам.");
+        }
         return result with
         {
             Findings = (result.Findings ?? []).Take(20).ToArray(),
@@ -152,7 +169,32 @@ public sealed class NexusIntelligenceFabric : INexusIntelligenceFabric
         value = Regex.Replace(value, "```(?:json)?|```", string.Empty, RegexOptions.IgnoreCase).Trim();
         var start = value.IndexOf('{');
         var end = value.LastIndexOf('}');
-        return start >= 0 && end > start ? value[start..(end + 1)] : value;
+        return RepairJsonStrings(start >= 0 && end > start ? value[start..(end + 1)] : value);
+    }
+
+    private static string RepairJsonStrings(string json)
+    {
+        var result = new System.Text.StringBuilder(json.Length + 32);
+        var inString = false;
+        var escaped = false;
+        foreach (var character in json)
+        {
+            if (!inString)
+            {
+                result.Append(character);
+                if (character == '"') inString = true;
+                continue;
+            }
+            if (escaped) { result.Append(character); escaped = false; continue; }
+            if (character == '\\') { result.Append(character); escaped = true; continue; }
+            if (character == '"') { result.Append(character); inString = false; continue; }
+            result.Append(character switch
+            {
+                '\r' => "\\r", '\n' => "\\n", '\t' => "\\t", '\b' => "\\b", '\f' => "\\f",
+                < ' ' => $"\\u{(int)character:x4}", _ => character.ToString()
+            });
+        }
+        return result.ToString();
     }
 
     public void Dispose()

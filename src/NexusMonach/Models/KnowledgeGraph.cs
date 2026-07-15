@@ -112,12 +112,6 @@ public sealed class TranslationResponse
     public List<TranslationSegment> Items { get; set; } = [];
 }
 
-public sealed class VideoCaptionSegment : TranslationSegment
-{
-    public double Start { get; set; }
-    public double End { get; set; }
-}
-
 public sealed class AudioCaptureResult
 {
     public bool Success { get; set; }

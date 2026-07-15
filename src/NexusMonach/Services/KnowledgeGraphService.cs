@@ -50,7 +50,7 @@ public static class KnowledgeGraphService
         try
         {
             semantics = await LocalIntelligenceService.AnalyzePageAsync(title, url, text, cancellationToken);
-            embedding = await SemanticEmbeddingService.EmbedAsync(
+            embedding = await NexusFabricRuntime.EmbedSemanticsAsync(
                 title + "\n" + semantics.Summary + "\n" + text[..Math.Min(text.Length, 12_000)], cancellationToken);
         }
         finally { SemanticGate.Release(); }
@@ -106,7 +106,7 @@ public static class KnowledgeGraphService
             return snapshot.Nodes.OrderByDescending(x => x.IsPinned).ThenByDescending(x => x.LastVisitedAtUtc)
                 .Take(180).Select(x => new KnowledgeSearchHit { Node = x, Score = 1, MatchReason = "недавняя страница" }).ToArray();
 
-        var queryEmbedding = await SemanticEmbeddingService.EmbedAsync(query, cancellationToken);
+        var queryEmbedding = await NexusFabricRuntime.EmbedSemanticsAsync(query, cancellationToken);
         var words = ExtractQueryWords(query);
         var now = DateTime.UtcNow;
         return snapshot.Nodes.Select(node =>

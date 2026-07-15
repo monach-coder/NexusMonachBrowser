@@ -17,7 +17,10 @@ for await (const line of input) {
   try {
     const request = JSON.parse(line);
     const text = typeof request.text === 'string' ? request.text : '';
-    const value = await extractor('passage: ' + text, { pooling: 'mean', normalize: true });
+    // E5 uses different prefixes for a query and a document. Callers that
+    // already selected one must not be silently converted into a passage.
+    const prepared = /^(query|passage):\s/i.test(text) ? text : 'passage: ' + text;
+    const value = await extractor(prepared, { pooling: 'mean', normalize: true });
     process.stdout.write(JSON.stringify(Array.from(value.data)) + '\n');
   } catch {
     process.stdout.write('[]\n');

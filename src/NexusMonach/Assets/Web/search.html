@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+  <title>Поиск Nexus</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0b1018;--panel:rgba(17,28,40,.76);--line:#294054;--text:#eef4f8;--muted:#91a2b4;--aqua:#36d7c4;--gold:#dab96a}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 15% 5%,rgba(54,215,196,.09),transparent 32%),var(--bg);color:var(--text);font:14px "Segoe UI",system-ui,sans-serif}
+    main{width:min(980px,calc(100% - 34px));margin:0 auto;padding:34px 0 70px}.top{display:flex;align-items:center;gap:12px}.logo{width:42px;height:42px}.top strong{font-size:18px;letter-spacing:.08em}.provider{color:var(--muted);font-size:11px;margin-top:3px}
+    h1{font-size:25px;margin:28px 0 9px}.status{color:var(--aqua);padding:14px 16px;border:1px solid #295a5d;border-radius:14px;background:rgba(54,215,196,.06)}
+    .answer{display:none;margin-top:18px;padding:18px;border:1px solid #3a596e;border-radius:16px;background:var(--panel);line-height:1.6}.answer b{display:block;color:var(--gold);margin-bottom:7px}
+    .results{display:grid;gap:12px;margin-top:16px}.result{padding:17px 18px;border:1px solid var(--line);border-radius:15px;background:var(--panel);cursor:pointer;transition:.16s}.result:hover{border-color:#4b7c80;transform:translateY(-1px)}
+    .result h2{font-size:17px;margin:0 0 5px;color:#dffefa}.url{color:var(--aqua);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.result p{color:#c9d4dd;line-height:1.55;margin:10px 0 0}.score{float:right;color:var(--gold);font-size:11px}.disclosure{color:#6f8294;font-size:11px;line-height:1.45;margin:22px 3px}
+  </style>
+</head>
+<body><main>
+  <div class="top"><img class="logo" src="logo.svg" alt=""><div><strong>NEXUS SEARCH</strong><div class="provider">локальный анализ · проверяемые источники</div></div></div>
+  <h1 id="query">Поиск</h1>
+  <div class="status" id="status">Подготавливаю исследование…</div>
+  <section class="answer" id="answer"><b>КРАТКИЙ ОТВЕТ</b><span></span></section>
+  <section class="results" id="results"></section>
+  <div class="disclosure" id="disclosure"></div>
+</main><script>
+  const send = message => window.chrome?.webview?.postMessage(message);
+  const params = new URLSearchParams(location.search); document.getElementById('query').textContent = params.get('q') || 'Поиск Nexus';
+  window.nexusStatus = value => document.getElementById('status').textContent = value;
+  window.nexusRender = report => {
+    const status=document.getElementById('status'), answer=document.getElementById('answer'), results=document.getElementById('results');
+    status.style.display='none'; answer.style.display='block'; answer.querySelector('span').textContent=report.directAnswer||''; results.textContent='';
+    for(const item of report.items||[]){const card=document.createElement('article');card.className='result';card.tabIndex=0;
+      const score=document.createElement('span');score.className='score';score.textContent=`совпадение ${Math.round(item.score*10)}%`;
+      const title=document.createElement('h2');title.textContent=item.title;const url=document.createElement('div');url.className='url';url.textContent=item.url;
+      const text=document.createElement('p');text.textContent=item.answer||item.snippet;card.append(score,title,url,text);
+      const open=()=>send({type:'result-open',value:item.url,query:report.query});card.addEventListener('click',open);card.addEventListener('keydown',e=>{if(e.key==='Enter')open()});results.append(card)}
+    document.getElementById('disclosure').textContent=report.disclosure||'';
+  };
+  send({type:'search-ready',value:params.get('q')||''});
+</script></body></html>
