@@ -18,8 +18,8 @@ public static class PhishingProtectionService
 
     private static readonly Dictionary<string, string[]> OfficialBrands = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["google"] = ["google.com"],
-        ["microsoft"] = ["microsoft.com", "live.com", "office.com"],
+        ["google"] = ["google.com", "google.ru", "google.co.uk", "google.de", "google.fr", "googleusercontent.com"],
+        ["microsoft"] = ["microsoft.com", "microsoftonline.com", "live.com", "office.com"],
         ["github"] = ["github.com", "githubusercontent.com"],
         ["paypal"] = ["paypal.com"],
         ["apple"] = ["apple.com", "icloud.com"],

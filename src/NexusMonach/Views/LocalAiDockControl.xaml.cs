@@ -114,30 +114,14 @@ public partial class LocalAiDockControl : UserControl
                 await Task.Delay(1000, session.Token);
             }
             await preparation;
-            var useSystemLoopback = false;
             var lastSubtitle = string.Empty;
             while (!session.IsCancellationRequested && !await tab.ShouldStopLiveAudioTranslationAsync())
             {
-                byte[] wav;
-                if (!useSystemLoopback)
-                {
-                    await tab.UpdateLiveAudioTranslationStatusAsync("Слушаю аудиодорожку текущего видео…");
-                    var capture = await tab.CaptureActiveVideoAudioAsync(7, session.Token);
-                    if (capture.Success)
-                        wav = Convert.FromBase64String(capture.WavBase64);
-                    else
-                    {
-                        useSystemLoopback = true;
-                        await tab.UpdateLiveAudioTranslationStatusAsync(
-                            "Плеер не отдал дорожку. Слушаю системный выход Windows 7 секунд…");
-                        wav = await SystemAudioCaptureService.CaptureWavAsync(7, session.Token);
-                    }
-                }
-                else
-                {
-                    await tab.UpdateLiveAudioTranslationStatusAsync("Слушаю системный выход Windows 7 секунд…");
-                    wav = await SystemAudioCaptureService.CaptureWavAsync(7, session.Token);
-                }
+                // captureStream()/AudioContext inside WebView2 destabilises some GPU/DRM
+                // renderers. The Windows loopback path is process-external, works for
+                // cross-origin players and is the single supported capture path.
+                await tab.UpdateLiveAudioTranslationStatusAsync("Слушаю системный выход Windows 7 секунд…");
+                var wav = await SystemAudioCaptureService.CaptureWavAsync(7, session.Token);
                 await tab.UpdateLiveAudioTranslationStatusAsync("Whisper распознаёт речь локально…");
                 var transcript = await NexusFabricRuntime.TranscribeSpeechAsync(wav, session.Token);
                 if (string.IsNullOrWhiteSpace(transcript)) continue;
@@ -156,7 +140,7 @@ public partial class LocalAiDockControl : UserControl
         catch (Exception ex)
         {
             if (ReferenceEquals(Volatile.Read(ref _videoCancellation), session))
-                GlassDialogWindow.Show(ex.Message, "Перевод звука видео", MessageBoxButton.OK, MessageBoxImage.Information);
+                await tab.EndLiveAudioTranslationAsync("Ошибка перевода: " + ex.Message);
         }
         finally
         {
@@ -319,9 +303,10 @@ public partial class LocalAiDockControl : UserControl
                 query = string.IsNullOrWhiteSpace(query) ? imageQuery : query + ". По фотографии: " + imageQuery;
                 ShoppingQueryBox.Text = query;
             }
-            StatusText.Text = "Поиск на текущем сайте…";
-            var searched = await _tab.SearchCurrentSiteForAgentAsync(query);
-            if (searched) await Task.Delay(TimeSpan.FromSeconds(5), _cancellation.Token);
+            StatusText.Text = "DOM-агент находит поиск и ждёт обновления каталога…";
+            var searched = await _tab.SearchCurrentSiteForAgentAsync(query, _cancellation.Token);
+            if (!searched)
+                StatusText.Text = "Поле поиска не найдено — анализирую открытый каталог и его страницы…";
             var rawItems = new List<string>();
             var itemKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { _tab.CurrentUrl };
@@ -350,10 +335,11 @@ public partial class LocalAiDockControl : UserControl
                     catch (JsonException) { }
                 }
                 await AppendCurrentPageAsync();
-                for (var scrollRound = 0; scrollRound < 3 && rawItems.Count < 150; scrollRound++)
+                for (var scrollRound = 0; scrollRound < 6 && rawItems.Count < 150; scrollRound++)
                 {
-                    await _tab.ScrollShoppingResultsAsync();
+                    var catalogChanged = await _tab.ScrollShoppingResultsAsync();
                     await AppendCurrentPageAsync();
+                    if (!catalogChanged) break;
                 }
                 var next = await _tab.GetNextShoppingPageUrlAsync();
                 if (page == 5) break;
@@ -378,7 +364,7 @@ public partial class LocalAiDockControl : UserControl
                 throw new InvalidOperationException("Карточки товаров не извлечены. " + diagnosis);
             }
             var cards = "[" + string.Join(",", rawItems) + "]";
-            StatusText.Text = $"Nexus Fast Intelligence сравнивает {count} результатов с {pages} страниц…";
+            StatusText.Text = $"Nexus Intelligence сопоставляет точные, похожие и частичные названия среди {count} карточек…";
             var report = await LocalIntelligenceService.AnalyzeShoppingResultsAsync(
                 query, _tab.CurrentHost, cards, _cancellation.Token);
             ShowShoppingCards(report);
