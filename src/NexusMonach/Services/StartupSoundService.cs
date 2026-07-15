@@ -1,5 +1,6 @@
 using System.Media;
 using System.Runtime.InteropServices;
+using System.Speech.Synthesis;
 
 namespace NexusMonach.Services;
 
@@ -13,6 +14,9 @@ public static class StartupSoundService
             try
             {
                 PlayChime();
+                // SoundPlayer освобождает аудиоустройство асинхронно на части систем.
+                // Короткая пауза не даёт началу фразы потеряться сразу после сигнала.
+                Thread.Sleep(180);
                 SpeakBrandName();
                 WriteDiagnostic("OK: chime and spoken brand completed.");
                 completion.TrySetResult(true);
@@ -81,6 +85,50 @@ public static class StartupSoundService
 
     private static void SpeakBrandName()
     {
+        try
+        {
+            SpeakWithWindowsSynthesizer();
+        }
+        catch (Exception primaryError)
+        {
+            WriteDiagnostic($"System.Speech failed; trying SAPI fallback: {primaryError}");
+            SpeakWithSapiFallback();
+        }
+    }
+
+    private static void SpeakWithWindowsSynthesizer()
+    {
+        using var synthesizer = new SpeechSynthesizer();
+        var voices = synthesizer.GetInstalledVoices()
+            .Where(item => item.Enabled)
+            .Select(item => item.VoiceInfo)
+            .ToArray();
+
+        if (voices.Length == 0)
+            throw new InvalidOperationException("В Windows не найдено ни одного установленного голоса.");
+
+        var selected = voices.FirstOrDefault(voice => IsRussian(voice) && voice.Gender == VoiceGender.Male)
+                       ?? voices.FirstOrDefault(voice => voice.Gender == VoiceGender.Male)
+                       ?? voices.FirstOrDefault(IsRussian)
+                       ?? voices[0];
+
+        synthesizer.SelectVoice(selected.Name);
+        synthesizer.SetOutputToDefaultAudioDevice();
+        synthesizer.Rate = -1;
+        synthesizer.Volume = 95;
+
+        var phrase = IsRussian(selected) ? "Нексус Монах" : "Nexus Monach";
+        WriteDiagnostic(
+            $"Speaking with System.Speech voice '{selected.Name}', culture={selected.Culture.Name}, " +
+            $"gender={selected.Gender}, output=default.");
+        synthesizer.Speak(phrase);
+    }
+
+    private static bool IsRussian(VoiceInfo voice) =>
+        voice.Culture.Name.StartsWith("ru", StringComparison.OrdinalIgnoreCase);
+
+    private static void SpeakWithSapiFallback()
+    {
         object? voiceObject = null;
         try
         {
@@ -89,12 +137,39 @@ public static class StartupSoundService
             voiceObject = Activator.CreateInstance(sapiType)
                           ?? throw new InvalidOperationException("Windows не создал SAPI.SpVoice.");
             dynamic voice = voiceObject;
+
+            dynamic russianMaleVoices = voice.GetVoices("Language=419;Gender=Male", "");
+            dynamic russianVoices = voice.GetVoices("Language=419", "");
             dynamic maleVoices = voice.GetVoices("Gender=Male", "");
-            if (maleVoices.Count > 0) voice.Voice = maleVoices.Item(0);
+            dynamic allVoices = voice.GetVoices("", "");
+
+            var phrase = "Нексус Монах";
+            if (russianMaleVoices.Count > 0)
+                voice.Voice = russianMaleVoices.Item(0);
+            else if (maleVoices.Count > 0)
+            {
+                voice.Voice = maleVoices.Item(0);
+                phrase = "Nexus Monach";
+            }
+            else if (russianVoices.Count > 0)
+                voice.Voice = russianVoices.Item(0);
+            else if (allVoices.Count > 0)
+            {
+                voice.Voice = allVoices.Item(0);
+                phrase = "Nexus Monach";
+            }
+            else
+                throw new InvalidOperationException("Windows SAPI не вернул доступных голосов.");
+
+            dynamic audioOutputs = voice.GetAudioOutputs("", "");
+            if (audioOutputs.Count > 0)
+                voice.AudioOutput = audioOutputs.Item(0);
+
             voice.Rate = -1;
-            voice.Volume = 92;
-            // Кириллическая запись одинаково читается русскими голосами Windows.
-            voice.Speak("Нексус Монах", 0);
+            voice.Volume = 95;
+            WriteDiagnostic($"Speaking with SAPI fallback; phrase='{phrase}', output=default.");
+            voice.Speak(phrase, 0);
+            voice.WaitUntilDone(-1);
         }
         finally
         {

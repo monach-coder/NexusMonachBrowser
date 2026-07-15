@@ -9,7 +9,7 @@
     <AssemblyName>NexusMonach</AssemblyName>
     <RootNamespace>NexusMonach</RootNamespace>
     <ApplicationIcon>Assets\nexus-monach.ico</ApplicationIcon>
-    <Version>2.7.1</Version>
+    <Version>2.7.2</Version>
     <Authors>CoderMonach; OpenAI Codex</Authors>
     <Product>Nexus Monach Browser</Product>
     <Description>Лёгкий приватный браузер на базе WebView2.</Description>
@@ -18,8 +18,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Nexus.Intelligence.Contracts\Nexus.Intelligence.Contracts.csproj" />
+    <ProjectReference Include="..\Nexus.Intelligence.Fabric\Nexus.Intelligence.Fabric.csproj" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
     <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="System.Speech" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>
