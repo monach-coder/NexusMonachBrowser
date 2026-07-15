@@ -224,7 +224,10 @@ public partial class MainWindow : Window
             previous.Cancel();
             previous.Dispose();
         }
-        var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(55));
+        // The first offline model start can take tens of seconds on a 16 GB PC.
+        // Individual AI stages have their own shorter budgets and deterministic
+        // fallbacks; this outer limit only protects the whole research session.
+        var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(150));
         _searchOperations[tab] = cancellation;
         try
         {

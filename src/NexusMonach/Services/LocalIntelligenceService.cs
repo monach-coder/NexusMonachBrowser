@@ -108,6 +108,10 @@ public static class LocalIntelligenceService
     public static async Task<ShoppingReport> AnalyzeShoppingResultsAsync(string query, string siteHost,
         string extractedCardsJson, CancellationToken cancellationToken = default)
     {
+        // Keep the small language model focused on plausible catalog matches. The
+        // deterministic lexical pass recognises an exact phrase, all query words,
+        // word-prefix similarities and finally partial matches in card text.
+        extractedCardsJson = RankShoppingCatalogJson(query, extractedCardsJson, 60);
         ShoppingReport? result = null;
         try
         {
@@ -226,6 +230,8 @@ public static class LocalIntelligenceService
         try
         {
             if (!AiModelCatalog.TextReady) return fallback;
+            using var modelBudget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            modelBudget.CancelAfter(TimeSpan.FromSeconds(58));
             var sources = candidates.Take(8).Select((item, index) => new
             {
                 id = index + 1,
@@ -239,7 +245,7 @@ public static class LocalIntelligenceService
                 "Отбери 3–5 наиболее полезных страниц. URL копируй без изменений. " +
                 "Отвечай только JSON: {\"answer\":\"краткий прямой ответ\",\"items\":[" +
                 "{\"title\":\"...\",\"url\":\"...\",\"summary\":\"что именно найдёт пользователь\",\"score\":0}] }.",
-                $"Запрос: {query}\nИсточники:\n{JsonSerializer.Serialize(sources)}", cancellationToken);
+                $"Запрос: {query}\nИсточники:\n{JsonSerializer.Serialize(sources)}", modelBudget.Token);
             var parsed = JsonSerializer.Deserialize<SearchAnalysisResponse>(ExtractJson(answer), JsonOptions);
             if (parsed?.Items is null || parsed.Items.Count == 0) return fallback;
             var allowed = candidates.ToDictionary(x => NormalizeProductUrl(x.Url), StringComparer.OrdinalIgnoreCase);
@@ -265,6 +271,7 @@ public static class LocalIntelligenceService
                 string.IsNullOrWhiteSpace(parsed.Answer) ? fallback.DirectAnswer : CompactSearchText(parsed.Answer, 1100),
                 items.Take(5).ToArray(), fallback.Disclosure);
         }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { return fallback; }
         catch (OperationCanceledException) { throw; }
         catch { return fallback; }
     }
@@ -328,7 +335,6 @@ public static class LocalIntelligenceService
     private static ShoppingReport BuildShoppingFallback(string query, string json)
     {
         var candidates = new List<ShoppingCandidate>();
-        var words = ExtractKeywords(query, 10).ToArray();
         try
         {
             using var document = JsonDocument.Parse(json);
@@ -337,8 +343,7 @@ public static class LocalIntelligenceService
                 var name = card.TryGetProperty("name", out var n) ? n.GetString() ?? string.Empty : string.Empty;
                 var text = card.TryGetProperty("text", out var t) ? t.GetString() ?? string.Empty : string.Empty;
                 if (string.IsNullOrWhiteSpace(name)) continue;
-                var searchable = (name + " " + text).ToLowerInvariant();
-                var match = words.Length == 0 ? 0.5 : words.Count(searchable.Contains) / (double)words.Length;
+                var match = ShoppingLexicalScore(query, name, text);
                 var price = card.TryGetProperty("price", out var p) ? p.GetString() : null;
                 var rating = card.TryGetProperty("rating", out var r) ? r.GetString() : null;
                 var buyers = card.TryGetProperty("buyers", out var b) ? b.GetString() : null;
@@ -348,7 +353,9 @@ public static class LocalIntelligenceService
                     Name = name, Price = MissingAsNoData(price), Rating = MissingAsNoData(rating),
                     Buyers = MissingAsNoData(buyers),
                     Url = NormalizeProductUrl(card.TryGetProperty("url", out var u) ? u.GetString() : null),
-                    Strengths = data > 1 ? "на странице есть несколько проверяемых показателей" : "соответствует тексту запроса",
+                    Strengths = match >= .94 ? "точное совпадение названия с запросом" :
+                        match >= .72 ? "совпала комбинация основных слов" :
+                        data > 1 ? "частичное совпадение и несколько проверяемых показателей" : "частичное совпадение с запросом",
                     Weaknesses = data < 2 ? "мало структурированных данных на карточке" : "нужна ручная проверка характеристик",
                     Score = Math.Clamp(4.5 + match * 4 + data * 0.45, 0, 10)
                 });
@@ -371,11 +378,74 @@ public static class LocalIntelligenceService
         };
     }
 
+    public static string RankShoppingCatalogJson(string query, string json, int maximum)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Array) return "[]";
+            var ranked = document.RootElement.EnumerateArray()
+                .Select(card =>
+                {
+                    var name = card.TryGetProperty("name", out var n) ? n.GetString() ?? string.Empty : string.Empty;
+                    var text = card.TryGetProperty("text", out var t) ? t.GetString() ?? string.Empty : string.Empty;
+                    var data = new[] { "price", "rating", "buyers" }
+                        .Count(key => card.TryGetProperty(key, out var value) && value.ValueKind == JsonValueKind.String &&
+                                      !string.IsNullOrWhiteSpace(value.GetString()));
+                    return new { Card = card.Clone(), Match = ShoppingLexicalScore(query, name, text), Data = data };
+                })
+                .Where(x => x.Match >= .12)
+                .OrderByDescending(x => x.Match)
+                .ThenByDescending(x => x.Data)
+                .Take(Math.Clamp(maximum, 5, 100))
+                .Select(x => x.Card)
+                .ToList();
+            return JsonSerializer.Serialize(ranked);
+        }
+        catch (JsonException) { return "[]"; }
+    }
+
+    private static double ShoppingLexicalScore(string query, string name, string text)
+    {
+        static string Normalize(string value) => Regex.Replace(value.ToLowerInvariant(), @"[^\p{L}\p{N}]+", " ").Trim();
+        string[] stop = ["найди", "найти", "ищу", "поиск", "покажи", "товар", "купить", "хочу", "нужен", "нужна",
+            "нужно", "пожалуйста", "фото", "фотографии", "описанию", "сравни", "find", "show", "buy", "product"];
+        var terms = Regex.Matches(Normalize(query), @"[\p{L}\p{N}]{3,}")
+            .Select(x => x.Value).Where(x => !stop.Contains(x, StringComparer.OrdinalIgnoreCase)).Distinct().Take(14).ToArray();
+        if (terms.Length == 0) return .5;
+        var nameNormalized = Normalize(name);
+        var textNormalized = Normalize(text);
+        var nameWords = nameNormalized.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var textWords = textNormalized.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var phrase = string.Join(' ', terms);
+        if (phrase.Length >= 5 && nameNormalized.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return 1;
+
+        static double TermMatch(string term, HashSet<string> words)
+        {
+            if (words.Contains(term)) return 1;
+            if (term.Length >= 4 && words.Any(word => word.StartsWith(term, StringComparison.OrdinalIgnoreCase) ||
+                                                     term.StartsWith(word, StringComparison.OrdinalIgnoreCase))) return .72;
+            if (term.Length >= 5 && words.Any(word => word.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                                                     term.Contains(word, StringComparison.OrdinalIgnoreCase))) return .52;
+            return 0;
+        }
+
+        var nameMatches = terms.Select(term => TermMatch(term, nameWords)).ToArray();
+        var textMatches = terms.Select(term => TermMatch(term, textWords)).ToArray();
+        var exactName = nameMatches.Count(x => x >= .99);
+        if (exactName == terms.Length) return .94;
+        if (nameMatches.All(x => x > 0)) return .78 + nameMatches.Average() * .12;
+        var coverage = nameMatches.Sum() / terms.Length;
+        var textCoverage = textMatches.Sum() / terms.Length;
+        return Math.Clamp(coverage * .78 + textCoverage * .22, 0, .93);
+    }
+
     private static string NormalizeProductUrl(string? value)
     {
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || uri.Scheme is not "http" and not "https")
             return string.Empty;
-        return uri.GetLeftPart(UriPartial.Path);
+        var builder = new UriBuilder(uri) { Fragment = string.Empty };
+        return UrlService.CleanTrackingParameters(builder.Uri.AbsoluteUri);
     }
 
     private static string ValidateTranslation(string value)

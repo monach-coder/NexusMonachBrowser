@@ -455,8 +455,11 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
               const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
               const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];window.__nexusSourceCaptionModes=[];
               if(video)for(const track of video.textTracks)if(track.label!=='Nexus Live RU'&&track.label!=='Nexus RU'){window.__nexusSourceCaptionModes.push({track,mode:track.mode});track.mode='disabled'}
-              if(!badge){badge=document.createElement('div');badge.id='nexus-live-translation';badge.dataset.nexusTranslationUi='true';badge.style.cssText='position:fixed;right:22px;top:22px;z-index:2147483647;display:flex;gap:10px;align-items:center;padding:10px 12px;border:1px solid #80ffffff;border-radius:12px;background:#b3101010;color:#fff;font:600 13px Segoe UI,sans-serif;backdrop-filter:blur(12px);';
-              const text=document.createElement('span');text.id='nexus-live-translation-status';badge.append(text);const stop=document.createElement('button');stop.textContent='Остановить';stop.style.cssText='border:1px solid #66ffffff;border-radius:8px;background:#26ffffff;color:#fff;padding:6px 9px;cursor:pointer';stop.onclick=()=>{window.__nexusStopAudioTranslation=true;text.textContent='Остановка после текущего фрагмента…'};badge.append(stop);document.documentElement.append(badge)}
+              const fullscreen=document.fullscreenElement;let host=fullscreen||(video?.parentElement)||document.body;
+              if(host!==document.body&&host!==document.documentElement&&getComputedStyle(host).position==='static'){host.dataset.nexusTranslationPosition='static';host.style.position='relative'}
+              window.__nexusVideoTranslationHost=host;
+              if(!badge){badge=document.createElement('div');badge.id='nexus-live-translation';badge.dataset.nexusTranslationUi='true';badge.style.cssText=(host===document.body||host===document.documentElement?'position:fixed':'position:absolute')+';right:12px;top:12px;z-index:2147483647;display:flex;gap:8px;align-items:center;padding:7px 9px;border:1px solid #66ffffff;border-radius:10px;background:#99000000;color:#fff;font:600 12px Segoe UI,sans-serif;backdrop-filter:blur(8px);pointer-events:auto;';
+              const text=document.createElement('span');text.id='nexus-live-translation-status';badge.append(text);const stop=document.createElement('button');stop.textContent='Стоп';stop.style.cssText='border:1px solid #66ffffff;border-radius:7px;background:#22ffffff;color:#fff;padding:4px 7px;cursor:pointer';stop.onclick=()=>{window.__nexusStopAudioTranslation=true;text.textContent='Остановка…'};badge.append(stop);host.append(badge)}
               document.getElementById('nexus-live-translation-status').textContent='Подготовка перевода звука…';})();
             """);
     }
@@ -481,8 +484,15 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         await Core.ExecuteScriptAsync("""
             ((text)=>{const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];if(!video)return;
               for(const track of video.textTracks)if(track.label==='Nexus Live RU')track.mode='disabled';
-              let overlay=document.getElementById('nexus-live-subtitle-overlay');if(!overlay){overlay=document.createElement('div');overlay.id='nexus-live-subtitle-overlay';overlay.dataset.nexusTranslationUi='true';overlay.style.cssText='position:fixed;z-index:2147483646;max-width:80%;padding:7px 12px;border-radius:8px;background:#a8000000;color:#fff;text-align:center;font:600 18px/1.35 Segoe UI,sans-serif;text-shadow:0 1px 2px #000;pointer-events:none';document.documentElement.append(overlay)}
-              const r=video.getBoundingClientRect();overlay.style.left=Math.max(8,r.left+r.width*.1)+'px';overlay.style.width=Math.max(180,r.width*.8)+'px';overlay.style.top=Math.max(8,r.bottom-70)+'px';overlay.textContent=text;clearTimeout(window.__nexusSubtitleTimer);window.__nexusSubtitleTimer=setTimeout(()=>overlay.textContent='',11000);
+              const fullscreen=document.fullscreenElement;let host=fullscreen||window.__nexusVideoTranslationHost||video.parentElement||document.body;
+              if(!host.isConnected)host=video.parentElement||document.body;
+              if(host!==document.body&&host!==document.documentElement&&getComputedStyle(host).position==='static'){host.dataset.nexusTranslationPosition='static';host.style.position='relative'}
+              window.__nexusVideoTranslationHost=host;
+              let overlay=document.getElementById('nexus-live-subtitle-overlay');
+              if(overlay&&overlay.parentElement!==host){overlay.remove();overlay=null}
+              if(!overlay){overlay=document.createElement('div');overlay.id='nexus-live-subtitle-overlay';overlay.dataset.nexusTranslationUi='true';overlay.style.cssText=(host===document.body||host===document.documentElement?'position:fixed':'position:absolute')+';left:8%;right:8%;bottom:6%;z-index:2147483646;padding:7px 12px;border-radius:8px;background:#b0000000;color:#fff;text-align:center;font:600 clamp(16px,2vw,24px)/1.35 Segoe UI,sans-serif;text-shadow:0 1px 3px #000;pointer-events:none;box-sizing:border-box';host.append(overlay)}
+              if(host===document.body||host===document.documentElement){const r=video.getBoundingClientRect();overlay.style.left=Math.max(8,r.left+r.width*.08)+'px';overlay.style.right='auto';overlay.style.width=Math.max(180,r.width*.84)+'px';overlay.style.bottom=Math.max(8,innerHeight-r.bottom+r.height*.06)+'px'}
+              overlay.textContent=text;clearTimeout(window.__nexusSubtitleTimer);window.__nexusSubtitleTimer=setTimeout(()=>overlay.textContent='',11000);
             })(__TEXT__);
             """.Replace("__TEXT__", JsonSerializer.Serialize(translatedText), StringComparison.Ordinal));
     }
@@ -495,7 +505,8 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
               window.__nexusSourceCaptionModes=[];window.__nexusStopAudioTranslation=true;
               document.getElementById('nexus-live-subtitle-overlay')?.remove();
               const badge=document.getElementById('nexus-live-translation');const text=document.getElementById('nexus-live-translation-status');
-              if(text)text.textContent=status;if(badge)setTimeout(()=>badge.remove(),1800)})(__STATUS__)
+              if(text)text.textContent=status;if(badge)setTimeout(()=>badge.remove(),1800);
+              const host=window.__nexusVideoTranslationHost;if(host?.dataset?.nexusTranslationPosition==='static'){host.style.removeProperty('position');delete host.dataset.nexusTranslationPosition}window.__nexusVideoTranslationHost=null})(__STATUS__)
             """.Replace("__STATUS__", JsonSerializer.Serialize(status), StringComparison.Ordinal));
     }
 
@@ -618,10 +629,12 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         return int.TryParse(json, out var count) ? count : 0;
     }
 
-    public async Task<bool> SearchCurrentSiteForAgentAsync(string query)
+    public async Task<bool> SearchCurrentSiteForAgentAsync(string query, CancellationToken cancellationToken = default)
     {
         if (Core is null || UrlService.IsInternal(CurrentUrl) || string.IsNullOrWhiteSpace(query)) return false;
-        var json = await Core.ExecuteScriptAsync($$"""
+        var beforeUrl = CurrentUrl;
+        var beforeFingerprint = await GetShoppingCatalogFingerprintAsync();
+        var searchScript = $$"""
             (() => {
               const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>80&&r.height>15&&s.display!=='none'&&s.visibility!=='hidden';};
               const inputs=[...document.querySelectorAll('input')].filter(visible).map(e=>{
@@ -640,8 +653,51 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                      e.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',code:'Enter',bubbles:true})); }
               return true;
             })();
+            """;
+        var json = await Core.ExecuteScriptAsync(searchScript);
+        if (!bool.TryParse(json, out var initialFound) || !initialFound)
+        {
+            // Many stores initially expose only a magnifier button. Opening that
+            // control is a reversible UI action; the agent still never purchases,
+            // signs in or submits anything except the explicit search query.
+            var openedJson = await Core.ExecuteScriptAsync("""
+                (()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>8&&r.height>8&&s.display!=='none'&&s.visibility!=='hidden'};
+                  const controls=[...document.querySelectorAll('button,[role="button"],a')].filter(visible);
+                  const search=controls.find(e=>/^(search|поиск|найти|искать)$/i.test(((e.innerText||'')+' '+(e.getAttribute('aria-label')||'')+' '+(e.title||'')).trim()));
+                  if(!search)return false;search.click();return true;})()
+                """);
+            if (bool.TryParse(openedJson, out var opened) && opened)
+            {
+                await Task.Delay(650, cancellationToken);
+                json = await Core.ExecuteScriptAsync(searchScript);
+            }
+        }
+        if (!bool.TryParse(json, out var found) || !found) return false;
+        for (var attempt = 0; attempt < 24; attempt++)
+        {
+            await Task.Delay(500, cancellationToken);
+            if (!CurrentUrl.Equals(beforeUrl, StringComparison.OrdinalIgnoreCase)) return true;
+            try
+            {
+                var current = await GetShoppingCatalogFingerprintAsync();
+                if (!string.IsNullOrWhiteSpace(current) && !current.Equals(beforeFingerprint, StringComparison.Ordinal))
+                    return true;
+            }
+            catch (Exception) { }
+        }
+        return true;
+    }
+
+    private async Task<string> GetShoppingCatalogFingerprintAsync()
+    {
+        if (Core is null) return string.Empty;
+        var json = await Core.ExecuteScriptAsync("""
+            (()=>{const selectors='[itemtype*="Product"],[data-product-id],[data-nm-id],[data-sku],article,li[class*="product" i],[class*="product-card" i],[role="listitem"]';
+              const nodes=[...document.querySelectorAll(selectors)].slice(0,120);const sample=nodes.slice(0,12).map(e=>(e.innerText||'').replace(/\s+/g,' ').slice(0,120)).join('|');
+              return location.href+'#'+nodes.length+'#'+document.documentElement.scrollHeight+'#'+sample;})()
             """);
-        return bool.TryParse(json, out var found) && found;
+        try { return JsonSerializer.Deserialize<string>(json) ?? string.Empty; }
+        catch (JsonException) { return string.Empty; }
     }
 
     public async Task<string> ExtractShoppingCardsAsync()
@@ -655,7 +711,8 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
               const currency=/(?:\d[\d\s.,]{0,14})\s*(?:₽|руб\.?|RUB|\$|€|£|¥|₸|₴)|(?:₽|руб\.?|RUB|\$|€|£|¥|₸|₴)\s*\d[\d\s.,]{0,14}/i;
               const ratingPattern=/(?:рейтинг|rating|оценка)?\s*[0-5][.,]\d\s*(?:из\s*5)?/i;
               const buyersPattern=/\d[\d\s.,]*\s*(?:купили|купило|покупок|заказов|отзыв(?:а|ов)?|оцен(?:ка|ок)|sold|reviews?|ratings?)/i;
-              const safeUrl=value=>{try{const u=new URL(value,location.href);if(!/^https?:$/.test(u.protocol)||u.origin!==location.origin)return '';u.hash='';return u.origin+u.pathname+u.search;}catch{return ''}};
+              const sameSite=(a,b)=>a===b||a.endsWith('.'+b)||b.endsWith('.'+a);
+              const safeUrl=value=>{try{const u=new URL(value,location.href);if(!/^https?:$/.test(u.protocol)||!sameSite(u.hostname,location.hostname))return '';u.hash='';return u.origin+u.pathname+u.search;}catch{return ''}};
               const add=(name,text,url,price='',rating='',buyers='',source='DOM')=>{
                 name=clean(name).slice(0,220);text=clean(text).slice(0,1200);url=safeUrl(url);
                 if(name.length<3)return;const key=(url||name).toLowerCase();if(seen.has(key))return;
@@ -685,7 +742,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 }catch{}
               }
 
-              const selectors='[itemtype*="Product"],[data-product-id],[data-nm-id],[data-sku],article,li[class*="product" i],div[class*="product-card" i],div[class*="productcard" i],div[class*="catalog" i] [class*="card" i],[role="listitem"]';
+              const selectors='[itemtype*="Product"],[itemscope][itemprop="itemListElement"],[data-product-id],[data-nm-id],[data-sku],[data-product],[data-testid*="product" i],article,li[class*="product" i],div[class*="product-card" i],div[class*="productcard" i],div[class*="catalog" i] [class*="card" i],[role="listitem"]';
               const nodes=[...new Set(document.querySelectorAll(selectors))].filter(visible);
               for(const e of nodes){
                 const text=clean(e.innerText); if(text.length<12||text.length>1800) continue;
@@ -715,17 +772,21 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     {
         if (Core is null || UrlService.IsInternal(CurrentUrl)) return null;
         var json = await Core.ExecuteScriptAsync("""
-            (()=>{const direct=document.querySelector('link[rel="next"],a[rel="next"]');if(direct?.href)return direct.href;
+            (()=>{const direct=document.querySelector('link[rel="next"],a[rel="next"],a[aria-label*="next" i],a[aria-label*="след" i]');if(direct?.href)return direct.href;
               const links=[...document.querySelectorAll('a[href],button')];
               const next=links.find(e=>{const t=((e.innerText||'')+' '+(e.getAttribute('aria-label')||'')+' '+(e.title||'')).trim().toLowerCase();return /^(next|следующ|далее|впер[её]д|›|»|下一页|次へ)/i.test(t)&&!e.disabled});
-              if(next?.href)return next.href;return null;})();
+              if(next?.href)return next.href;
+              const current=[...document.querySelectorAll('[aria-current="page"],.active,.current')].find(e=>/^\d+$/.test((e.textContent||'').trim()));
+              if(current){const wanted=Number((current.textContent||'').trim())+1;const numbered=[...document.querySelectorAll('a[href]')].find(a=>Number((a.textContent||'').trim())===wanted);if(numbered)return numbered.href}
+              const url=new URL(location.href);for(const key of ['page','p','pg'])if(url.searchParams.has(key)){const number=Number(url.searchParams.get(key));if(Number.isFinite(number)){url.searchParams.set(key,String(number+1));return url.href}}
+              return null;})();
             """);
         string? value;
         try { value = JsonSerializer.Deserialize<string>(json); }
         catch { return null; }
         if (!Uri.TryCreate(value, UriKind.Absolute, out var next) ||
             !Uri.TryCreate(CurrentUrl, UriKind.Absolute, out var current) ||
-            !next.Host.Equals(current.Host, StringComparison.OrdinalIgnoreCase) ||
+            !IsSameSite(next.Host, current.Host) ||
             next.Scheme is not ("http" or "https")) return null;
         return next.GetLeftPart(UriPartial.Path) + next.Query;
     }
@@ -734,7 +795,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     {
         if (Core is null || !Uri.TryCreate(url, UriKind.Absolute, out var target) ||
             !Uri.TryCreate(CurrentUrl, UriKind.Absolute, out var current) ||
-            !target.Host.Equals(current.Host, StringComparison.OrdinalIgnoreCase)) return false;
+            !IsSameSite(target.Host, current.Host)) return false;
         var source = new TaskCompletionSource<CoreWebView2NavigationCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
         void Handler(object? _, CoreWebView2NavigationCompletedEventArgs e) => source.TrySetResult(e);
         Core.NavigationCompleted += Handler;
@@ -757,19 +818,30 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     public async Task<bool> TryClickNextShoppingPageAsync()
     {
         if (Core is null) return false;
+        var before = await GetShoppingCatalogFingerprintAsync();
         var json = await Core.ExecuteScriptAsync("""
-            (()=>{const candidates=[...document.querySelectorAll('button,[role="button"]')];const next=candidates.find(e=>{const t=((e.innerText||'')+' '+(e.getAttribute('aria-label')||'')+' '+(e.title||'')).trim().toLowerCase();return /^(next|следующ|далее|впер[её]д|›|»|下一页|次へ)/i.test(t)&&!e.disabled&&e.getAttribute('aria-disabled')!=='true'});if(!next)return false;next.click();return true})();
+            (()=>{const candidates=[...document.querySelectorAll('button,[role="button"]')];let next=candidates.find(e=>{const t=((e.innerText||'')+' '+(e.getAttribute('aria-label')||'')+' '+(e.title||'')).trim().toLowerCase();return /^(next|следующ|далее|впер[её]д|›|»|下一页|次へ)/i.test(t)&&!e.disabled&&e.getAttribute('aria-disabled')!=='true'});
+              if(!next){const current=[...document.querySelectorAll('[aria-current="page"],.active,.current')].find(e=>/^\d+$/.test((e.textContent||'').trim()));if(current){const wanted=Number((current.textContent||'').trim())+1;next=candidates.find(e=>Number((e.textContent||'').trim())===wanted)}}
+              if(!next)return false;next.click();return true})();
             """);
         if (!bool.TryParse(json, out var clicked) || !clicked) return false;
-        await Task.Delay(2300);
+        for (var attempt = 0; attempt < 16; attempt++)
+        {
+            await Task.Delay(400);
+            var after = await GetShoppingCatalogFingerprintAsync();
+            if (!after.Equals(before, StringComparison.Ordinal)) return true;
+        }
         return true;
     }
 
-    public async Task ScrollShoppingResultsAsync()
+    public async Task<bool> ScrollShoppingResultsAsync()
     {
-        if (Core is null) return;
+        if (Core is null) return false;
+        var before = await GetShoppingCatalogFingerprintAsync();
         await Core.ExecuteScriptAsync("window.scrollTo({top:document.documentElement.scrollHeight,behavior:'smooth'});true");
-        await Task.Delay(1800);
+        await Task.Delay(1400);
+        var after = await GetShoppingCatalogFingerprintAsync();
+        return !before.Equals(after, StringComparison.Ordinal);
     }
 
     private void ResetNetworkSnapshot(string topLevelUrl)
@@ -930,7 +1002,9 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
             {
                 e.Cancel = true;
                 var owner = Window.GetWindow(View);
-                var warning = $"Возможная подмена адреса\n\n{phishing.Description}\n\nАдрес: {e.Uri}\n\nВсё равно открыть сайт?";
+                // Query strings on sign-in pages can contain opaque session identifiers.
+                // They are not useful for the decision and must never be copied into UI/logs.
+                var warning = $"Возможная подмена адреса\n\n{phishing.Description}\n\nАдрес: {StripSensitiveUrl(e.Uri)}\n\nВсё равно открыть сайт?";
                 var decision = owner is null
                     ? GlassDialogWindow.Show(warning, "Monach Anti-Phishing", MessageBoxButton.YesNo, MessageBoxImage.Stop)
                     : GlassDialogWindow.Show(owner, warning, "Monach Anti-Phishing", MessageBoxButton.YesNo, MessageBoxImage.Stop);

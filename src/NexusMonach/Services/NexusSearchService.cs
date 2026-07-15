@@ -33,7 +33,7 @@ public static partial class NexusSearchService
 
         progress?.Report("Получаю кандидатов у выбранной поисковой системы…");
         using var client = CreateClient();
-        var discovered = await DiscoverAsync(client, query, cancellationToken);
+        var discovered = await DiscoverAsync(client, BuildDiscoveryQuery(query), cancellationToken);
         if (discovered.Count == 0)
             throw new InvalidOperationException("Поисковая система не вернула читаемых ссылок. Попробуйте другой запрос или провайдера в настройках.");
 
@@ -51,19 +51,40 @@ public static partial class NexusSearchService
 
         if (AiModelCatalog.SemanticReady)
         {
-            progress?.Report("Nexus Semantics ранжирует страницы по смыслу запроса…");
-            var queryVector = await NexusFabricRuntime.EmbedSemanticsAsync("query: " + query, cancellationToken);
-            foreach (var item in enriched)
+            using var semanticBudget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            semanticBudget.CancelAfter(TimeSpan.FromSeconds(32));
+            try
             {
-                var text = "passage: " + item.Title + " " + item.Snippet[..Math.Min(item.Snippet.Length, 2400)];
-                var vector = await NexusFabricRuntime.EmbedSemanticsAsync(text, cancellationToken);
-                item.SemanticRelevance = Math.Max(0, Cosine(queryVector, vector));
+                progress?.Report("Nexus Semantics ранжирует страницы по смыслу запроса…");
+                var queryVector = await NexusFabricRuntime.EmbedSemanticsAsync("query: " + query, semanticBudget.Token);
+                foreach (var item in enriched)
+                {
+                    var text = "passage: " + item.Title + " " + item.Snippet[..Math.Min(item.Snippet.Length, 2400)];
+                    var vector = await NexusFabricRuntime.EmbedSemanticsAsync(text, semanticBudget.Token);
+                    item.SemanticRelevance = Math.Max(0, Cosine(queryVector, vector));
+                }
+                enriched = enriched.OrderByDescending(x => x.SemanticRelevance + x.LocalPreference * .1).ToList();
             }
-            enriched = enriched.OrderByDescending(x => x.SemanticRelevance + x.LocalPreference * .1).ToList();
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            { progress?.Report("Смысловое ранжирование заняло слишком долго — использую локальную быструю оценку…"); }
         }
 
         progress?.Report("Локальная модель сопоставляет факты и готовит выжимку…");
         return await LocalIntelligenceService.AnalyzeWebSearchAsync(query, enriched, cancellationToken);
+    }
+
+    private static string BuildDiscoveryQuery(string query)
+    {
+        var cleaned = Regex.Replace(query,
+            @"^(?:пожалуйста\s+)?(?:открой|открыть|покажи|показать|найди|найти|ищу|search|find|show|open)\s+",
+            string.Empty, RegexOptions.IgnoreCase).Trim();
+        // Translate only explicit search intent, never page content. This makes a
+        // Russian natural-language request for foreign-language sources useful to
+        // providers that otherwise treat every Russian word as a required token.
+        if (Regex.IsMatch(cleaned, @"новостн\p{L}*\s+сайт", RegexOptions.IgnoreCase) &&
+            Regex.IsMatch(cleaned, @"английск\p{L}*\s+язык", RegexOptions.IgnoreCase))
+            cleaned = "English language news websites";
+        return cleaned.Length >= 2 ? cleaned : query;
     }
 
     public static async Task RecordChoiceAsync(string query, string url)
