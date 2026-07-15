@@ -6,7 +6,7 @@ on:
       tag:
         description: Release tag
         required: true
-        default: v2.7.1
+        default: v2.7.2
 
 permissions:
   contents: write
@@ -22,6 +22,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22.17.0
+
+      - name: Verify repository and license hygiene
+        shell: powershell
+        run: ./scripts/Test-LicenseBoundary.ps1
 
       - name: Download pinned offline AI payload
         shell: powershell
@@ -80,6 +84,28 @@ jobs:
           dotnet build NexusMonach.sln --configuration Release -warnaserror
           ./scripts/Build-Portable.ps1
 
+      - name: Sign official Windows binaries when certificate is configured
+        shell: powershell
+        env:
+          SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
+          SIGNING_TIMESTAMP_URL: ${{ vars.WINDOWS_SIGNING_TIMESTAMP_URL }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_BASE64)) {
+            Write-Warning 'Authenticode certificate is not configured; release remains unsigned.'
+            exit 0
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP 'nexus-signing.pfx'
+          try {
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_CERTIFICATE_BASE64))
+            ./scripts/Sign-Release.ps1 -Directory dist/NexusMonach-Portable -CertificatePath $pfx `
+              -CertificatePassword $env:SIGNING_CERTIFICATE_PASSWORD -TimestampUrl $env:SIGNING_TIMESTAMP_URL
+            Remove-Item dist/NexusMonach-Portable-win-x64.zip -Force
+            Compress-Archive -Path dist/NexusMonach-Portable/* -DestinationPath dist/NexusMonach-Portable-win-x64.zip -CompressionLevel Optimal
+          } finally {
+            Remove-Item $pfx -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Publish GitHub release with models
         shell: powershell
         env:
@@ -87,14 +113,17 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           $notes = @'
-          Nexus Monach 2.7.1 Full Offline
+          Nexus Monach 2.7.2 Full Offline
 
           Includes pinned local Qwen3 0.6B, Whisper base q5_1, SmolVLM 500M and multilingual-e5-small.
           Model hashes are verified before every build. No model is downloaded while the browser is running.
+          The open Nexus Intelligence Fabric is built from the same repository and includes deep page analysis,
+          controlled same-origin research and an agent summary with sources, conflicts and missing information.
+          See CHANGELOG.md for privacy, compatibility and build details.
           '@
           cmd.exe /d /c "gh release view %TAG% >nul 2>nul"
           if ($LASTEXITCODE -eq 0) {
             gh release upload $env:TAG NexusMonach-AI-Pack-win-x64.zip dist/NexusMonach-Portable-win-x64.zip --clobber
           } else {
-            gh release create $env:TAG NexusMonach-AI-Pack-win-x64.zip dist/NexusMonach-Portable-win-x64.zip --title "Nexus Monach 2.7.1 Full Offline" --notes $notes
+            gh release create $env:TAG NexusMonach-AI-Pack-win-x64.zip dist/NexusMonach-Portable-win-x64.zip --title "Nexus Monach 2.7.2 Full Offline" --notes $notes
           }

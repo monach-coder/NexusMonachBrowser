@@ -126,6 +126,7 @@ public partial class MainWindow : Window
                 NavigateActive(e.Value);
         };
         tab.SettingsRequested += (_, _) => Dispatcher.Invoke(ShowSettings);
+        tab.StatusMessageRequested += message => Dispatcher.Invoke(() => NetworkStatusText.Text = message);
         tab.CreatePopupAsync = CreatePopupAsync;
         var insertIndex = insertAfterActive ? TabsList.SelectedIndex + 1 : Tabs.Count;
         if (insertIndex >= 0 && insertIndex < Tabs.Count)
@@ -529,12 +530,6 @@ public partial class MainWindow : Window
         menu.PlacementTarget = button;
         menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
         menu.IsOpen = true;
-    }
-
-    private async void TranslateVideo_Click(object sender, RoutedEventArgs e)
-    {
-        if (ActiveTab?.Core is null) return;
-        await LocalAiDock.TranslateVideoSubtitlesAsync(ActiveTab);
     }
 
     private async void TranslateVideoAudio_Click(object sender, RoutedEventArgs e)

@@ -15,6 +15,9 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
+      - name: Verify repository and license hygiene
+        shell: pwsh
+        run: ./scripts/Test-LicenseBoundary.ps1
       - name: Build and package
         shell: powershell
         run: ./scripts/Build-Portable.ps1

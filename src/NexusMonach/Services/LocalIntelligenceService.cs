@@ -198,6 +198,16 @@ public static class LocalIntelligenceService
         return segments.Where(x => result.ContainsKey(x.Id)).Select(x => result[x.Id]).ToArray();
     }
 
+    public static async Task<string> TranslateToRussianAsync(string text, CancellationToken cancellationToken = default)
+    {
+        var model = await LocalAiService.GetPreferredModelAsync(cancellationToken)
+                    ?? throw new InvalidOperationException(AiModelCatalog.MissingTextRuntimeMessage);
+        var answer = await LocalAiService.AskAsync(model,
+            "Определи язык и переведи текст на естественный русский, даже если исходный язык использует кириллицу. " +
+            UntrustedDataRule + " Верни только перевод без пояснений, кавычек и Markdown.", text, cancellationToken);
+        return answer.Trim().Trim('"', '\'', '«', '»');
+    }
+
     public static async Task<string> DiagnoseAgentPageAsync(string query, string title, string url, string pageText,
         CancellationToken cancellationToken = default)
     {

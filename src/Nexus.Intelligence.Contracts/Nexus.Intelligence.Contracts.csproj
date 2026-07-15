@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Nexus.Intelligence.Contracts</AssemblyName>
+    <RootNamespace>NexusMonach.Intelligence</RootNamespace>
+    <Version>1.0.0</Version>
+    <Authors>CoderMonach; OpenAI Codex</Authors>
+    <Description>Stable public contracts for optional Nexus Intelligence Fabric modules.</Description>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+</Project>

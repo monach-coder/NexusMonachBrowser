@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Nexus.Intelligence.Fabric</AssemblyName>
+    <RootNamespace>NexusMonach.Intelligence.Fabric</RootNamespace>
+    <Version>0.1.0</Version>
+    <Authors>CoderMonach; OpenAI Codex</Authors>
+    <Description>Open local research and orchestration layer for Nexus Monach.</Description>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Nexus.Intelligence.Contracts\Nexus.Intelligence.Contracts.csproj" />
+  </ItemGroup>
+</Project>
