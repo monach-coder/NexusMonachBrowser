@@ -48,6 +48,7 @@ public partial class App : Application
             mainWindow.Opacity = 1;
             mainWindow.Activate();
             WhisperService.PrepareInBackground();
+            TranslationService.WarmUpInBackground();
             LocalAiService.WarmUpInBackground();
         }
         catch (Exception ex)
@@ -71,6 +72,7 @@ public partial class App : Application
         DevToolsAiBridgeService.Stop();
         NexusFabricRuntime.Shutdown();
         SemanticEmbeddingService.Stop();
+        TranslationService.Stop();
         LocalAiService.Shutdown();
         base.OnExit(e);
     }

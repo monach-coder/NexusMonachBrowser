@@ -6,7 +6,7 @@ namespace NexusMonach.Services;
 
 public static class SelectedTextTranslationService
 {
-    private sealed record PreparedSelection(string Id, string Text);
+    private sealed record PreparedSelection(string Id, string Text, string Language);
 
     public static void Attach(BrowserTab tab, CoreWebView2 core, Action<string> reportStatus)
     {
@@ -58,7 +58,8 @@ public static class SelectedTextTranslationService
             using var translationBudget = new CancellationTokenSource(TimeSpan.FromSeconds(90));
             var translated = LocalTranslationDictionary.TryTranslate(prepared.Text, out var instant)
                 ? instant
-                : await LocalIntelligenceService.TranslateToRussianAsync(prepared.Text, translationBudget.Token);
+                : await LocalIntelligenceService.TranslateToRussianAsync(
+                    prepared.Text, translationBudget.Token, prepared.Language);
             if (!ReferenceEquals(tab.Core, core) || !string.Equals(core.Source, source, StringComparison.Ordinal))
             {
                 reportStatus("Перевод отменён: вкладка перешла на другую страницу.");
@@ -133,6 +134,7 @@ public static class SelectedTextTranslationService
           if(start<0||end<=start||end>original.length)return null;
           const id=crypto.randomUUID();window.__nexusInlineTranslations??={pending:new Map()};
           window.__nexusInlineTranslations.pending.set(id,{document,node,original,start,end,text});selection.removeAllRanges();
-          return {id,text};})()
+          const language=(node.parentElement?.closest('[lang]')?.getAttribute('lang')||document.documentElement.lang||'').trim();
+          return {id,text,language};})()
         """;
 }

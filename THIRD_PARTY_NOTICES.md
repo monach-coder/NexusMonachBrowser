@@ -3,7 +3,13 @@
 Nexus Monach использует или распространяет компоненты, права на которые не
 принадлежат проекту. В частности, это может включать Microsoft WebView2,
 NAudio, llama.cpp, whisper.cpp, Node.js, Transformers.js и автономные модели
-Qwen, Whisper, multilingual-e5 и SmolVLM.
+Qwen, Whisper, multilingual-e5, SmolVLM и OPUS-MT.
+
+Специализированный перевод использует совместимые с Transformers.js ONNX-
+преобразования `Xenova/opus-mt-mul-en`, `Xenova/opus-mt-ko-en` и
+`Xenova/opus-mt-en-ru`, основанные на
+моделях Helsinki-NLP/OPUS-MT. Исходные модели опубликованы с лицензией
+Apache-2.0; точные ревизии и SHA-256 ONNX-файлов закреплены в release workflow.
 
 Каждый компонент и каждая модель сохраняют собственные условия лицензии,
 уведомления об авторских правах и ограничения. MIT-лицензия собственного кода

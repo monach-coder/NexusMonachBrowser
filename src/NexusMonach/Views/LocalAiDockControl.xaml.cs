@@ -64,10 +64,9 @@ public partial class LocalAiDockControl : UserControl
         Visibility = Visibility.Collapsed;
         _tab = tab;
         _pageUrl = tab.CurrentUrl;
-        await EnsureModelAsync();
-        if (_model is null)
+        if (!AiModelCatalog.TranslationReady)
         {
-            GlassDialogWindow.Show(AiModelCatalog.MissingTextRuntimeMessage,
+            GlassDialogWindow.Show(AiModelCatalog.MissingTranslationRuntimeMessage,
                 "Локальный перевод", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -108,10 +107,9 @@ public partial class LocalAiDockControl : UserControl
     {
         Visibility = Visibility.Collapsed;
         _tab = tab;
-        await EnsureModelAsync();
-        if (_model is null)
+        if (!AiModelCatalog.TranslationReady)
         {
-            GlassDialogWindow.Show(AiModelCatalog.MissingTextRuntimeMessage,
+            GlassDialogWindow.Show(AiModelCatalog.MissingTranslationRuntimeMessage,
                 "Перевод звука видео", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -140,13 +138,13 @@ public partial class LocalAiDockControl : UserControl
                 var wav = await SystemAudioCaptureService.CaptureWavAsync(7, session.Token);
                 await tab.UpdateLiveAudioTranslationStatusAsync("Whisper распознаёт речь локально…");
                 // Whisper first normalises multilingual speech to English. The
-                // small text model then has one stable English -> Russian task.
+                // dedicated OPUS stage then has one stable English -> Russian task.
                 var transcript = await NexusFabricRuntime.TranscribeSpeechToEnglishAsync(wav, session.Token);
                 if (string.IsNullOrWhiteSpace(transcript)) continue;
-                await tab.UpdateLiveAudioTranslationStatusAsync("Nexus Fast Intelligence переводит реплику…");
+                await tab.UpdateLiveAudioTranslationStatusAsync("Nexus OPUS переводит реплику…");
                 try
                 {
-                    var text = await LocalIntelligenceService.TranslateToRussianAsync(transcript, session.Token);
+                    var text = await LocalIntelligenceService.TranslateEnglishToRussianAsync(transcript, session.Token);
                     if (!string.IsNullOrWhiteSpace(text) &&
                         !text.Equals(lastSubtitle, StringComparison.OrdinalIgnoreCase))
                     {

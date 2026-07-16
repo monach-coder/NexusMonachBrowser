@@ -32,7 +32,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $ai = 'src/NexusMonach/AI'
-          New-Item -ItemType Directory -Force "$ai/llama","$ai/whisper","$ai/node","$ai/models/qwen3-0.6b","$ai/models/whisper","$ai/models/smolvlm-500m","$ai/models/multilingual-e5-small/onnx" | Out-Null
+          New-Item -ItemType Directory -Force "$ai/llama","$ai/whisper","$ai/node","$ai/models/qwen3-0.6b","$ai/models/whisper","$ai/models/smolvlm-500m","$ai/models/multilingual-e5-small/onnx","$ai/models/translation/mul-en/onnx","$ai/models/translation/ko-en/onnx","$ai/models/translation/en-ru/onnx" | Out-Null
           function Get-Asset($Url, $Out) { curl.exe -L --fail --retry 5 --retry-delay 3 $Url -o $Out; if ($LASTEXITCODE) { throw "Download failed: $Url" } }
 
           Get-Asset 'https://github.com/ggml-org/llama.cpp/releases/download/b9966/llama-b9966-bin-win-cpu-x64.zip' "$env:TEMP/llama.zip"
@@ -52,12 +52,37 @@ jobs:
             Get-Asset ($e5 + $file + '?download=true') "$ai/models/multilingual-e5-small/$file"
           }
 
+          # Dedicated Apache-2.0 OPUS models. Page/selection translation uses
+          # multilingual -> English -> Russian, with a dedicated Korean route;
+          # Whisper transcripts use only the English -> Russian stage.
+          # Revisions and large-file hashes are pinned.
+          $opusFiles = 'config.json','generation_config.json','source.spm','special_tokens_map.json','target.spm','tokenizer.json','tokenizer_config.json','vocab.json'
+          $mulEnRevision = '72a05e47cee89c718a9db4dc70d02fef3bc39de8'
+          $koEnRevision = 'd9fa1ac6008242100fecb4fff9b0a5917a1be81f'
+          $enRuRevision = 'e050376e960175e8ddc5cff85025dc8436cddd68'
+          foreach ($file in $opusFiles) {
+            Get-Asset "https://huggingface.co/Xenova/opus-mt-mul-en/resolve/$mulEnRevision/$file?download=true" "$ai/models/translation/mul-en/$file"
+            Get-Asset "https://huggingface.co/Xenova/opus-mt-ko-en/resolve/$koEnRevision/$file?download=true" "$ai/models/translation/ko-en/$file"
+            Get-Asset "https://huggingface.co/Xenova/opus-mt-en-ru/resolve/$enRuRevision/$file?download=true" "$ai/models/translation/en-ru/$file"
+          }
+          foreach ($file in 'encoder_model_quantized.onnx','decoder_model_merged_quantized.onnx') {
+            Get-Asset "https://huggingface.co/Xenova/opus-mt-mul-en/resolve/$mulEnRevision/onnx/$file?download=true" "$ai/models/translation/mul-en/onnx/$file"
+            Get-Asset "https://huggingface.co/Xenova/opus-mt-ko-en/resolve/$koEnRevision/onnx/$file?download=true" "$ai/models/translation/ko-en/onnx/$file"
+            Get-Asset "https://huggingface.co/Xenova/opus-mt-en-ru/resolve/$enRuRevision/onnx/$file?download=true" "$ai/models/translation/en-ru/onnx/$file"
+          }
+
           $expected = @{
             "$ai/models/qwen3-0.6b/Qwen3-0.6B-Q8_0.gguf"='9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031'
             "$ai/models/whisper/ggml-base-q5_1.bin"='422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898'
             "$ai/models/smolvlm-500m/SmolVLM-500M-Instruct-Q8_0.gguf"='9d4612de6a42214499e301494a3ecc2be0abdd9de44e663bda63f1152fad1bf4'
             "$ai/models/smolvlm-500m/mmproj-SmolVLM-500M-Instruct-Q8_0.gguf"='d1eb8b6b23979205fdf63703ed10f788131a3f812c7b1f72e0119d5d81295150'
             "$ai/models/multilingual-e5-small/onnx/model.onnx"='dd476dd0c2514e9b9be83aeb3853fac0763e0bdf4a71645407587d77c48a2d88'
+            "$ai/models/translation/mul-en/onnx/encoder_model_quantized.onnx"='5ce609a524375dbdd9c66b62b82b41abc667799022667ce424f20c245bd56925'
+            "$ai/models/translation/mul-en/onnx/decoder_model_merged_quantized.onnx"='6add167a0cd3f78aa298b8f927d2e8645e33cb17df11e92967f0c5b5703c8c4d'
+            "$ai/models/translation/ko-en/onnx/encoder_model_quantized.onnx"='210e1d2cb5b457cdeeffe288099cc9d1df9f13c35dc3d39fde4ba252af877380'
+            "$ai/models/translation/ko-en/onnx/decoder_model_merged_quantized.onnx"='e131732653a6d3cec42a8b65f8844980042b036bdaca931446bc4b3530bc3506'
+            "$ai/models/translation/en-ru/onnx/encoder_model_quantized.onnx"='97f28d8295d231b7da721ded06fa8c034787df2122cd8f85b904abdc4d15bd53'
+            "$ai/models/translation/en-ru/onnx/decoder_model_merged_quantized.onnx"='7efefcd793a5663bc204224a92a123524f3dfe2ffad59e5f73d6734d1b11ad04'
           }
           foreach ($path in $expected.Keys) {
             $actual = (Get-FileHash $path -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -67,6 +92,31 @@ jobs:
           Push-Location $ai
           npm install --no-audit --no-fund
           Pop-Location
+
+          # End-to-end translation smoke test. Presence and hashes alone are not
+          # enough: load every translation route and require Russian output.
+          $smoke = @{
+            id = 'release-smoke'
+            items = @(
+              @{ id='en'; text='This browser translates text locally.'; source='en' },
+              @{ id='de'; text='Diese Seite enthält wichtige Informationen.'; source='auto' },
+              @{ id='ja'; text='このページには重要な情報が含まれています。'; source='auto' },
+              @{ id='ko'; text='이 페이지에는 중요한 정보가 포함되어 있습니다.'; source='ko' }
+            )
+          } | ConvertTo-Json -Compress -Depth 5
+          $translationOutput = $smoke | & "$ai/node/node.exe" "$ai/adapters/translate.mjs" `
+            "$ai/models/translation/mul-en" "$ai/models/translation/en-ru" `
+            "$ai/models/translation/ko-en"
+          if ($LASTEXITCODE -ne 0) { throw "Translation smoke test process failed: $LASTEXITCODE" }
+          $replyLine = $translationOutput | Where-Object { $_ -like '{"id":"release-smoke"*' } | Select-Object -Last 1
+          if (-not $replyLine) { throw 'Translation smoke test returned no structured response.' }
+          $reply = $replyLine | ConvertFrom-Json
+          if ($reply.error -or $reply.items.Count -ne 4) { throw "Translation smoke test failed: $($reply.error)" }
+          foreach ($item in $reply.items) {
+            if (-not ($item.text -match '[А-Яа-яЁё]')) {
+              throw "Translation smoke test did not produce Russian for $($item.id): $($item.text)"
+            }
+          }
 
       - name: Create verified AI pack
         shell: powershell
@@ -115,7 +165,8 @@ jobs:
           $notes = @'
           Nexus Monach 2.7.2 Full Offline
 
-          Includes pinned local Qwen3 0.6B, Whisper base q5_1, SmolVLM 500M and multilingual-e5-small.
+          Includes pinned local Qwen3 0.6B, Whisper base q5_1, SmolVLM 500M,
+          multilingual-e5-small and dedicated OPUS multilingual/Korean/Russian translation models.
           Model hashes are verified before every build. No model is downloaded while the browser is running.
           The open Nexus Intelligence Fabric is built from the same repository and includes deep page analysis,
           controlled same-origin research and an agent summary with sources, conflicts and missing information.

@@ -25,15 +25,6 @@ public static class LocalAiService
         CancellationToken cancellationToken = default) =>
         RunTextModelAsync(systemPrompt, userPrompt, null, cancellationToken);
 
-    /// <summary>
-    /// Short deterministic route for translation. A bounded output prevents a
-    /// tiny model from spending seconds generating explanations after the text.
-    /// </summary>
-    public static Task<string> TranslateAsync(string systemPrompt, string userPrompt,
-        CancellationToken cancellationToken = default) =>
-        RunTextModelAsync(systemPrompt, userPrompt, null, cancellationToken,
-            Math.Clamp(userPrompt.Length / 2 + 96, 128, 768), 0.05);
-
     public static async Task<string> AskStreamingAsync(string model, string systemPrompt, string userPrompt,
         IProgress<string>? textProgress = null, CancellationToken cancellationToken = default)
     {

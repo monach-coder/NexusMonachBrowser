@@ -25,10 +25,17 @@ $requiredAi = @(
     (Join-Path $ai "llama\llama-mtmd-cli.exe"),
     (Join-Path $ai "node\node.exe"),
     (Join-Path $ai "adapters\semantic.mjs"),
+    (Join-Path $ai "adapters\translate.mjs"),
     (Join-Path $ai "models\whisper\ggml-base-q5_1.bin"),
     (Join-Path $ai "models\smolvlm-500m\SmolVLM-500M-Instruct-Q8_0.gguf"),
     (Join-Path $ai "models\smolvlm-500m\mmproj-SmolVLM-500M-Instruct-Q8_0.gguf"),
-    (Join-Path $ai "models\multilingual-e5-small\onnx\model.onnx")
+    (Join-Path $ai "models\multilingual-e5-small\onnx\model.onnx"),
+    (Join-Path $ai "models\translation\mul-en\onnx\encoder_model_quantized.onnx"),
+    (Join-Path $ai "models\translation\mul-en\onnx\decoder_model_merged_quantized.onnx"),
+    (Join-Path $ai "models\translation\ko-en\onnx\encoder_model_quantized.onnx"),
+    (Join-Path $ai "models\translation\ko-en\onnx\decoder_model_merged_quantized.onnx"),
+    (Join-Path $ai "models\translation\en-ru\onnx\encoder_model_quantized.onnx"),
+    (Join-Path $ai "models\translation\en-ru\onnx\decoder_model_merged_quantized.onnx")
 )
 $textModels = @(Get-ChildItem (Join-Path $ai "models\qwen3-0.6b") -Filter *.gguf -ErrorAction SilentlyContinue)
 $missingAi = @($requiredAi | Where-Object { -not (Test-Path $_) })

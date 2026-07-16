@@ -170,35 +170,29 @@ public static class LocalIntelligenceService
         foreach (var known in LocalTranslationDictionary.TranslateKnown(segments))
             result[known.Id] = known;
 
-        // Qwen stays resident in llama-server. Small batches plus a short output
-        // budget are much more reliable than a single page-sized JSON response.
+        if (!AiModelCatalog.TranslationReady)
+            throw new InvalidOperationException(AiModelCatalog.MissingTranslationRuntimeMessage);
+
+        // OPUS remains resident in one Node/ONNX process. It returns structured
+        // segments and cannot leak a chat banner or prompt into the page DOM.
         var pending = segments.Where(x => !result.ContainsKey(x.Id) && !LooksRussian(x.Text)).ToArray();
-        foreach (var group in pending.Chunk(4))
+        foreach (var group in pending.Chunk(12))
         {
             var completedBatch = new List<TranslationSegment>();
             try
             {
-                var input = string.Join("\n", group.Select(x =>
-                    $"<<<{x.Id}>>> {x.Text.Replace('\r', ' ').Replace('\n', ' ')}"));
-                var answer = await NexusFabricRuntime.TranslateTextAsync(
-                    "Ты локальный переводчик интерфейсов и веб-страниц. " + UntrustedDataRule +
-                    " Исходный язык определяется отдельно для каждой строки: английский, китайский, японский, корейский, " +
-                    "немецкий, французский, испанский и другие. Переведи текст после каждого маркера на естественный русский. " +
-                    "Сохрани маркер, числа, URL и имена. Не объединяй и не пропускай строки. " +
-                    "Формат каждой строки строго: <<<id>>> перевод. Без оригинала, JSON, Markdown и пояснений.",
-                    input, cancellationToken);
-                var expected = group.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
-                foreach (var item in ParseMarkedTranslations(answer, group))
-                    if (expected.Contains(item.Id) && !string.IsNullOrWhiteSpace(item.Text))
+                var translatedItems = await TranslationService.TranslateSegmentsAsync(group, false, cancellationToken);
+                var sourceById = group.ToDictionary(x => x.Id, StringComparer.Ordinal);
+                foreach (var item in translatedItems)
+                    if (sourceById.TryGetValue(item.Id, out var source) && !string.IsNullOrWhiteSpace(item.Text))
                     {
                         var translated = ValidateTranslation(item.Text);
-                        var source = group.First(x => x.Id.Equals(item.Id, StringComparison.Ordinal)).Text;
-                        if (!string.IsNullOrWhiteSpace(translated) && IsUsableRussianTranslation(source, translated))
+                        if (!string.IsNullOrWhiteSpace(translated) && IsUsableRussianTranslation(source.Text, translated))
                         {
                             var translatedSegment = new TranslationSegment { Id = item.Id, Text = translated };
                             result[item.Id] = translatedSegment;
                             completedBatch.Add(translatedSegment);
-                            LocalTranslationDictionary.Remember(source, translated);
+                            LocalTranslationDictionary.Remember(source.Text, translated);
                         }
                     }
             }
@@ -207,25 +201,6 @@ public static class LocalIntelligenceService
             {
                 // Маленькая модель иногда добавляет пояснение или повреждает JSON.
                 // Такой пакет остаётся в оригинале: служебный текст в DOM не попадает.
-            }
-
-            // A compact model can occasionally lose the markers of a batch even
-            // though it can translate every sentence separately. Retry only the
-            // missing entries through the same resident server and apply each
-            // successful result immediately instead of leaving a whole page in
-            // the source language.
-            foreach (var source in group.Where(x => !result.ContainsKey(x.Id)))
-            {
-                try
-                {
-                    var translated = await TranslateToRussianAsync(source.Text, cancellationToken);
-                    if (!IsUsableRussianTranslation(source.Text, translated)) continue;
-                    var translatedSegment = new TranslationSegment { Id = source.Id, Text = translated };
-                    result[source.Id] = translatedSegment;
-                    completedBatch.Add(translatedSegment);
-                }
-                catch (OperationCanceledException) { throw; }
-                catch { /* The original DOM node is deliberately preserved. */ }
             }
 
             if (completedBatch.Count > 0 && batchTranslated is not null)
@@ -240,27 +215,28 @@ public static class LocalIntelligenceService
             .Select(x => result[x.Id]).ToArray();
     }
 
-    public static async Task<string> TranslateToRussianAsync(string text, CancellationToken cancellationToken = default)
+    public static async Task<string> TranslateToRussianAsync(string text, CancellationToken cancellationToken = default,
+        string? sourceLanguage = null)
     {
         if (LocalTranslationDictionary.TryTranslate(text, out var known)) return known;
         if (LooksRussian(text)) return text;
-        var system = "Ты быстрый локальный переводчик субтитров. Определи исходный язык сам: английский, китайский, " +
-                     "японский, корейский, немецкий, французский, испанский, украинский и другие. " + UntrustedDataRule +
-                     " Переведи только смысл реплики на естественный русский. Верни только русский перевод без оригинала, " +
-                     "пояснений, кавычек, Markdown и названия языка.";
-        var answer = await NexusFabricRuntime.TranslateTextAsync(system, text, cancellationToken);
-        var translated = ValidateTranslation(answer);
+        var translated = ValidateTranslation(
+            await TranslationService.TranslateToRussianAsync(text, false, cancellationToken, sourceLanguage));
         if (!IsUsableRussianTranslation(text, translated))
-        {
-            // One compact retry is preferable to terminating the entire video
-            // translation session because a 0.6B model echoed one utterance.
-            answer = await NexusFabricRuntime.TranslateTextAsync(system +
-                " ВАЖНО: ответ обязан содержать русские слова и не должен повторять исходную фразу.",
-                "ИСХОДНАЯ РЕПЛИКА:\n" + text + "\n\nРУССКИЙ ПЕРЕВОД:", cancellationToken);
-            translated = ValidateTranslation(answer);
-        }
+            throw new InvalidOperationException("OPUS не вернул проверенный русский перевод этой реплики.");
+        LocalTranslationDictionary.Remember(text, translated);
+        return translated;
+    }
+
+    public static async Task<string> TranslateEnglishToRussianAsync(string text,
+        CancellationToken cancellationToken = default)
+    {
+        if (LocalTranslationDictionary.TryTranslate(text, out var known)) return known;
+        if (LooksRussian(text)) return text;
+        var translated = ValidateTranslation(
+            await TranslationService.TranslateToRussianAsync(text, true, cancellationToken));
         if (!IsUsableRussianTranslation(text, translated))
-            throw new InvalidOperationException("Локальная модель не вернула русский перевод этой реплики.");
+            throw new InvalidOperationException("OPUS не вернул проверенный русский перевод этой реплики.");
         LocalTranslationDictionary.Remember(text, translated);
         return translated;
     }
