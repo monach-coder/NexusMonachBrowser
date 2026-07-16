@@ -34,7 +34,20 @@ public static class WhisperService
         return Task.CompletedTask;
     }
 
-    public static async Task<string> TranscribeAsync(byte[] wav, CancellationToken cancellationToken = default)
+    public static Task<string> TranscribeAsync(byte[] wav, CancellationToken cancellationToken = default)
+        => RunAsync(wav, translateToEnglish: false, cancellationToken: cancellationToken);
+
+    /// <summary>
+    /// Whisper's multilingual translation target is English. Normalising every
+    /// spoken language to English first gives the tiny Russian text translator a
+    /// much more stable input than asking it to identify dozens of languages.
+    /// </summary>
+    public static Task<string> TranscribeToEnglishAsync(byte[] wav,
+        CancellationToken cancellationToken = default)
+        => RunAsync(wav, translateToEnglish: true, cancellationToken: cancellationToken);
+
+    private static async Task<string> RunAsync(byte[] wav, bool translateToEnglish,
+        CancellationToken cancellationToken)
     {
         await EnsureInstalledAsync(cancellationToken: cancellationToken);
         await Gate.WaitAsync(cancellationToken);
@@ -54,11 +67,13 @@ public static class WhisperService
                 RedirectStandardError = true,
                 WorkingDirectory = Path.GetDirectoryName(executable)!
             };
-            foreach (var argument in new[]
-                     {
-                         "-m", AiModelCatalog.WhisperModel!, "-f", input, "-l", "auto",
-                         "-otxt", "-of", outputBase, "-nt"
-                     })
+            var arguments = new List<string>
+            {
+                "-m", AiModelCatalog.WhisperModel!, "-f", input, "-l", "auto",
+                "-otxt", "-of", outputBase, "-nt"
+            };
+            if (translateToEnglish) arguments.Add("-tr");
+            foreach (var argument in arguments)
                 start.ArgumentList.Add(argument);
             using var process = Process.Start(start)
                                 ?? throw new InvalidOperationException("Не удалось запустить встроенный Whisper.");

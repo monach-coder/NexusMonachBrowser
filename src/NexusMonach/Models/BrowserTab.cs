@@ -341,7 +341,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
               const root=document.body; if(!root) return [];
               const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
               const nodes=[]; let node,total=0;
-              while((node=walker.nextNode()) && nodes.length<140 && total<7000){
+              while((node=walker.nextNode()) && nodes.length<100 && total<5500){
                 const parent=node.parentElement, raw=node.nodeValue||'', text=raw.trim();
                 if(!parent||text.length<2||parent.closest('script,style,noscript,textarea,code,pre,svg,canvas,[contenteditable="true"],[data-nexus-translation-ui]')) continue;
                 const style=getComputedStyle(parent); if(style.display==='none'||style.visibility==='hidden'||style.opacity==='0'||parent.getClientRects().length===0) continue;
@@ -467,6 +467,9 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
               const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
               const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];window.__nexusSourceCaptionModes=[];
               if(video)for(const track of video.textTracks)if(track.label!=='Nexus Live RU'&&track.label!=='Nexus RU'){window.__nexusSourceCaptionModes.push({track,mode:track.mode});track.mode='disabled'}
+              document.getElementById('nexus-hide-native-captions')?.remove();
+              const nativeStyle=document.createElement('style');nativeStyle.id='nexus-hide-native-captions';nativeStyle.dataset.nexusTranslationUi='true';
+              nativeStyle.textContent='video::cue{color:transparent!important;background:transparent!important;text-shadow:none!important}.ytp-caption-window-container,.ytp-caption-segment,.vp-captions,[data-purpose="captions-cue-text"],[class*="subtitle" i]:not(#nexus-live-subtitle-overlay),[class*="captions" i]:not(#nexus-live-subtitle-overlay){visibility:hidden!important}';document.documentElement.append(nativeStyle);
               let overlay=document.getElementById('nexus-live-subtitle-overlay');
               if(!overlay){overlay=document.createElement('div');overlay.id='nexus-live-subtitle-overlay';overlay.dataset.nexusTranslationUi='true';overlay.style.cssText='position:fixed;z-index:2147483647;padding:8px 12px;border-radius:8px;background:#d0000000;color:#fff;text-align:center;font:600 clamp(15px,1.8vw,23px)/1.35 Segoe UI,sans-serif;text-shadow:0 1px 3px #000;pointer-events:none;box-sizing:border-box';document.documentElement.append(overlay)}
               let stop=document.getElementById('nexus-live-translation-stop');
@@ -499,7 +502,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
               for(const track of video.textTracks)if(track.label==='Nexus Live RU')track.mode='disabled';
               let overlay=document.getElementById('nexus-live-subtitle-overlay');
               if(!overlay)return;window.__nexusPlaceLiveTranslation?.();
-              overlay.textContent=text;clearTimeout(window.__nexusSubtitleTimer);window.__nexusSubtitleTimer=setTimeout(()=>overlay.textContent='',11000);
+              overlay.textContent='RU · '+text;clearTimeout(window.__nexusSubtitleTimer);window.__nexusSubtitleTimer=setTimeout(()=>overlay.textContent='',11000);
             })(__TEXT__);
             """.Replace("__TEXT__", JsonSerializer.Serialize(translatedText), StringComparison.Ordinal));
     }
@@ -510,6 +513,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         await Core.ExecuteScriptAsync("""
             ((status)=>{for(const entry of window.__nexusSourceCaptionModes||[])try{entry.track.mode=entry.mode}catch{}
               window.__nexusSourceCaptionModes=[];window.__nexusStopAudioTranslation=true;
+              document.getElementById('nexus-hide-native-captions')?.remove();
               const overlay=document.getElementById('nexus-live-subtitle-overlay');if(overlay){overlay.textContent=status;setTimeout(()=>overlay.remove(),1800)}
               document.getElementById('nexus-live-translation-stop')?.remove();
               if(window.__nexusPlaceLiveTranslation){removeEventListener('resize',window.__nexusPlaceLiveTranslation);removeEventListener('scroll',window.__nexusPlaceLiveTranslation)}
@@ -780,7 +784,8 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 const link=e.matches('a')?e:e.querySelector('a[href]');
                 const name=heading?.innerText||link?.getAttribute('aria-label')||link?.title||text.slice(0,180);
                 const image=e.querySelector('img');
-                add(name,text,link?.href||e.getAttribute('itemid')||'','','','','product DOM',image?.currentSrc||image?.src||''); if(result.length>=80) break;
+                const imageSource=image?.currentSrc||image?.src||image?.getAttribute('data-src')||image?.getAttribute('data-original')||image?.getAttribute('data-lazy-src')||'';
+                add(name,text,link?.href||e.getAttribute('itemid')||'','','','','product DOM',imageSource); if(result.length>=80) break;
               }
 
               // Универсальный резерв: ссылка с изображением и ценой в ближайшей карточке.
@@ -791,7 +796,8 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                   const text=clean(host?.innerText||link.innerText);if(text.length<8||text.length>1800||!currency.test(text))continue;
                   const image=link.querySelector('img')||host?.querySelector('img');
                   const name=link.innerText||link.getAttribute('aria-label')||image?.alt||link.title||text.slice(0,180);
-                  add(name,text,link.href,'','','','image + price',image?.currentSrc||image?.src||'');if(result.length>=80)break;
+                  const imageSource=image?.currentSrc||image?.src||image?.getAttribute('data-src')||image?.getAttribute('data-original')||image?.getAttribute('data-lazy-src')||'';
+                  add(name,text,link.href,'','','','image + price',imageSource);if(result.length>=80)break;
                 }
               }
               return result.slice(0,80);

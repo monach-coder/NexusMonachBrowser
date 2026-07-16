@@ -25,6 +25,15 @@ public static class LocalAiService
         CancellationToken cancellationToken = default) =>
         RunTextModelAsync(systemPrompt, userPrompt, null, cancellationToken);
 
+    /// <summary>
+    /// Short deterministic route for translation. A bounded output prevents a
+    /// tiny model from spending seconds generating explanations after the text.
+    /// </summary>
+    public static Task<string> TranslateAsync(string systemPrompt, string userPrompt,
+        CancellationToken cancellationToken = default) =>
+        RunTextModelAsync(systemPrompt, userPrompt, null, cancellationToken,
+            Math.Clamp(userPrompt.Length / 2 + 96, 128, 768), 0.05);
+
     public static async Task<string> AskStreamingAsync(string model, string systemPrompt, string userPrompt,
         IProgress<string>? textProgress = null, CancellationToken cancellationToken = default)
     {
@@ -80,7 +89,8 @@ public static class LocalAiService
     }
 
     private static async Task<string> RunTextModelAsync(string systemPrompt, string userPrompt,
-        IProgress<string>? progress, CancellationToken cancellationToken)
+        IProgress<string>? progress, CancellationToken cancellationToken,
+        int maximumTokens = 4096, double temperature = 0.2)
     {
         if (!AiModelCatalog.TextReady)
             throw new InvalidOperationException(AiModelCatalog.MissingTextRuntimeMessage);
@@ -93,7 +103,8 @@ public static class LocalAiService
             {
                 try
                 {
-                    var serverAnswer = await LocalTextModelServer.AskAsync(systemPrompt, userPrompt, cancellationToken);
+                    var serverAnswer = await LocalTextModelServer.AskAsync(
+                        systemPrompt, userPrompt, cancellationToken, maximumTokens, temperature);
                     serverAnswer = CleanOutput(serverAnswer);
                     if (!string.IsNullOrWhiteSpace(serverAnswer))
                     {
@@ -132,8 +143,9 @@ public static class LocalAiService
                 };
                 foreach (var argument in new[]
                          {
-                             "-m", AiModelCatalog.TextModel!, "-f", promptPath, "-n", "4096",
-                             "-c", "12288", "--temp", "0.2", "--no-display-prompt", "--simple-io",
+                             "-m", AiModelCatalog.TextModel!, "-f", promptPath, "-n", maximumTokens.ToString(),
+                             "-c", "12288", "--temp", temperature.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                             "--no-display-prompt", "--simple-io",
                              "--single-turn", "--log-disable"
                          })
                     start.ArgumentList.Add(argument);
