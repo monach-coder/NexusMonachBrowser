@@ -118,6 +118,7 @@ public partial class MainWindow : Window
         tab.StateChanged += (_, _) => Dispatcher.Invoke(SyncUi);
         tab.NavigationSucceeded += (_, _) =>
         {
+            Dispatcher.Invoke(() => LocalAiDock.HandleNavigation(tab));
             if (!_isPrivate)
             {
                 var current = tab.CurrentUrl;
@@ -125,12 +126,12 @@ public partial class MainWindow : Window
                 _lastKnowledgeUrl[tab] = current;
                 _ = IndexKnowledgeAsync(tab, current, previous);
             }
-            if (_pendingSearchFollowUp.Remove(tab, out var searchQuery) && !UrlService.IsInternal(tab.CurrentUrl))
-                Dispatcher.Invoke(() =>
-                {
-                    if (ReferenceEquals(ActiveTab, tab))
-                        _ = LocalAiDock.ShowSearchFollowUpAsync(tab, searchQuery);
-                });
+            if (_pendingSearchFollowUp.TryGetValue(tab, out var searchQuery) &&
+                !UrlService.IsInternal(tab.CurrentUrl) && !UrlService.IsSearchProviderUrl(tab.CurrentUrl))
+            {
+                _pendingSearchFollowUp.Remove(tab);
+                _ = AnalyzeSelectedSearchResultAsync(tab, searchQuery);
+            }
             Dispatcher.Invoke(SyncUi);
         };
         tab.OpenUrlRequested += async (_, e) =>
@@ -204,15 +205,66 @@ public partial class MainWindow : Window
         Keyboard.ClearFocus();
     }
 
-    private async Task NavigateOrSearchAsync(string input)
+    private Task NavigateOrSearchAsync(string input)
     {
         var tab = ActiveTab;
-        if (tab?.Core is null) return;
+        if (tab?.Core is null) return Task.CompletedTask;
         Keyboard.ClearFocus();
         if (UrlService.IsSearchQuery(input))
-            await RunNexusSearchAsync(tab, input);
+        {
+            var query = input.Trim();
+            _pendingSearchFollowUp[tab] = query;
+            tab.Navigate(UrlService.Resolve(query));
+            NetworkStatusText.Text = "Поиск открыт · Следопыт включится после выбора сайта";
+        }
         else
             tab.Navigate(UrlService.Resolve(input));
+        return Task.CompletedTask;
+    }
+
+    private async Task AnalyzeSelectedSearchResultAsync(BrowserTab tab, string query)
+    {
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2), cancellation.Token);
+            if (UrlService.IsInternal(tab.CurrentUrl) || UrlService.IsSearchProviderUrl(tab.CurrentUrl)) return;
+            var sourceUrl = tab.CurrentUrl;
+            var sourceTitle = tab.Title;
+            Dispatcher.Invoke(() =>
+            {
+                SshTerminalDock.Visibility = Visibility.Collapsed;
+                LocalAiDock.BeginBackgroundResearch(tab, query);
+                NetworkStatusText.Text = "Следопыт анализирует выбранный сайт…";
+            });
+            var pageText = await tab.GetReadablePageTextAsync();
+            var links = await tab.GetResearchLinksAsync(query, 8);
+            var report = await NexusSearchService.AnalyzeSelectedSiteAsync(
+                query, sourceTitle, sourceUrl, pageText, links, cancellation.Token);
+            if (!_isPrivate)
+                await KnowledgeGraphService.RecordResearchAsync(report, cancellation.Token, "исследование выбранного сайта");
+            Dispatcher.Invoke(() =>
+            {
+                LocalAiDock.StoreBackgroundResearch(tab, sourceUrl, report);
+                NetworkStatusText.Text = $"Следопыт: выжимка готова · источников сайта {report.Items.Count}";
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                LocalAiDock.FailBackgroundResearch("Анализ выбранного сайта остановлен.");
+                NetworkStatusText.Text = "Анализ выбранного сайта остановлен.";
+            });
+        }
+        catch (Exception ex)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                LocalAiDock.FailBackgroundResearch(ex.Message);
+                NetworkStatusText.Text = "Следопыт: " + ex.Message;
+            });
+        }
     }
 
     private async Task RunNexusSearchAsync(BrowserTab tab, string query)
@@ -627,12 +679,26 @@ public partial class MainWindow : Window
     private async void ShoppingAgentTop_Click(object sender, RoutedEventArgs e)
     {
         if (ActiveTab?.Core is null) return;
+        SshTerminalDock.Visibility = Visibility.Collapsed;
         await LocalAiDock.PrepareShoppingAgentAsync(ActiveTab);
     }
+
+    private void SshTerminal_Click(object sender, RoutedEventArgs e)
+    {
+        LocalAiDock.Visibility = Visibility.Collapsed;
+        SshTerminalDock.Visibility = SshTerminalDock.Visibility == Visibility.Visible
+            ? Visibility.Collapsed : Visibility.Visible;
+        if (SshTerminalDock.Visibility == Visibility.Visible)
+            SshTerminalDock.FocusTarget();
+    }
+
+    private void SshTerminal_CloseRequested(object? sender, EventArgs e) =>
+        SshTerminalDock.Visibility = Visibility.Collapsed;
 
     private void ShowDeveloperAi_Click(object sender, RoutedEventArgs e)
     {
         if (ActiveTab?.Core is null) return;
+        SshTerminalDock.Visibility = Visibility.Collapsed;
         ActiveTab.Core.OpenDevToolsWindow();
         if (!string.IsNullOrWhiteSpace(ExtensionService.BuiltInDevToolsError))
             GlassDialogWindow.Show(this, "Стандартный DevTools открыт, но вкладка Nexus AI не загрузилась:\n\n" +
@@ -855,6 +921,7 @@ public partial class MainWindow : Window
         _memoryTimer.Stop();
         _networkPerformanceTimer.Stop();
         LocalAiDock.StopVideoTranslation();
+        SshTerminalDock.Disconnect();
         foreach (var search in _searchOperations.Values) search.Cancel();
 
         if (!_isPrivate && _restartRequested)

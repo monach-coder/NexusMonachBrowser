@@ -639,6 +639,25 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     public async Task<bool> SearchCurrentSiteForAgentAsync(string query, CancellationToken cancellationToken = default)
     {
         if (Core is null || UrlService.IsInternal(CurrentUrl) || string.IsNullOrWhiteSpace(query)) return false;
+        // Prefer the site's own GET search architecture. It is deterministic,
+        // keeps the current authentication/cookies in WebView2 and avoids ranking
+        // unrelated cards when a JavaScript key event was ignored.
+        var searchUrlScript = """
+            (()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>80&&r.height>15&&s.display!=='none'&&s.visibility!=='hidden'};
+              const inputs=[...document.querySelectorAll('form input[name],input[type="search"][name]')].filter(visible).map(e=>{const hint=((e.type||'')+' '+(e.name||'')+' '+(e.id||'')+' '+(e.placeholder||'')+' '+(e.getAttribute('aria-label')||'')).toLowerCase();return {e,score:(e.type==='search'?8:0)+(/search|query|поиск|найти|товар|text|q/.test(hint)?6:0)}}).sort((a,b)=>b.score-a.score);
+              const input=inputs[0]?.e;if(!input||inputs[0].score<5)return '';
+              const form=input.closest('form');if(form&&String(form.method||'get').toLowerCase()==='post')return '';
+              try{const target=new URL(form?.action||location.href,location.href);if(target.origin!==location.origin)return '';target.searchParams.set(input.name,__NEXUS_QUERY__);return target.href}catch{return ''}})();
+            """.Replace("__NEXUS_QUERY__", JsonSerializer.Serialize(query[..Math.Min(query.Length, 300)]), StringComparison.Ordinal);
+        var searchUrlJson = await Core.ExecuteScriptAsync(searchUrlScript);
+        try
+        {
+            var searchUrl = JsonSerializer.Deserialize<string>(searchUrlJson);
+            if (!string.IsNullOrWhiteSpace(searchUrl) && !searchUrl.Equals(CurrentUrl, StringComparison.OrdinalIgnoreCase) &&
+                await NavigateAndWaitAsync(searchUrl, TimeSpan.FromSeconds(20)))
+                return true;
+        }
+        catch (JsonException) { }
         var beforeUrl = CurrentUrl;
         var beforeFingerprint = await GetShoppingCatalogFingerprintAsync();
         var searchScript = $$"""
@@ -692,7 +711,9 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
             }
             catch (Exception) { }
         }
-        return true;
+        // A submitted form is not proof that a catalogue was updated. Returning
+        // true here made the agent rank unrelated cards from the landing page.
+        return false;
     }
 
     private async Task<string> GetShoppingCatalogFingerprintAsync()
@@ -720,14 +741,15 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
               const buyersPattern=/\d[\d\s.,]*\s*(?:купили|купило|покупок|заказов|отзыв(?:а|ов)?|оцен(?:ка|ок)|sold|reviews?|ratings?)/i;
               const sameSite=(a,b)=>a===b||a.endsWith('.'+b)||b.endsWith('.'+a);
               const safeUrl=value=>{try{const u=new URL(value,location.href);if(!/^https?:$/.test(u.protocol)||!sameSite(u.hostname,location.hostname))return '';u.hash='';return u.origin+u.pathname+u.search;}catch{return ''}};
-              const add=(name,text,url,price='',rating='',buyers='',source='DOM')=>{
-                name=clean(name).slice(0,220);text=clean(text).slice(0,1200);url=safeUrl(url);
+              const safeImage=value=>{try{const u=new URL(value,location.href);if(!/^https?:$/.test(u.protocol))return '';return u.href.slice(0,1600)}catch{return ''}};
+              const add=(name,text,url,price='',rating='',buyers='',source='DOM',imageUrl='')=>{
+                name=clean(name).slice(0,220);text=clean(text).slice(0,1200);url=safeUrl(url);imageUrl=safeImage(imageUrl);
                 if(name.length<3)return;const key=(url||name).toLowerCase();if(seen.has(key))return;
                 price=clean(price)||(text.match(currency)||[])[0]||'';
                 rating=clean(rating)||(text.match(ratingPattern)||[])[0]||'';
                 buyers=clean(buyers)||(text.match(buyersPattern)||[])[0]||'';
                 if(!price&&!rating&&!buyers&&!/product|товар|catalog|item|offer/i.test((url||'')+' '+source))return;
-                seen.add(key);result.push({name,price,rating,buyers,url,text,source});
+                seen.add(key);result.push({name,price,rating,buyers,url,imageUrl,text,source});
               };
 
               // Структурированные данные надёжнее CSS-классов и работают на многих магазинах.
@@ -742,7 +764,8 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                       const price=offer.price?String(offer.price)+' '+String(offer.priceCurrency||''):'';
                       const rating=aggregate.ratingValue?String(aggregate.ratingValue):'';
                       const buyers=aggregate.reviewCount||aggregate.ratingCount?String(aggregate.reviewCount||aggregate.ratingCount)+' отзывов':'';
-                      add(item.name||item.headline,item.description||item.name,item.url||offer.url||location.href,price,rating,buyers,'JSON-LD Product');
+                      const image=Array.isArray(item.image)?item.image[0]:(item.image?.url||item.image||'');
+                      add(item.name||item.headline,item.description||item.name,item.url||offer.url||location.href,price,rating,buyers,'JSON-LD Product',image);
                     }
                     if(/ItemList/i.test(type)&&Array.isArray(item.itemListElement))queue.push(...item.itemListElement.map(x=>x.item||x));
                   }
@@ -756,7 +779,8 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 const heading=e.querySelector('h1,h2,h3,h4,[itemprop="name"],[class*="name" i],[class*="title" i]');
                 const link=e.matches('a')?e:e.querySelector('a[href]');
                 const name=heading?.innerText||link?.getAttribute('aria-label')||link?.title||text.slice(0,180);
-                add(name,text,link?.href||e.getAttribute('itemid')||'','','','','product DOM'); if(result.length>=80) break;
+                const image=e.querySelector('img');
+                add(name,text,link?.href||e.getAttribute('itemid')||'','','','','product DOM',image?.currentSrc||image?.src||''); if(result.length>=80) break;
               }
 
               // Универсальный резерв: ссылка с изображением и ценой в ближайшей карточке.
@@ -767,7 +791,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                   const text=clean(host?.innerText||link.innerText);if(text.length<8||text.length>1800||!currency.test(text))continue;
                   const image=link.querySelector('img')||host?.querySelector('img');
                   const name=link.innerText||link.getAttribute('aria-label')||image?.alt||link.title||text.slice(0,180);
-                  add(name,text,link.href,'','','','image + price');if(result.length>=80)break;
+                  add(name,text,link.href,'','','','image + price',image?.currentSrc||image?.src||'');if(result.length>=80)break;
                 }
               }
               return result.slice(0,80);

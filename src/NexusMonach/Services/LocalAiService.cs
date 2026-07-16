@@ -6,8 +6,9 @@ using System.Text.RegularExpressions;
 namespace NexusMonach.Services;
 
 /// <summary>
-/// Автономный текстовый AI Nexus. Сервис принципиально не содержит HTTP-клиента:
-/// вся генерация выполняется упакованным llama.cpp и упакованной моделью.
+/// Автономный текстовый AI Nexus. Генерация выполняется упакованным llama.cpp и
+/// упакованной моделью. Локальный HTTP используется только по loopback для одного
+/// постоянно загруженного llama-server; внешних адресов и облачного fallback нет.
 /// </summary>
 public static class LocalAiService
 {
@@ -85,68 +86,99 @@ public static class LocalAiService
             throw new InvalidOperationException(AiModelCatalog.MissingTextRuntimeMessage);
 
         await InferenceGate.WaitAsync(cancellationToken);
-        var work = Path.Combine(Path.GetTempPath(), "NexusMonachAI", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(work);
-        var promptPath = Path.Combine(work, "prompt.txt");
         try
         {
-            var prompt = "<|im_start|>system\n" + systemPrompt.Trim() +
-                         "\nОтвечай без рассуждений и служебных тегов. /no_think<|im_end|>\n" +
-                         "<|im_start|>user\n" + userPrompt.Trim() + "<|im_end|>\n<|im_start|>assistant\n" +
-                         ResponseMarker + "\n";
-            await File.WriteAllTextAsync(promptPath, prompt, new UTF8Encoding(false), cancellationToken);
-
-            var start = new ProcessStartInfo(AiModelCatalog.LlamaCli!)
+            Exception? serverError = null;
+            if (LocalTextModelServer.CanRun)
             {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                StandardOutputEncoding = Encoding.UTF8,
-                StandardErrorEncoding = Encoding.UTF8,
-                WorkingDirectory = AiModelCatalog.LlamaRoot
-            };
-            foreach (var argument in new[]
-                     {
-                         "-m", AiModelCatalog.TextModel!, "-f", promptPath, "-n", "4096",
-                         "-c", "12288", "--temp", "0.2", "--no-display-prompt", "--simple-io",
-                         "--single-turn", "--log-disable"
-                     })
-                start.ArgumentList.Add(argument);
-
-            using var process = Process.Start(start)
-                                ?? throw new InvalidOperationException("Не удалось запустить встроенный AI-движок.");
-            var output = new StringBuilder();
-            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
-            while (true)
-            {
-                var line = await process.StandardOutput.ReadLineAsync(cancellationToken);
-                if (line is null) break;
-                output.AppendLine(line);
-                var partial = CleanOutput(output.ToString());
-                if (!string.IsNullOrWhiteSpace(partial)) progress?.Report(partial);
+                try
+                {
+                    var serverAnswer = await LocalTextModelServer.AskAsync(systemPrompt, userPrompt, cancellationToken);
+                    serverAnswer = CleanOutput(serverAnswer);
+                    if (!string.IsNullOrWhiteSpace(serverAnswer))
+                    {
+                        progress?.Report(serverAnswer);
+                        return serverAnswer;
+                    }
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex) { serverError = ex; /* Compatible packs may fall back to llama-cli. */ }
             }
-            try { await process.WaitForExitAsync(cancellationToken); }
-            catch (OperationCanceledException)
+
+            if (AiModelCatalog.LlamaCli is null)
+                throw new InvalidOperationException(
+                    "Локальный AI-сервер не ответил, а резервный llama-cli.exe отсутствует.", serverError);
+
+            var work = Path.Combine(Path.GetTempPath(), "NexusMonachAI", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(work);
+            var promptPath = Path.Combine(work, "prompt.txt");
+            try
             {
-                try { process.Kill(entireProcessTree: true); } catch { }
-                throw;
+                var prompt = "<|im_start|>system\n" + systemPrompt.Trim() +
+                             "\nОтвечай без рассуждений и служебных тегов. /no_think<|im_end|>\n" +
+                             "<|im_start|>user\n" + userPrompt.Trim() + "<|im_end|>\n<|im_start|>assistant\n" +
+                             ResponseMarker + "\n";
+                await File.WriteAllTextAsync(promptPath, prompt, new UTF8Encoding(false), cancellationToken);
+
+                var start = new ProcessStartInfo(AiModelCatalog.LlamaCli!)
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8,
+                    WorkingDirectory = AiModelCatalog.LlamaRoot
+                };
+                foreach (var argument in new[]
+                         {
+                             "-m", AiModelCatalog.TextModel!, "-f", promptPath, "-n", "4096",
+                             "-c", "12288", "--temp", "0.2", "--no-display-prompt", "--simple-io",
+                             "--single-turn", "--log-disable"
+                         })
+                    start.ArgumentList.Add(argument);
+
+                using var process = Process.Start(start)
+                                    ?? throw new InvalidOperationException("Не удалось запустить встроенный AI-движок.");
+                var output = new StringBuilder();
+                var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+                while (true)
+                {
+                    var line = await process.StandardOutput.ReadLineAsync(cancellationToken);
+                    if (line is null) break;
+                    output.AppendLine(line);
+                    var partial = CleanOutput(output.ToString());
+                    if (!string.IsNullOrWhiteSpace(partial)) progress?.Report(partial);
+                }
+                try { await process.WaitForExitAsync(cancellationToken); }
+                catch (OperationCanceledException)
+                {
+                    try { process.Kill(entireProcessTree: true); } catch { }
+                    throw;
+                }
+                var error = await errorTask;
+                if (process.ExitCode != 0)
+                    throw new InvalidOperationException("Встроенный AI завершился с ошибкой: " +
+                                                        Compact(error, 700));
+                var answer = CleanOutput(output.ToString());
+                return string.IsNullOrWhiteSpace(answer)
+                    ? throw new InvalidOperationException("Встроенная модель вернула пустой ответ.")
+                    : answer;
             }
-            var error = await errorTask;
-            if (process.ExitCode != 0)
-                throw new InvalidOperationException("Встроенный AI завершился с ошибкой: " +
-                                                    Compact(error, 700));
-            var answer = CleanOutput(output.ToString());
-            return string.IsNullOrWhiteSpace(answer)
-                ? throw new InvalidOperationException("Встроенная модель вернула пустой ответ.")
-                : answer;
+            finally
+            {
+                try { Directory.Delete(work, recursive: true); } catch { }
+            }
         }
         finally
         {
             InferenceGate.Release();
-            try { Directory.Delete(work, recursive: true); } catch { }
         }
     }
+
+    public static void WarmUpInBackground() => _ = LocalTextModelServer.WarmUpAsync();
+
+    public static void Shutdown() => LocalTextModelServer.Shutdown();
 
     private static string CleanOutput(string value)
     {

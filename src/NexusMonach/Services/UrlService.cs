@@ -74,6 +74,22 @@ public static class UrlService
         return input.Contains(' ') || !LooksLikeHost(input);
     }
 
+    public static bool IsSearchProviderUrl(string? url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) && IsSearchProviderHost(uri.Host);
+
+    public static bool IsSearchProviderHost(string? host)
+    {
+        if (string.IsNullOrWhiteSpace(host)) return false;
+        host = host.Trim().ToLowerInvariant();
+        return host.Contains("duckduckgo.", StringComparison.Ordinal) ||
+               host.Contains("startpage.", StringComparison.Ordinal) ||
+               host.Contains("search.brave.", StringComparison.Ordinal) ||
+               host.Contains("google.", StringComparison.Ordinal) ||
+               host.Contains("yandex.", StringComparison.Ordinal) ||
+               host.Contains("bing.", StringComparison.Ordinal) ||
+               host.Contains("mojeek.", StringComparison.Ordinal);
+    }
+
     private static string BuildSearchUrl(string query)
     {
         var escaped = Uri.EscapeDataString(query);

@@ -19,6 +19,7 @@ try {
 
     $required = @(
         "llama\llama-cli.exe",
+        "llama\llama-server.exe",
         "llama\llama-mtmd-cli.exe",
         "node\node.exe",
         "adapters\semantic.mjs",

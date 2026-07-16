@@ -21,6 +21,7 @@ if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
 
 $requiredAi = @(
     (Join-Path $ai "llama\llama-cli.exe"),
+    (Join-Path $ai "llama\llama-server.exe"),
     (Join-Path $ai "llama\llama-mtmd-cli.exe"),
     (Join-Path $ai "node\node.exe"),
     (Join-Path $ai "adapters\semantic.mjs"),

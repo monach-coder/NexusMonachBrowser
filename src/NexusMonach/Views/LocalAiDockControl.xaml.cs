@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Text.Json;
 using System.Windows.Threading;
 using Microsoft.Win32;
@@ -24,6 +25,10 @@ public partial class LocalAiDockControl : UserControl
     private IReadOnlyList<string> _lastResearchNotes = [];
     private string _lastResearchQuery = string.Empty;
     private string? _shoppingImagePath;
+    private readonly Dictionary<string, NexusSearchReport> _backgroundResearch =
+        new(StringComparer.OrdinalIgnoreCase);
+    private bool _showingBackgroundResearch;
+    private string _backgroundResearchHost = string.Empty;
 
     public LocalAiDockControl()
     {
@@ -49,6 +54,8 @@ public partial class LocalAiDockControl : UserControl
     public void UpdateTab(BrowserTab? tab)
     {
         if (Visibility != Visibility.Visible || tab is null) return;
+        HandleNavigation(tab);
+        if (Visibility != Visibility.Visible) return;
         _ = ShowForTabAsync(tab);
     }
 
@@ -80,8 +87,12 @@ public partial class LocalAiDockControl : UserControl
             completed += await tab.ApplyTranslationSegmentsAsync(immediate, completed, segments.Count);
             var knownIds = immediate.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
             var pending = segments.Where(x => !knownIds.Contains(x.Id)).ToArray();
-            var translated = await LocalIntelligenceService.TranslateSegmentsAsync(pending, _cancellation.Token);
-            completed += await tab.ApplyTranslationSegmentsAsync(translated, completed, segments.Count);
+            await LocalIntelligenceService.TranslateSegmentsAsync(pending, _cancellation.Token,
+                async translatedBatch =>
+                {
+                    completed += await tab.ApplyTranslationSegmentsAsync(
+                        translatedBatch, completed, segments.Count);
+                });
             await tab.CompleteInPageTranslationAsync(completed, segments.Count);
         }
         catch (OperationCanceledException)
@@ -155,6 +166,7 @@ public partial class LocalAiDockControl : UserControl
 
     public async Task PrepareShoppingAgentAsync(BrowserTab tab)
     {
+        _showingBackgroundResearch = false;
         await ShowForTabAsync(tab);
         ModeTitleText.Text = "NEXUS СЛЕДОПЫТ";
         TestLocalAiButton.Visibility = Visibility.Collapsed;
@@ -164,12 +176,122 @@ public partial class LocalAiDockControl : UserControl
         ShoppingQueryBox.Text = "Что нужно найти?";
         _shoppingImagePath = null;
         ShoppingImageNameText.Text = "Фото не выбрано";
-        ShowTextResult("Введите описание товара или выберите фотографию, затем нажмите «Начать поиск». Nexus просмотрит до пяти страниц текущего сайта и покажет 3–5 наиболее подходящих карточек. Корзина, вход и оформление заказа не затрагиваются.");
+        if (_backgroundResearch.TryGetValue(tab.CurrentUrl, out var research))
+            ShowTextResult(FormatBackgroundResearch(research) +
+                "\n\nНиже можно отдельно найти товары в каталоге этого сайта.");
+        else
+            ShowTextResult("Введите описание товара или выберите фотографию, затем нажмите «Начать поиск». Nexus просмотрит до пяти страниц текущего сайта и покажет 3–5 наиболее подходящих карточек. Корзина, вход и оформление заказа не затрагиваются.");
         StatusText.Text = NexusFabricRuntime.IsAvailable
             ? "Nexus Intelligence Fabric готов к поиску."
             : NexusFabricRuntime.Status.Message;
         ShoppingQueryBox.Focus();
         ShoppingQueryBox.SelectAll();
+    }
+
+    public void StoreBackgroundResearch(BrowserTab tab, string sourceUrl, NexusSearchReport report)
+    {
+        _backgroundResearch[sourceUrl] = report;
+        if (!_showingBackgroundResearch || !IsSameSite(_backgroundResearchHost, tab.CurrentHost)) return;
+        ShowBackgroundResearch(report);
+        StatusText.Text = $"Готово · изучено материалов сайта: {report.Items.Count} · сохранено в граф знаний";
+    }
+
+    public void BeginBackgroundResearch(BrowserTab tab, string query)
+    {
+        _cancellation?.Cancel();
+        _tab = tab;
+        _pageUrl = tab.CurrentUrl;
+        _lastResearchQuery = query;
+        _showingBackgroundResearch = true;
+        _backgroundResearchHost = tab.CurrentHost;
+        Visibility = Visibility.Visible;
+        ModeTitleText.Text = "NEXUS СЛЕДОПЫТ";
+        PageTitleText.Text = tab.Title + " · " + tab.CurrentHost;
+        TestLocalAiButton.Visibility = Visibility.Collapsed;
+        DeveloperAnalyzeButton.Visibility = Visibility.Collapsed;
+        DeveloperGuidePanel.Visibility = Visibility.Collapsed;
+        ShoppingAgentPanel.Visibility = Visibility.Collapsed;
+        ShowTextResult("Ищу важную информацию по запросу:\n«" + query +
+                       "»\n\n1. Читаю открытую страницу…\n2. Отбираю релевантные разделы этого сайта…\n3. Сопоставляю факты локально…");
+        StatusText.Text = "Следопыт работает · текущая страница остаётся доступной";
+    }
+
+    public void FailBackgroundResearch(string message)
+    {
+        if (!_showingBackgroundResearch) return;
+        ShowTextResult("Следопыт не завершил анализ:\n" + message);
+        StatusText.Text = "Исследование не завершено.";
+    }
+
+    public void HandleNavigation(BrowserTab tab)
+    {
+        if (!_showingBackgroundResearch) return;
+        if (ReferenceEquals(_tab, tab) && IsSameSite(_backgroundResearchHost, tab.CurrentHost)) return;
+        _showingBackgroundResearch = false;
+        Visibility = Visibility.Collapsed;
+    }
+
+    private static bool IsSameSite(string left, string right) =>
+        !string.IsNullOrWhiteSpace(left) && !string.IsNullOrWhiteSpace(right) &&
+        (left.Equals(right, StringComparison.OrdinalIgnoreCase) ||
+         left.EndsWith('.' + right, StringComparison.OrdinalIgnoreCase) ||
+         right.EndsWith('.' + left, StringComparison.OrdinalIgnoreCase));
+
+    private static string FormatBackgroundResearch(NexusSearchReport report)
+    {
+        var lines = new List<string> { "ВЫЖИМКА СЛЕДОПЫТА", report.DirectAnswer };
+        if (report.Items.Count > 0)
+        {
+            lines.Add("\nВАЖНОЕ НА ЭТОМ САЙТЕ");
+            lines.AddRange(report.Items.Take(6).Select((item, index) =>
+                $"{index + 1}. {item.Title}\n{item.Answer}\n{item.Url}"));
+        }
+        return string.Join("\n", lines.Where(x => !string.IsNullOrWhiteSpace(x)));
+    }
+
+    private void ShowBackgroundResearch(NexusSearchReport report)
+    {
+        ResultBox.Visibility = Visibility.Collapsed;
+        ShoppingCardsScroll.Visibility = Visibility.Visible;
+        ShoppingCardsPanel.Children.Clear();
+        ShoppingCardsPanel.Children.Add(new TextBlock
+        {
+            Text = "ВЫЖИМКА СЛЕДОПЫТА\n" + report.DirectAnswer,
+            TextWrapping = TextWrapping.Wrap, Foreground = Brushes.White,
+            FontSize = 13.5, Margin = new Thickness(2, 0, 2, 12)
+        });
+        foreach (var item in report.Items.Take(6))
+        {
+            var content = new StackPanel();
+            content.Children.Add(new TextBlock
+            {
+                Text = item.Title, TextWrapping = TextWrapping.Wrap,
+                FontSize = 13.5, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White
+            });
+            content.Children.Add(new TextBlock
+            {
+                Text = item.Answer, TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 6, 0, 0), Foreground = new SolidColorBrush(Color.FromRgb(200, 205, 213))
+            });
+            if (!string.IsNullOrWhiteSpace(item.Url))
+            {
+                var open = new Button
+                {
+                    Content = "Открыть раздел", Tag = item.Url, Padding = new Thickness(10, 6, 10, 6),
+                    Margin = new Thickness(0, 8, 0, 0), HorizontalAlignment = HorizontalAlignment.Left
+                };
+                open.Click += ResearchSourceOpen_Click;
+                content.Children.Add(open);
+            }
+            ShoppingCardsPanel.Children.Add(new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(105, 16, 16, 16)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(120, 255, 255, 255)),
+                BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(12),
+                Padding = new Thickness(11), Margin = new Thickness(0, 0, 0, 9), Child = content
+            });
+        }
+        ShoppingCardsScroll.ScrollToHome();
     }
 
     public async Task AnalyzeDeveloperContextAsync(BrowserTab tab)
@@ -373,6 +495,10 @@ public partial class LocalAiDockControl : UserControl
             StatusText.Text = $"Nexus Intelligence сопоставляет точные, похожие и частичные названия среди {count} карточек…";
             var report = await LocalIntelligenceService.AnalyzeShoppingResultsAsync(
                 query, _tab.CurrentHost, cards, _cancellation.Token);
+            if (report.Items.Count == 0)
+                throw new InvalidOperationException(
+                    "Каталог открыт, но карточек, связанных с запросом, не найдено. " +
+                    "Следопыт не будет подменять результат несвязанными товарами.");
             if (!_tab.IsPrivate)
                 await KnowledgeGraphService.RecordShoppingResearchAsync(report, _cancellation.Token);
             ShowShoppingCards(report);
@@ -407,6 +533,26 @@ public partial class LocalAiDockControl : UserControl
         foreach (var item in report.Items.Take(5))
         {
             var content = new StackPanel();
+            if (Uri.TryCreate(item.ImageUrl, UriKind.Absolute, out var imageUri) &&
+                imageUri.Scheme is "http" or "https")
+            {
+                try
+                {
+                    var bitmap = new BitmapImage();
+                    bitmap.BeginInit();
+                    bitmap.UriSource = imageUri;
+                    bitmap.DecodePixelWidth = 260;
+                    bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                    bitmap.EndInit();
+                    content.Children.Add(new Image
+                    {
+                        Source = bitmap, Height = 130, Stretch = Stretch.Uniform,
+                        HorizontalAlignment = HorizontalAlignment.Left,
+                        Margin = new Thickness(0, 0, 0, 9)
+                    });
+                }
+                catch { /* Broken catalogue thumbnails must not break the report. */ }
+            }
             content.Children.Add(new TextBlock { Text = item.Name, TextWrapping = TextWrapping.Wrap, FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White });
             content.Children.Add(new TextBlock { Text = $"Цена: {item.Price}   Рейтинг: {item.Rating}", Margin = new Thickness(0, 6, 0, 0), Foreground = new SolidColorBrush(Color.FromRgb(127, 245, 231)) });
             content.Children.Add(new TextBlock { Text = "Купили/отзывы: " + item.Buyers, Margin = new Thickness(0, 3, 0, 0), Foreground = new SolidColorBrush(Color.FromRgb(200, 205, 213)) });
@@ -443,6 +589,19 @@ public partial class LocalAiDockControl : UserControl
               current.Host.EndsWith('.' + target.Host, StringComparison.OrdinalIgnoreCase))) return;
         if (!_tab.IsPrivate)
             _ = KnowledgeGraphService.RecordResearchChoiceAsync(ShoppingQueryBox.Text.Trim(), target.AbsoluteUri);
+        _tab.Core.Navigate(target.AbsoluteUri);
+    }
+
+    private void ResearchSourceOpen_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string url } || _tab?.Core is null) return;
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var target) ||
+            !Uri.TryCreate(_tab.CurrentUrl, UriKind.Absolute, out var current) ||
+            !(target.Host.Equals(current.Host, StringComparison.OrdinalIgnoreCase) ||
+              target.Host.EndsWith('.' + current.Host, StringComparison.OrdinalIgnoreCase) ||
+              current.Host.EndsWith('.' + target.Host, StringComparison.OrdinalIgnoreCase))) return;
+        if (!_tab.IsPrivate && !string.IsNullOrWhiteSpace(_lastResearchQuery))
+            _ = KnowledgeGraphService.RecordResearchChoiceAsync(_lastResearchQuery, target.AbsoluteUri);
         _tab.Core.Navigate(target.AbsoluteUri);
     }
 
@@ -747,6 +906,11 @@ public partial class LocalAiDockControl : UserControl
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e) => _cancellation?.Cancel();
-    private void Close_Click(object sender, RoutedEventArgs e) { _cancellation?.Cancel(); Visibility = Visibility.Collapsed; }
+    private void Close_Click(object sender, RoutedEventArgs e)
+    {
+        _cancellation?.Cancel();
+        _showingBackgroundResearch = false;
+        Visibility = Visibility.Collapsed;
+    }
 
 }

@@ -145,6 +145,7 @@
                 <ColumnDefinition Width="44" />
                 <ColumnDefinition Width="44" />
                 <ColumnDefinition Width="44" />
+                <ColumnDefinition Width="44" />
             </Grid.ColumnDefinitions>
 
             <Button x:Name="BackButton" Grid.Column="0" Content="&#xE72B;"
@@ -194,7 +195,12 @@
                     FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}"
                     ToolTip="Nexus Следопыт: найти, проверить и сравнить информацию" Click="ShoppingAgentTop_Click" />
 
-            <Button x:Name="MenuButton" Grid.Column="8" Content="&#xE712;"
+            <Button Grid.Column="8" Content="&gt;_" Style="{StaticResource IconButton}"
+                    FontFamily="Cascadia Mono, Consolas" FontSize="12" FontWeight="SemiBold"
+                    Foreground="{StaticResource AccentBrush}" ToolTip="SSH-терминал Linux"
+                    Click="SshTerminal_Click" />
+
+            <Button x:Name="MenuButton" Grid.Column="9" Content="&#xE712;"
                     Style="{StaticResource IconButton}" ToolTip="Меню" Click="MenuButton_Click">
                 <Button.ContextMenu>
                     <ContextMenu>
@@ -209,6 +215,7 @@
                         <MenuItem x:Name="ExtensionsMenuItem" Header="Расширения" Click="ShowExtensions_Click" />
                         <MenuItem Header="Показать / скрыть Privacy Dock" Click="ShowPrivacyMonitor_Click" />
                         <MenuItem Header="DevTools · вкладка Nexus AI" InputGestureText="F12" Click="ShowDeveloperAi_Click" />
+                        <MenuItem Header="SSH-терминал Linux" Click="SshTerminal_Click" />
                         <MenuItem Header="Настройки" Click="ShowSettings_Click" />
                         <MenuItem Header="Очистить данные просмотра" InputGestureText="Ctrl+Shift+Del" Click="ClearData_Click" />
                         <Separator />
@@ -239,6 +246,9 @@
             </Border>
             <views:LocalAiDockControl x:Name="LocalAiDock" Grid.Column="1" Visibility="Collapsed"
                                       HorizontalAlignment="Right" VerticalAlignment="Stretch" />
+            <views:SshTerminalDockControl x:Name="SshTerminalDock" Grid.Column="1" Visibility="Collapsed"
+                                          HorizontalAlignment="Right" VerticalAlignment="Stretch"
+                                          CloseRequested="SshTerminal_CloseRequested" />
         </Grid>
 
         <Border Grid.Row="4" Background="#09111A" BorderBrush="#203747" BorderThickness="0,1,0,0"
