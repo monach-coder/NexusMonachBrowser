@@ -15,7 +15,11 @@ namespace NexusMonach.Services;
 internal static class LocalTextModelServer
 {
     private static readonly SemaphoreSlim StartupGate = new(1, 1);
-    private static readonly HttpClient Client = new() { Timeout = Timeout.InfiniteTimeSpan };
+    private static readonly HttpClient Client = new(new SocketsHttpHandler
+    {
+        UseProxy = false,
+        AutomaticDecompression = DecompressionMethods.All
+    }) { Timeout = Timeout.InfiniteTimeSpan };
     private static Process? _process;
     private static Uri? _endpoint;
 
@@ -29,7 +33,7 @@ internal static class LocalTextModelServer
     }
 
     public static async Task<string> AskAsync(string systemPrompt, string userPrompt,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, int maximumTokens = 4096, double temperature = 0.15)
     {
         await EnsureStartedAsync(cancellationToken);
         var endpoint = _endpoint ?? throw new InvalidOperationException("Локальный AI-сервер не запущен.");
@@ -41,8 +45,8 @@ internal static class LocalTextModelServer
                 new { role = "system", content = systemPrompt.Trim() + "\nОтвечай без рассуждений и служебных тегов. /no_think" },
                 new { role = "user", content = userPrompt.Trim() }
             },
-            temperature = 0.15,
-            max_tokens = 4096,
+            temperature = Math.Clamp(temperature, 0, 1),
+            max_tokens = Math.Clamp(maximumTokens, 64, 4096),
             stream = false
         });
         using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(endpoint, "v1/chat/completions"))

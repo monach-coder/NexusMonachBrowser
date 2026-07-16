@@ -35,6 +35,10 @@ public static class NexusFabricRuntime
         return await LocalAiService.AskAsync(model, systemPrompt, userPrompt, cancellationToken);
     }
 
+    public static Task<string> TranslateTextAsync(string systemPrompt, string userPrompt,
+        CancellationToken cancellationToken = default) =>
+        LocalAiService.TranslateAsync(systemPrompt, userPrompt, cancellationToken);
+
     public static Task<string> UnderstandImageAsync(byte[] image,
         CancellationToken cancellationToken = default) =>
         LocalAiService.DescribeImageForSearchAsync(AiModelCatalog.VisionModelId, image, cancellationToken);
@@ -42,6 +46,10 @@ public static class NexusFabricRuntime
     public static Task<string> TranscribeSpeechAsync(byte[] wav,
         CancellationToken cancellationToken = default) =>
         WhisperService.TranscribeAsync(wav, cancellationToken);
+
+    public static Task<string> TranscribeSpeechToEnglishAsync(byte[] wav,
+        CancellationToken cancellationToken = default) =>
+        WhisperService.TranscribeToEnglishAsync(wav, cancellationToken);
 
     public static Task<List<float>> EmbedSemanticsAsync(string text,
         CancellationToken cancellationToken = default) =>

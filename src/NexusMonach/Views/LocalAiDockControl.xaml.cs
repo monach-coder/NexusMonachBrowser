@@ -73,7 +73,7 @@ public partial class LocalAiDockControl : UserControl
         }
         _cancellation?.Cancel();
         _cancellation = new CancellationTokenSource();
-        _cancellation.CancelAfter(TimeSpan.FromMinutes(2));
+        _cancellation.CancelAfter(TimeSpan.FromMinutes(3));
         var completed = 0;
         IReadOnlyList<TranslationSegment> segments = [];
         try
@@ -93,6 +93,9 @@ public partial class LocalAiDockControl : UserControl
                     completed += await tab.ApplyTranslationSegmentsAsync(
                         translatedBatch, completed, segments.Count);
                 });
+            if (completed == 0)
+                throw new InvalidOperationException(
+                    "Локальная модель не вернула ни одного проверенного русского фрагмента. Оригинал страницы сохранён.");
             await tab.CompleteInPageTranslationAsync(completed, segments.Count);
         }
         catch (OperationCanceledException)
@@ -136,15 +139,29 @@ public partial class LocalAiDockControl : UserControl
                 await tab.UpdateLiveAudioTranslationStatusAsync("Слушаю системный выход Windows 7 секунд…");
                 var wav = await SystemAudioCaptureService.CaptureWavAsync(7, session.Token);
                 await tab.UpdateLiveAudioTranslationStatusAsync("Whisper распознаёт речь локально…");
-                var transcript = await NexusFabricRuntime.TranscribeSpeechAsync(wav, session.Token);
+                // Whisper first normalises multilingual speech to English. The
+                // small text model then has one stable English -> Russian task.
+                var transcript = await NexusFabricRuntime.TranscribeSpeechToEnglishAsync(wav, session.Token);
                 if (string.IsNullOrWhiteSpace(transcript)) continue;
                 await tab.UpdateLiveAudioTranslationStatusAsync("Nexus Fast Intelligence переводит реплику…");
-                var text = await LocalIntelligenceService.TranslateToRussianAsync(transcript, session.Token);
-                if (!string.IsNullOrWhiteSpace(text) &&
-                    !text.Equals(lastSubtitle, StringComparison.OrdinalIgnoreCase))
+                try
                 {
-                    lastSubtitle = text;
-                    await tab.ShowLiveVideoSubtitleAsync(text);
+                    var text = await LocalIntelligenceService.TranslateToRussianAsync(transcript, session.Token);
+                    if (!string.IsNullOrWhiteSpace(text) &&
+                        !text.Equals(lastSubtitle, StringComparison.OrdinalIgnoreCase))
+                    {
+                        lastSubtitle = text;
+                        await tab.ShowLiveVideoSubtitleAsync(text);
+                    }
+                }
+                catch (OperationCanceledException) { throw; }
+                catch
+                {
+                    // A single badly cut phrase must not stop the live session.
+                    // The next seven-second audio window is still useful.
+                    await tab.UpdateLiveAudioTranslationStatusAsync(
+                        "Эта реплика не переведена · продолжаю слушать…");
+                    await Task.Delay(650, session.Token);
                 }
             }
         }
@@ -439,6 +456,19 @@ public partial class LocalAiDockControl : UserControl
             var itemKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { _tab.CurrentUrl };
             var pages = 0;
+            var previewCount = 0;
+            ShoppingReport? preview = null;
+            void UpdatePreview()
+            {
+                if (rawItems.Count == 0 || rawItems.Count == previewCount) return;
+                var json = "[" + string.Join(",", rawItems) + "]";
+                var candidate = LocalIntelligenceService.BuildShoppingPreview(query, json);
+                if (candidate.Items.Count == 0) return;
+                preview = candidate;
+                previewCount = rawItems.Count;
+                ShowShoppingCards(candidate);
+                StatusText.Text = $"Уже найдено карточек: {candidate.Items.Count} · продолжаю обход каталога…";
+            }
             for (var page = 1; page <= 5 && rawItems.Count < 150; page++)
             {
                 pages = page;
@@ -463,10 +493,12 @@ public partial class LocalAiDockControl : UserControl
                     catch (JsonException) { }
                 }
                 await AppendCurrentPageAsync();
+                UpdatePreview();
                 for (var scrollRound = 0; scrollRound < 6 && rawItems.Count < 150; scrollRound++)
                 {
                     var catalogChanged = await _tab.ScrollShoppingResultsAsync();
                     await AppendCurrentPageAsync();
+                    UpdatePreview();
                     if (!catalogChanged) break;
                 }
                 var next = await _tab.GetNextShoppingPageUrlAsync();
@@ -492,9 +524,25 @@ public partial class LocalAiDockControl : UserControl
                 throw new InvalidOperationException("Карточки товаров не извлечены. " + diagnosis);
             }
             var cards = "[" + string.Join(",", rawItems) + "]";
-            StatusText.Text = $"Nexus Intelligence сопоставляет точные, похожие и частичные названия среди {count} карточек…";
-            var report = await LocalIntelligenceService.AnalyzeShoppingResultsAsync(
-                query, _tab.CurrentHost, cards, _cancellation.Token);
+            preview ??= LocalIntelligenceService.BuildShoppingPreview(query, cards);
+            if (preview.Items.Count > 0) ShowShoppingCards(preview);
+            StatusText.Text = $"Карточки готовы · уточняю итог среди {count} вариантов локально…";
+            ShoppingReport report = preview;
+            using (var rankingBudget = CancellationTokenSource.CreateLinkedTokenSource(_cancellation.Token))
+            {
+                rankingBudget.CancelAfter(TimeSpan.FromSeconds(45));
+                try
+                {
+                    report = await LocalIntelligenceService.AnalyzeShoppingResultsAsync(
+                        query, _tab.CurrentHost, cards, rankingBudget.Token);
+                }
+                catch (OperationCanceledException) when (!_cancellation.IsCancellationRequested)
+                {
+                    // Deterministic cards are already visible; a slow optional
+                    // recommendation must not make the search appear unfinished.
+                    report = preview;
+                }
+            }
             if (report.Items.Count == 0)
                 throw new InvalidOperationException(
                     "Каталог открыт, но карточек, связанных с запросом, не найдено. " +
@@ -542,7 +590,9 @@ public partial class LocalAiDockControl : UserControl
                     bitmap.BeginInit();
                     bitmap.UriSource = imageUri;
                     bitmap.DecodePixelWidth = 260;
-                    bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                    // Default/OnDemand keeps network image decoding off the UI
+                    // path so text cards appear immediately.
+                    bitmap.CacheOption = BitmapCacheOption.Default;
                     bitmap.EndInit();
                     content.Children.Add(new Image
                     {
