@@ -120,7 +120,7 @@ public static class LocalIntelligenceService
                 " Используй только переданные результаты с нескольких страниц. Не придумывай цену, рейтинг, число покупателей, отзывы и характеристики. " +
                 "Если значения нет, пиши 'нет данных'. Оценивай только соответствие запросу, цену и доверие к данным. " +
                 "Отвечай только JSON: {\"query\":\"...\",\"items\":[{\"name\":\"...\",\"price\":\"...\"," +
-                "\"rating\":\"...\",\"buyers\":\"...\",\"url\":\"...\",\"strengths\":\"...\",\"weaknesses\":\"...\",\"score\":0}]," +
+                "\"rating\":\"...\",\"buyers\":\"...\",\"url\":\"...\",\"imageUrl\":\"...\",\"strengths\":\"...\",\"weaknesses\":\"...\",\"score\":0}]," +
                 "\"recommendation\":\"...\",\"caveat\":\"...\"}.",
                 $"Сайт: {siteHost}\nЗапрос: {query}\nИзвлечённые результаты:\n{extractedCardsJson[..Math.Min(extractedCardsJson.Length, 45000)]}", cancellationToken);
             result = JsonSerializer.Deserialize<ShoppingReport>(ExtractJson(answer), JsonOptions);
@@ -136,6 +136,7 @@ public static class LocalIntelligenceService
             result = fallback;
         result.Items ??= [];
         var extractedUrls = ReadExtractedProductUrls(extractedCardsJson);
+        var extractedImages = ReadExtractedProductImages(extractedCardsJson);
         var merged = result.Items
             .Where(x => extractedUrls.Contains(NormalizeProductUrl(x.Url)))
             .Concat(fallback.Items)
@@ -154,43 +155,46 @@ public static class LocalIntelligenceService
             item.Weaknesses = MissingAsNoData(item.Weaknesses);
             item.Score = Math.Clamp(item.Score, 0, 10);
             item.Url = NormalizeProductUrl(item.Url);
+            if (extractedImages.TryGetValue(item.Url, out var imageUrl)) item.ImageUrl = imageUrl;
         }
         result.Query = string.IsNullOrWhiteSpace(result.Query) ? query : result.Query;
         return result;
     }
 
     public static async Task<IReadOnlyList<TranslationSegment>> TranslateSegmentsAsync(
-        IReadOnlyList<TranslationSegment> segments, CancellationToken cancellationToken = default)
+        IReadOnlyList<TranslationSegment> segments, CancellationToken cancellationToken = default,
+        Func<IReadOnlyList<TranslationSegment>, Task>? batchTranslated = null)
     {
         if (segments.Count == 0) return [];
         var result = new Dictionary<string, TranslationSegment>(StringComparer.Ordinal);
         foreach (var known in LocalTranslationDictionary.TranslateKnown(segments))
             result[known.Id] = known;
 
-        // Russian text needs no DOM rewrite and must not inflate the progress
-        // counter. Unknown foreign text is sent in one large request so llama.cpp
-        // is not restarted dozens of times for a normal page.
+        // Qwen stays resident in llama-server, therefore small bounded batches are
+        // both fast and much more reliable than one huge JSON response.
         var pending = segments.Where(x => !result.ContainsKey(x.Id) && !LooksRussian(x.Text)).ToArray();
-        foreach (var group in pending.Chunk(160))
+        foreach (var group in pending.Chunk(16))
         {
+            var completedBatch = new List<TranslationSegment>();
             try
             {
-                var input = JsonSerializer.Serialize(group.Select(x => new { id = x.Id, text = x.Text }));
+                var input = string.Join("\n", group.Select(x => $"<<<{x.Id}>>> {x.Text.Replace('\r', ' ').Replace('\n', ' ')}"));
                 var answer = await NexusFabricRuntime.AskTextAsync(
                     "Ты локальный переводчик интерфейсов и веб-страниц. " + UntrustedDataRule +
-                    " Переведи каждый text на естественный русский. Сохрани id, числа, URL, имена и смысл элементов интерфейса. " +
-                    "Не объединяй и не пропускай элементы. Отвечай только валидным JSON без Markdown: " +
-                    "{\"items\":[{\"id\":\"n1\",\"text\":\"перевод\"}] }.", input, cancellationToken);
-                var response = JsonSerializer.Deserialize<TranslationResponse>(ExtractJson(answer), JsonOptions);
+                    " Переведи текст после каждого маркера на естественный русский. Сохрани маркер, числа, URL и имена. " +
+                    "Не объединяй и не пропускай строки. Формат каждой строки строго: <<<id>>> перевод. Без JSON и Markdown.",
+                    input, cancellationToken);
                 var expected = group.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
-                foreach (var item in response?.Items ?? [])
+                foreach (var item in ParseMarkedTranslations(answer))
                     if (expected.Contains(item.Id) && !string.IsNullOrWhiteSpace(item.Text))
                     {
                         var translated = ValidateTranslation(item.Text);
-                        if (!string.IsNullOrWhiteSpace(translated))
+                        var source = group.First(x => x.Id.Equals(item.Id, StringComparison.Ordinal)).Text;
+                        if (!string.IsNullOrWhiteSpace(translated) && IsUsableRussianTranslation(source, translated))
                         {
-                            result[item.Id] = new TranslationSegment { Id = item.Id, Text = translated };
-                            var source = group.First(x => x.Id.Equals(item.Id, StringComparison.Ordinal)).Text;
+                            var translatedSegment = new TranslationSegment { Id = item.Id, Text = translated };
+                            result[item.Id] = translatedSegment;
+                            completedBatch.Add(translatedSegment);
                             LocalTranslationDictionary.Remember(source, translated);
                         }
                     }
@@ -201,6 +205,9 @@ public static class LocalIntelligenceService
                 // Маленькая модель иногда добавляет пояснение или повреждает JSON.
                 // Такой пакет остаётся в оригинале: служебный текст в DOM не попадает.
             }
+
+            if (completedBatch.Count > 0 && batchTranslated is not null)
+                await batchTranslated(completedBatch);
 
             // Do not retry missing nodes one-by-one: each retry reloads the model.
             // Untranslated nodes remain original and can be handled by a later pass.
@@ -218,8 +225,30 @@ public static class LocalIntelligenceService
             "Определи язык и переведи текст на естественный русский, даже если исходный язык использует кириллицу. " +
             UntrustedDataRule + " Верни только перевод без пояснений, кавычек и Markdown.", text, cancellationToken);
         var translated = ValidateTranslation(answer);
+        if (!IsUsableRussianTranslation(text, translated))
+            throw new InvalidOperationException("Локальная модель распознала текст, но не вернула перевод на русский.");
         LocalTranslationDictionary.Remember(text, translated);
         return translated;
+    }
+
+    private static IReadOnlyList<TranslationSegment> ParseMarkedTranslations(string value)
+    {
+        var matches = Regex.Matches(value, @"(?ms)<<<(?<id>n\d+)>>>\s*(?<text>.*?)(?=\r?\n<<<n\d+>>>|\z)");
+        return matches.Select(match => new TranslationSegment
+        {
+            Id = match.Groups["id"].Value,
+            Text = match.Groups["text"].Value.Trim()
+        }).Where(x => !string.IsNullOrWhiteSpace(x.Text)).ToArray();
+    }
+
+    private static bool IsUsableRussianTranslation(string source, string translated)
+    {
+        if (string.IsNullOrWhiteSpace(translated) || source.Equals(translated, StringComparison.OrdinalIgnoreCase)) return false;
+        var sourceForeignLetters = source.Count(ch =>
+            (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+            (ch >= '\u3040' && ch <= '\u30ff') || (ch >= '\u3400' && ch <= '\u9fff'));
+        if (sourceForeignLetters < 3) return true;
+        return translated.Any(ch => ch >= '\u0400' && ch <= '\u04ff');
     }
 
     public static async Task<string> DiagnoseAgentPageAsync(string query, string title, string url, string pageText,
@@ -344,6 +373,26 @@ public static class LocalIntelligenceService
         return urls;
     }
 
+    private static Dictionary<string, string> ReadExtractedProductImages(string json)
+    {
+        var images = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (document.RootElement.ValueKind != JsonValueKind.Array) return images;
+            foreach (var card in document.RootElement.EnumerateArray())
+            {
+                var url = NormalizeProductUrl(card.TryGetProperty("url", out var u) ? u.GetString() : null);
+                var image = card.TryGetProperty("imageUrl", out var i) ? i.GetString() : null;
+                if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(image, UriKind.Absolute, out var imageUri) ||
+                    imageUri.Scheme is not "http" and not "https") continue;
+                images[url] = imageUri.AbsoluteUri;
+            }
+        }
+        catch (JsonException) { }
+        return images;
+    }
+
     private static string MissingAsNoData(string? value) =>
         string.IsNullOrWhiteSpace(value) ? "нет данных" : value.Trim();
 
@@ -359,6 +408,7 @@ public static class LocalIntelligenceService
                 var text = card.TryGetProperty("text", out var t) ? t.GetString() ?? string.Empty : string.Empty;
                 if (string.IsNullOrWhiteSpace(name)) continue;
                 var match = ShoppingLexicalScore(query, name, text);
+                if (match < .12) continue;
                 var price = card.TryGetProperty("price", out var p) ? p.GetString() : null;
                 var rating = card.TryGetProperty("rating", out var r) ? r.GetString() : null;
                 var buyers = card.TryGetProperty("buyers", out var b) ? b.GetString() : null;
@@ -368,6 +418,7 @@ public static class LocalIntelligenceService
                     Name = name, Price = MissingAsNoData(price), Rating = MissingAsNoData(rating),
                     Buyers = MissingAsNoData(buyers),
                     Url = NormalizeProductUrl(card.TryGetProperty("url", out var u) ? u.GetString() : null),
+                    ImageUrl = card.TryGetProperty("imageUrl", out var image) ? image.GetString() ?? string.Empty : string.Empty,
                     Strengths = match >= .94 ? "точное совпадение названия с запросом" :
                         match >= .72 ? "совпала комбинация основных слов" :
                         data > 1 ? "частичное совпадение и несколько проверяемых показателей" : "частичное совпадение с запросом",

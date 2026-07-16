@@ -5,7 +5,7 @@ NEXUS MONACH OFFLINE AI PACK
 
 Полная release-сборка содержит:
 
-AI\llama\llama-cli.exe и DLL из официального Windows x64-релиза llama.cpp
+AI\llama\llama-cli.exe, AI\llama\llama-server.exe и DLL из официального Windows x64-релиза llama.cpp
 AI\whisper\whisper-cli.exe и DLL из официального Windows x64-релиза whisper.cpp
 AI\models\qwen3-0.6b\Qwen3-0.6B-Q8_0.gguf
 AI\models\whisper\ggml-base-q5_1.bin

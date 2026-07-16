@@ -22,6 +22,7 @@ public static class AiModelCatalog
     public static string AdapterRoot => Path.Combine(Root, "adapters");
 
     public static string? LlamaCli => FindFile(LlamaRoot, "llama-cli.exe");
+    public static string? LlamaServer => FindFile(LlamaRoot, "llama-server.exe");
     public static string? VisionCli => FindFile(LlamaRoot, "llama-mtmd-cli.exe");
     public static string? WhisperCli => FindFile(WhisperRoot, "whisper-cli.exe");
     public static string? TextModel => FindFile(TextRoot, "*.gguf");
@@ -31,7 +32,8 @@ public static class AiModelCatalog
     public static string? NodeExecutable => FindFile(NodeRoot, "node.exe");
     public static string SemanticAdapter => Path.Combine(AdapterRoot, "semantic.mjs");
 
-    public static bool TextReady => IsUsable(LlamaCli, 8_000) && IsUsable(TextModel, 300_000_000);
+    public static bool TextReady => (IsUsable(LlamaServer, 8_000) || IsUsable(LlamaCli, 8_000)) &&
+                                    IsUsable(TextModel, 300_000_000);
     public static bool SpeechReady => IsUsable(WhisperCli, 8_000) && IsUsable(WhisperModel, 50_000_000);
     public static bool SemanticReady => IsUsable(NodeExecutable, 20_000_000) && File.Exists(SemanticAdapter) &&
         Directory.Exists(SemanticRoot) && Directory.EnumerateFiles(SemanticRoot, "*.onnx", SearchOption.AllDirectories).Any(IsUsableModel);
@@ -43,7 +45,8 @@ public static class AiModelCatalog
         $"Семантика {(SemanticReady ? "✓" : "—")} · Зрение {(VisionReady ? "✓" : "—")}";
 
     public static string MissingTextRuntimeMessage =>
-        "В этой сборке отсутствует автономный текстовый AI-комплект. Ожидаются AI\\llama\\llama-cli.exe " +
+        "В этой сборке отсутствует автономный текстовый AI-комплект. Ожидается AI\\llama\\llama-server.exe " +
+        "(или совместимый AI\\llama\\llama-cli.exe) " +
         "и AI\\models\\qwen3-0.6b\\*.gguf. Nexus не загружает модели из сети во время работы.";
 
     public static string MissingSpeechRuntimeMessage =>

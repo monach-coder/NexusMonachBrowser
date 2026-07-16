@@ -80,6 +80,40 @@ public static partial class NexusSearchService
         return await LocalIntelligenceService.AnalyzeWebSearchAsync(query, enriched, cancellationToken);
     }
 
+    public static async Task<NexusSearchReport> AnalyzeSelectedSiteAsync(string query, string title, string url,
+        string currentPageText, IReadOnlyList<string> internalLinks, CancellationToken cancellationToken = default)
+    {
+        query = Regex.Replace(query ?? string.Empty, @"\s+", " ").Trim();
+        var candidates = new List<NexusSearchCandidate>
+        {
+            new()
+            {
+                Title = string.IsNullOrWhiteSpace(title) ? url : title,
+                Url = url,
+                Snippet = (currentPageText ?? string.Empty)[..Math.Min(currentPageText?.Length ?? 0, 12_000)],
+                SemanticRelevance = 1
+            }
+        };
+        using var client = CreateClient();
+        using var slots = new SemaphoreSlim(2, 2);
+        var safeLinks = internalLinks.Where(link => IsSafePublicUrl(link, out var uri) &&
+                                                    Uri.TryCreate(url, UriKind.Absolute, out var root) &&
+                                                    IsSameSite(uri.Host, root.Host))
+            .Distinct(StringComparer.OrdinalIgnoreCase).Take(6)
+            .Select(link => new NexusSearchCandidate { Title = link, Url = link, Snippet = string.Empty })
+            .ToArray();
+        async Task<NexusSearchCandidate?> ReadAsync(NexusSearchCandidate candidate)
+        {
+            await slots.WaitAsync(cancellationToken);
+            try { return await EnrichAsync(client, candidate, cancellationToken); }
+            finally { slots.Release(); }
+        }
+        var enriched = await Task.WhenAll(safeLinks.Select(ReadAsync));
+        candidates.AddRange(enriched.Where(x => x is not null && !string.IsNullOrWhiteSpace(x.Snippet))
+            .Select(x => x!));
+        return await LocalIntelligenceService.AnalyzeWebSearchAsync(query, candidates, cancellationToken);
+    }
+
     private static string BuildDiscoveryQuery(string query)
     {
         var cleaned = Regex.Replace(query,
@@ -297,6 +331,11 @@ public static partial class NexusSearchService
         host.Contains("bing.", StringComparison.OrdinalIgnoreCase) ||
         host.Contains("mojeek.", StringComparison.OrdinalIgnoreCase) ||
         host.Contains("brave.", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsSameSite(string left, string right) =>
+        left.Equals(right, StringComparison.OrdinalIgnoreCase) ||
+        left.EndsWith('.' + right, StringComparison.OrdinalIgnoreCase) ||
+        right.EndsWith('.' + left, StringComparison.OrdinalIgnoreCase);
 
     private static string ExtractReadableText(string html, int maximum)
     {

@@ -106,6 +106,7 @@ public sealed class ShoppingCandidate
     public string Rating { get; set; } = "нет данных";
     public string Buyers { get; set; } = "нет данных";
     public string Url { get; set; } = string.Empty;
+    public string ImageUrl { get; set; } = string.Empty;
     public string Strengths { get; set; } = string.Empty;
     public string Weaknesses { get; set; } = string.Empty;
     public double Score { get; set; }

@@ -1,0 +1,79 @@
+<UserControl x:Class="NexusMonach.Views.SshTerminalDockControl"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Width="520" MinWidth="430" Background="Transparent" Unloaded="Control_Unloaded">
+    <Border Background="#B3101010" BorderBrush="#80FFFFFF" BorderThickness="1"
+            CornerRadius="16" Padding="15">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="NEXUS SSH" FontSize="20" FontWeight="SemiBold"
+                               Foreground="{StaticResource AccentBrush}" />
+                    <TextBlock Text="удалённый Linux-терминал · Windows OpenSSH"
+                               Foreground="{StaticResource MutedTextBrush}" FontSize="10.5" Margin="0,3,0,0" />
+                </StackPanel>
+                <Button Grid.Column="1" Content="×" Width="34" Height="30" FontSize="17"
+                        ToolTip="Скрыть терминал" Click="Close_Click" />
+            </Grid>
+
+            <Grid Grid.Row="1" Margin="0,13,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/><ColumnDefinition Width="88"/><ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="СЕРВЕР" FontSize="9.5" Foreground="{StaticResource GoldBrush}" />
+                    <TextBox x:Name="TargetBox" Margin="0,4,7,0" Padding="9,7"
+                             ToolTip="Например: root@192.168.1.20 или admin@example.org" />
+                </StackPanel>
+                <StackPanel Grid.Column="1">
+                    <TextBlock Text="ПОРТ SSH" FontSize="9.5" Foreground="{StaticResource GoldBrush}" />
+                    <TextBox x:Name="PortBox" Text="22" Margin="0,4,7,0" Padding="9,7"
+                             ToolTip="Порт сервера SSH: от 1 до 65535" />
+                </StackPanel>
+                <Button x:Name="ConnectButton" Grid.Column="2" Content="Подключить"
+                        Padding="12,8" Margin="0,17,0,0" Click="Connect_Click" />
+            </Grid>
+
+            <Grid Grid.Row="2" Margin="0,10,0,0">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <TextBlock x:Name="ConnectionText" Text="Не подключено · порт 22"
+                           Foreground="{StaticResource MutedTextBrush}" VerticalAlignment="Center" />
+                <TextBlock x:Name="SessionTimeText" Grid.Column="1" Text="СЕССИЯ 00:00:00"
+                           Foreground="{StaticResource AccentBrush}" FontWeight="SemiBold" />
+            </Grid>
+
+            <TextBox x:Name="OutputBox" Grid.Row="3" Margin="0,10,0,0" Padding="12"
+                     Background="#A0080808" Foreground="#EEF4F8" BorderBrush="#66FFFFFF"
+                     FontFamily="Cascadia Mono, Consolas" FontSize="12.5" IsReadOnly="True"
+                     AcceptsReturn="True" TextWrapping="NoWrap" HorizontalScrollBarVisibility="Auto"
+                     VerticalScrollBarVisibility="Auto" />
+
+            <Grid Grid.Row="4" Margin="0,10,0,0">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <TextBox x:Name="CommandBox" Padding="10,8" IsEnabled="False"
+                         FontFamily="Cascadia Mono, Consolas" KeyDown="CommandBox_KeyDown"
+                         ToolTip="Команда выполняется только после Enter или кнопки Отправить" />
+                <Button x:Name="SendButton" Grid.Column="1" Content="Отправить" IsEnabled="False"
+                        Padding="12,8" Margin="7,0,0,0" Click="Send_Click" />
+            </Grid>
+
+            <Grid Grid.Row="5" Margin="0,10,0,0">
+                <TextBlock Text="Пароль не сохраняется. Рекомендуется ключ или Windows ssh-agent. Проверяйте отпечаток хоста при первом подключении."
+                           TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" FontSize="10.5" />
+                <Button x:Name="DisconnectButton" Content="Отключить" IsEnabled="False"
+                        HorizontalAlignment="Right" VerticalAlignment="Bottom" Padding="10,6"
+                        Margin="0,30,0,0" Click="Disconnect_Click" />
+            </Grid>
+        </Grid>
+    </Border>
+</UserControl>

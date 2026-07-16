@@ -4,15 +4,30 @@
         Width="360" Height="360" WindowStyle="None" ResizeMode="NoResize"
         AllowsTransparency="True" Background="Transparent" ShowInTaskbar="False"
         ShowActivated="False" Topmost="True" WindowStartupLocation="CenterScreen">
+    <Window.Resources>
+        <Storyboard x:Key="Pulse" RepeatBehavior="Forever" AutoReverse="True">
+            <DoubleAnimation Storyboard.TargetName="Glow" Storyboard.TargetProperty="Opacity"
+                             From="0.25" To="0.72" Duration="0:0:1.4" />
+            <DoubleAnimation Storyboard.TargetName="LogoScale" Storyboard.TargetProperty="ScaleX"
+                             From="0.97" To="1.02" Duration="0:0:1.4" />
+            <DoubleAnimation Storyboard.TargetName="LogoScale" Storyboard.TargetProperty="ScaleY"
+                             From="0.97" To="1.02" Duration="0:0:1.4" />
+        </Storyboard>
+    </Window.Resources>
     <Grid Loaded="Grid_Loaded">
-        <Ellipse Width="322" Height="322" Fill="#1836D7C4" />
-        <Ellipse Width="308" Height="308" Fill="Transparent" Stroke="#3836D7C4" StrokeThickness="7" />
-        <Path x:Name="CountdownRing" Stroke="#36D7C4" StrokeThickness="7"
-              StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
-        <Ellipse Width="294" Height="294" Fill="#F20B1018" Stroke="#4036D7C4" StrokeThickness="2" />
-        <Image Width="168" Height="168" Source="/Assets/nexus-monach-512.png"
-               HorizontalAlignment="Center" VerticalAlignment="Center" />
-        <!-- The countdown is conveyed only by the disappearing green ring. -->
-        <TextBlock x:Name="CountdownText" Visibility="Collapsed" />
+        <Ellipse x:Name="Glow" Width="322" Height="322" Fill="#5036D7C4" />
+        <Ellipse Width="294" Height="294" Fill="#F20B1018" Stroke="#5536D7C4" StrokeThickness="2" />
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+            <Image Width="150" Height="150" Source="/Assets/nexus-monach-512.png"
+                   RenderTransformOrigin="0.5,0.5">
+                <Image.RenderTransform>
+                    <ScaleTransform x:Name="LogoScale" />
+                </Image.RenderTransform>
+            </Image>
+            <TextBlock Text="NEXUS MONACH" Margin="0,14,0,0" Foreground="#EEF4F8"
+                       FontSize="19" FontWeight="SemiBold" HorizontalAlignment="Center" />
+            <TextBlock Text="защищённый запуск" Margin="0,5,0,0" Foreground="#91A2B4"
+                       FontSize="11" HorizontalAlignment="Center" />
+        </StackPanel>
     </Grid>
 </Window>
