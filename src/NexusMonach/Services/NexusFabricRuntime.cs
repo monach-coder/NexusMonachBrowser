@@ -22,7 +22,8 @@ public static class NexusFabricRuntime
 
     public static string ModelRoutingSummary =>
         "Fabric Router · " +
-        $"Qwen: текст/перевод {(AiModelCatalog.TextReady ? "✓" : "—")} · " +
+        $"Qwen: анализ {(AiModelCatalog.TextReady ? "✓" : "—")} · " +
+        $"OPUS: перевод {(AiModelCatalog.TranslationReady ? "✓" : "—")} · " +
         $"Whisper: речь {(AiModelCatalog.SpeechReady ? "✓" : "—")} · " +
         $"SmolVLM: фото {(AiModelCatalog.VisionReady ? "✓" : "—")} · " +
         $"E5: смысл {(AiModelCatalog.SemanticReady ? "✓" : "—")} · по требованию";
@@ -34,10 +35,6 @@ public static class NexusFabricRuntime
                     ?? throw new InvalidOperationException(AiModelCatalog.MissingTextRuntimeMessage);
         return await LocalAiService.AskAsync(model, systemPrompt, userPrompt, cancellationToken);
     }
-
-    public static Task<string> TranslateTextAsync(string systemPrompt, string userPrompt,
-        CancellationToken cancellationToken = default) =>
-        LocalAiService.TranslateAsync(systemPrompt, userPrompt, cancellationToken);
 
     public static Task<string> UnderstandImageAsync(byte[] image,
         CancellationToken cancellationToken = default) =>

@@ -349,7 +349,8 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
               }
               return nodes.map((item,index)=>{
                 const id='n'+(index+1);state.nodes.set(id,item.node);state.originals.set(id,{node:item.node,original:item.raw,text:item.text});
-                return {Id:id,Text:item.text};
+                const language=(item.node.parentElement?.closest('[lang]')?.getAttribute('lang')||document.documentElement.lang||'').trim();
+                return {Id:id,Text:item.text,Language:language};
               });
             })();
             """);

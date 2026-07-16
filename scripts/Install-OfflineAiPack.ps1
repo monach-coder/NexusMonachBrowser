@@ -23,10 +23,17 @@ try {
         "llama\llama-mtmd-cli.exe",
         "node\node.exe",
         "adapters\semantic.mjs",
+        "adapters\translate.mjs",
         "models\whisper\ggml-base-q5_1.bin",
         "models\smolvlm-500m\SmolVLM-500M-Instruct-Q8_0.gguf",
         "models\smolvlm-500m\mmproj-SmolVLM-500M-Instruct-Q8_0.gguf",
-        "models\multilingual-e5-small\onnx\model.onnx"
+        "models\multilingual-e5-small\onnx\model.onnx",
+        "models\translation\mul-en\onnx\encoder_model_quantized.onnx",
+        "models\translation\mul-en\onnx\decoder_model_merged_quantized.onnx",
+        "models\translation\ko-en\onnx\encoder_model_quantized.onnx",
+        "models\translation\ko-en\onnx\decoder_model_merged_quantized.onnx",
+        "models\translation\en-ru\onnx\encoder_model_quantized.onnx",
+        "models\translation\en-ru\onnx\decoder_model_merged_quantized.onnx"
     )
     foreach ($relative in $required) {
         if (-not (Test-Path (Join-Path $packRoot $relative))) { throw "AI pack is missing $relative" }
