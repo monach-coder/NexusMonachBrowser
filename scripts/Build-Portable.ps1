@@ -43,6 +43,9 @@ if ($textModels.Count -eq 0) { $missingAi += (Join-Path $ai "models\qwen3-0.6b\*
 if (@(Get-ChildItem (Join-Path $ai "whisper") -Filter whisper-cli.exe -Recurse -ErrorAction SilentlyContinue).Count -eq 0) {
     $missingAi += (Join-Path $ai "whisper\**\whisper-cli.exe")
 }
+if (@(Get-ChildItem (Join-Path $ai "whisper") -Filter whisper-server.exe -Recurse -ErrorAction SilentlyContinue).Count -eq 0) {
+    $missingAi += (Join-Path $ai "whisper\**\whisper-server.exe")
+}
 if ($missingAi.Count -gt 0) {
     Write-Host "WARNING: source build does not contain the Full Offline AI payload:" -ForegroundColor Yellow
     $missingAi | ForEach-Object { Write-Host "  - $_" -ForegroundColor Yellow }

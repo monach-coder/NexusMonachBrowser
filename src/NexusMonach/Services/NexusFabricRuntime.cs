@@ -44,6 +44,10 @@ public static class NexusFabricRuntime
         CancellationToken cancellationToken = default) =>
         WhisperService.TranscribeAsync(wav, cancellationToken);
 
+    public static Task<WhisperTranscript> TranscribeSpeechDetailedAsync(byte[] wav,
+        CancellationToken cancellationToken = default) =>
+        WhisperService.TranscribeDetailedAsync(wav, cancellationToken);
+
     public static Task<string> TranscribeSpeechToEnglishAsync(byte[] wav,
         CancellationToken cancellationToken = default) =>
         WhisperService.TranscribeToEnglishAsync(wav, cancellationToken);

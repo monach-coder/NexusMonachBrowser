@@ -72,6 +72,7 @@ public partial class App : Application
         DevToolsAiBridgeService.Stop();
         NexusFabricRuntime.Shutdown();
         SemanticEmbeddingService.Stop();
+        WhisperService.Shutdown();
         TranslationService.Stop();
         LocalAiService.Shutdown();
         base.OnExit(e);
