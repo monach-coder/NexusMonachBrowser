@@ -41,6 +41,9 @@ try {
     if (@(Get-ChildItem (Join-Path $packRoot "whisper") -Filter whisper-cli.exe -Recurse -ErrorAction SilentlyContinue).Count -eq 0) {
         throw "AI pack has no whisper-cli.exe."
     }
+    if (@(Get-ChildItem (Join-Path $packRoot "whisper") -Filter whisper-server.exe -Recurse -ErrorAction SilentlyContinue).Count -eq 0) {
+        throw "AI pack has no whisper-server.exe."
+    }
     if (@(Get-ChildItem (Join-Path $packRoot "models\qwen3-0.6b") -Filter *.gguf -ErrorAction SilentlyContinue).Count -eq 0) {
         throw "AI pack has no Qwen3 0.6B GGUF model."
     }

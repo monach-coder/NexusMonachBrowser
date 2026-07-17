@@ -30,6 +30,7 @@ public static class AiModelCatalog
     public static string? LlamaServer => FindFile(LlamaRoot, "llama-server.exe");
     public static string? VisionCli => FindFile(LlamaRoot, "llama-mtmd-cli.exe");
     public static string? WhisperCli => FindFile(WhisperRoot, "whisper-cli.exe");
+    public static string? WhisperServer => FindFile(WhisperRoot, "whisper-server.exe");
     public static string? TextModel => FindFile(TextRoot, "*.gguf");
     public static string? WhisperModel => FindFile(SpeechRoot, "ggml-base-q5_1.bin");
     public static string? VisionModel => FindFile(VisionRoot, "*SmolVLM*Q8_0.gguf");
@@ -40,7 +41,8 @@ public static class AiModelCatalog
 
     public static bool TextReady => (IsUsable(LlamaServer, 8_000) || IsUsable(LlamaCli, 8_000)) &&
                                     IsUsable(TextModel, 300_000_000);
-    public static bool SpeechReady => IsUsable(WhisperCli, 8_000) && IsUsable(WhisperModel, 50_000_000);
+    public static bool SpeechReady => (IsUsable(WhisperServer, 8_000) || IsUsable(WhisperCli, 8_000)) &&
+                                      IsUsable(WhisperModel, 50_000_000);
     public static bool SemanticReady => IsUsable(NodeExecutable, 20_000_000) && File.Exists(SemanticAdapter) &&
         Directory.Exists(SemanticRoot) && Directory.EnumerateFiles(SemanticRoot, "*.onnx", SearchOption.AllDirectories).Any(IsUsableModel);
     public static bool VisionReady => IsUsable(VisionCli, 8_000) && IsUsable(VisionModel, 300_000_000) &&
@@ -60,7 +62,8 @@ public static class AiModelCatalog
         "и AI\\models\\qwen3-0.6b\\*.gguf. Nexus не загружает модели из сети во время работы.";
 
     public static string MissingSpeechRuntimeMessage =>
-        "В этой сборке отсутствует автономный Whisper-комплект. Ожидаются AI\\whisper\\whisper-cli.exe " +
+        "В этой сборке отсутствует автономный Whisper-комплект. Ожидается AI\\whisper\\whisper-server.exe " +
+        "(либо совместимый AI\\whisper\\whisper-cli.exe) " +
         "и AI\\models\\whisper\\ggml-base-q5_1.bin. Nexus не загружает модели из сети во время работы.";
 
     public static string MissingTranslationRuntimeMessage =>

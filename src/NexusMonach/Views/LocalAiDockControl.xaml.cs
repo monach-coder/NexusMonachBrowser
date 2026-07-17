@@ -120,46 +120,47 @@ public partial class LocalAiDockControl : UserControl
         var finalStatus = "Перевод звука остановлен.";
         try
         {
-            var progress = new Progress<string>(value => _ = tab.UpdateLiveAudioTranslationStatusAsync(value));
-            var preparation = WhisperService.EnsureInstalledAsync(progress, session.Token);
-            while (!preparation.IsCompleted)
-            {
-                await tab.UpdateLiveAudioTranslationStatusAsync(WhisperService.Status);
-                await Task.Delay(1000, session.Token);
-            }
-            await preparation;
+            await tab.UpdateLiveAudioTranslationStatusAsync("Один раз загружаю Whisper и Nexus OPUS…");
+            await WhisperService.WarmUpAsync(session.Token);
+            await tab.UpdateLiveAudioTranslationStatusAsync(
+                "Слушаю системный звук непрерывно · русские субтитры включены");
+
             var lastSubtitle = string.Empty;
-            while (!session.IsCancellationRequested && !await tab.ShouldStopLiveAudioTranslationAsync())
+            var lastTranscript = string.Empty;
+            var consecutiveErrors = 0;
+            await using var audio = SystemAudioCaptureService.StartContinuousCapture(
+                segmentMilliseconds: 5_500, overlapMilliseconds: 750);
+            await foreach (var segment in audio.ReadSegmentsAsync(session.Token))
             {
-                // captureStream()/AudioContext inside WebView2 destabilises some GPU/DRM
-                // renderers. The Windows loopback path is process-external, works for
-                // cross-origin players and is the single supported capture path.
-                await tab.UpdateLiveAudioTranslationStatusAsync("Слушаю системный выход Windows 7 секунд…");
-                var wav = await SystemAudioCaptureService.CaptureWavAsync(7, session.Token);
-                await tab.UpdateLiveAudioTranslationStatusAsync("Whisper распознаёт речь локально…");
-                // Whisper first normalises multilingual speech to English. The
-                // dedicated OPUS stage then has one stable English -> Russian task.
-                var transcript = await NexusFabricRuntime.TranscribeSpeechToEnglishAsync(wav, session.Token);
-                if (string.IsNullOrWhiteSpace(transcript)) continue;
-                await tab.UpdateLiveAudioTranslationStatusAsync("Nexus OPUS переводит реплику…");
+                if (session.IsCancellationRequested || await tab.ShouldStopLiveAudioTranslationAsync()) break;
                 try
                 {
-                    var text = await LocalIntelligenceService.TranslateEnglishToRussianAsync(transcript, session.Token);
+                    var speech = await NexusFabricRuntime.TranscribeSpeechDetailedAsync(segment.Wav, session.Token);
+                    var transcript = RemoveTranscriptOverlap(lastTranscript, speech.Text);
+                    if (string.IsNullOrWhiteSpace(transcript)) continue;
+                    lastTranscript = speech.Text;
+
+                    // Whisper только распознаёт исходный язык. В отличие от -tr,
+                    // который умеет переводить лишь на английский, Nexus OPUS
+                    // выполняет отдельный маршрут исходный язык -> русский.
+                    var text = await LocalIntelligenceService.TranslateToRussianAsync(
+                        transcript, session.Token, speech.Language);
                     if (!string.IsNullOrWhiteSpace(text) &&
                         !text.Equals(lastSubtitle, StringComparison.OrdinalIgnoreCase))
                     {
                         lastSubtitle = text;
                         await tab.ShowLiveVideoSubtitleAsync(text);
                     }
+                    consecutiveErrors = 0;
                 }
                 catch (OperationCanceledException) { throw; }
-                catch
+                catch (Exception ex)
                 {
-                    // A single badly cut phrase must not stop the live session.
-                    // The next seven-second audio window is still useful.
-                    await tab.UpdateLiveAudioTranslationStatusAsync(
-                        "Эта реплика не переведена · продолжаю слушать…");
-                    await Task.Delay(650, session.Token);
+                    consecutiveErrors++;
+                    if (consecutiveErrors >= 3)
+                        await tab.UpdateLiveAudioTranslationStatusAsync(
+                            "Продолжаю слушать · последняя ошибка: " +
+                            ex.Message[..Math.Min(ex.Message.Length, 140)]);
                 }
             }
         }
@@ -178,6 +179,32 @@ public partial class LocalAiDockControl : UserControl
     }
 
     public void StopVideoTranslation() => Interlocked.Exchange(ref _videoCancellation, null)?.Cancel();
+
+    private static string RemoveTranscriptOverlap(string previous, string current)
+    {
+        current = System.Text.RegularExpressions.Regex.Replace(current ?? string.Empty, @"\s+", " ").Trim();
+        previous = System.Text.RegularExpressions.Regex.Replace(previous ?? string.Empty, @"\s+", " ").Trim();
+        if (current.Length == 0 || previous.Length == 0) return current;
+        if (previous.Equals(current, StringComparison.OrdinalIgnoreCase) ||
+            previous.Contains(current, StringComparison.OrdinalIgnoreCase)) return string.Empty;
+
+        var oldWords = previous.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var newWords = current.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var maximum = Math.Min(Math.Min(oldWords.Length, newWords.Length), 12);
+        for (var overlap = maximum; overlap >= 2; overlap--)
+        {
+            var matches = true;
+            for (var index = 0; index < overlap; index++)
+                if (!oldWords[oldWords.Length - overlap + index].Equals(
+                        newWords[index], StringComparison.OrdinalIgnoreCase))
+                {
+                    matches = false;
+                    break;
+                }
+            if (matches) return string.Join(' ', newWords.Skip(overlap));
+        }
+        return current;
+    }
 
     public async Task PrepareShoppingAgentAsync(BrowserTab tab)
     {
