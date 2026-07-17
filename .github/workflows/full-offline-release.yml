@@ -61,14 +61,14 @@ jobs:
           $koEnRevision = 'd9fa1ac6008242100fecb4fff9b0a5917a1be81f'
           $enRuRevision = 'e050376e960175e8ddc5cff85025dc8436cddd68'
           foreach ($file in $opusFiles) {
-            Get-Asset "https://huggingface.co/Xenova/opus-mt-mul-en/resolve/$mulEnRevision/$file?download=true" "$ai/models/translation/mul-en/$file"
-            Get-Asset "https://huggingface.co/Xenova/opus-mt-ko-en/resolve/$koEnRevision/$file?download=true" "$ai/models/translation/ko-en/$file"
-            Get-Asset "https://huggingface.co/Xenova/opus-mt-en-ru/resolve/$enRuRevision/$file?download=true" "$ai/models/translation/en-ru/$file"
+            Get-Asset "https://huggingface.co/Xenova/opus-mt-mul-en/resolve/$mulEnRevision/${file}?download=true" "$ai/models/translation/mul-en/$file"
+            Get-Asset "https://huggingface.co/Xenova/opus-mt-ko-en/resolve/$koEnRevision/${file}?download=true" "$ai/models/translation/ko-en/$file"
+            Get-Asset "https://huggingface.co/Xenova/opus-mt-en-ru/resolve/$enRuRevision/${file}?download=true" "$ai/models/translation/en-ru/$file"
           }
           foreach ($file in 'encoder_model_quantized.onnx','decoder_model_merged_quantized.onnx') {
-            Get-Asset "https://huggingface.co/Xenova/opus-mt-mul-en/resolve/$mulEnRevision/onnx/$file?download=true" "$ai/models/translation/mul-en/onnx/$file"
-            Get-Asset "https://huggingface.co/Xenova/opus-mt-ko-en/resolve/$koEnRevision/onnx/$file?download=true" "$ai/models/translation/ko-en/onnx/$file"
-            Get-Asset "https://huggingface.co/Xenova/opus-mt-en-ru/resolve/$enRuRevision/onnx/$file?download=true" "$ai/models/translation/en-ru/onnx/$file"
+            Get-Asset "https://huggingface.co/Xenova/opus-mt-mul-en/resolve/$mulEnRevision/onnx/${file}?download=true" "$ai/models/translation/mul-en/onnx/$file"
+            Get-Asset "https://huggingface.co/Xenova/opus-mt-ko-en/resolve/$koEnRevision/onnx/${file}?download=true" "$ai/models/translation/ko-en/onnx/$file"
+            Get-Asset "https://huggingface.co/Xenova/opus-mt-en-ru/resolve/$enRuRevision/onnx/${file}?download=true" "$ai/models/translation/en-ru/onnx/$file"
           }
 
           $expected = @{
