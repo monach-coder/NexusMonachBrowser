@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using NexusMonach.Models;
 
@@ -113,6 +114,9 @@ public static class TranslationService
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
             WorkingDirectory = AiModelCatalog.Root
         };
         start.ArgumentList.Add(AiModelCatalog.TranslationAdapter);

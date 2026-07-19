@@ -16,6 +16,18 @@ public static class PhishingProtectionService
 {
     private static readonly HashSet<string> SessionTrustedHosts = new(StringComparer.OrdinalIgnoreCase);
 
+    // OAuth can legitimately move a YouTube session between these exact Google
+    // and YouTube hosts. Keep the list deliberately narrow: suffix-based checks
+    // here would also trust addresses such as accounts.google.com.evil.test.
+    private static readonly HashSet<string> TrustedAuthenticationHosts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "accounts.google.com",
+        "accounts.google.ru",
+        "accounts.youtube.com",
+        "myaccount.google.com",
+        "consent.google.com"
+    };
+
     private static readonly Dictionary<string, string[]> OfficialBrands = new(StringComparer.OrdinalIgnoreCase)
     {
         ["google"] = ["google.com", "google.ru", "google.co.uk", "google.de", "google.fr", "googleusercontent.com"],
@@ -36,8 +48,13 @@ public static class PhishingProtectionService
             uri.Scheme is not ("http" or "https") || UrlService.IsInternal(url))
             return new PhishingAssessment(PhishingRiskLevel.None, string.Empty, string.Empty);
 
-        var asciiHost = uri.IdnHost.ToLowerInvariant();
+        // A fully-qualified host can legally end with a dot. Normalize it before
+        // comparing against the allow-list and official brand domains.
+        var asciiHost = uri.IdnHost.TrimEnd('.').ToLowerInvariant();
         if (SessionTrustedHosts.Contains(asciiHost))
+            return new PhishingAssessment(PhishingRiskLevel.None, string.Empty, asciiHost);
+
+        if (uri.Scheme == Uri.UriSchemeHttps && TrustedAuthenticationHosts.Contains(asciiHost))
             return new PhishingAssessment(PhishingRiskLevel.None, string.Empty, asciiHost);
 
         string unicodeHost;
