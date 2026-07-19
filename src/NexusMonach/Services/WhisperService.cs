@@ -198,7 +198,7 @@ public static class WhisperService
                      {
                          "-m", AiModelCatalog.WhisperModel!, "--host", IPAddress.Loopback.ToString(),
                          "--port", port.ToString(), "--inference-path", "/inference", "-l", "auto",
-                         "-t", threads.ToString(), "-p", "1", "-nc", "-sns"
+                         "-t", threads.ToString(), "-p", "1", "-sns"
                      })
                 start.ArgumentList.Add(argument);
 
