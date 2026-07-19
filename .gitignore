@@ -1,6 +1,8 @@
 bin/
 obj/
 dist/
+.guardian-key/
+**/integrity-private-key.pem
 Data/
 *.user
 *.suo

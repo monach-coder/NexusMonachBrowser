@@ -119,6 +119,8 @@
             <WrapPanel DockPanel.Dock="Left">
                 <Button Content="Создать тестовый рапорт" Style="{StaticResource GuardianButton}"
                         Click="CreateTestReport_Click" />
+                <Button x:Name="FullCheckButton" Content="Полная проверка" Style="{StaticResource GuardianButton}"
+                        Click="FullCheck_Click" />
                 <Button Content="Обновить" Style="{StaticResource GuardianButton}" Click="Refresh_Click" />
                 <Button Content="Копировать" Style="{StaticResource GuardianButton}" Click="Copy_Click" />
                 <Button Content="Экспорт" Style="{StaticResource GuardianButton}" Click="Export_Click" />

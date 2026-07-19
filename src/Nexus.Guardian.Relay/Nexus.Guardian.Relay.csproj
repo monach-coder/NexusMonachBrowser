@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Nexus.Guardian.Relay</AssemblyName>
+    <RootNamespace>Nexus.Guardian.Relay</RootNamespace>
+    <Version>2.7.2</Version>
+    <Authors>CoderMonach; OpenAI Codex</Authors>
+    <Description>Privacy-preserving Nexus Guardian crash-report relay for Matrix.</Description>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+</Project>

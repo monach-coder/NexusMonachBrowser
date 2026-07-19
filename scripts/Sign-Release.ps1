@@ -20,7 +20,9 @@ if (-not $signTool) { throw 'signtool.exe was not found. Install Windows SDK bui
 
 $targets = @(
     (Join-Path $Directory 'NexusMonach.exe'),
-    (Join-Path $Directory 'Fabric\Nexus.Intelligence.Fabric.dll')
+    (Join-Path $Directory 'NexusMonach.Browser.exe'),
+    (Join-Path $Directory 'Nexus.Intelligence.Fabric.dll'),
+    (Join-Path $Directory 'Nexus.Intelligence.Contracts.dll')
 ) | Where-Object { Test-Path $_ }
 if ($targets.Count -eq 0) { throw "No signable Nexus binaries found in $Directory" }
 

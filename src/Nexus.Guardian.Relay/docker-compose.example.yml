@@ -1,0 +1,11 @@
+services:
+  nexus-guardian-relay:
+    build: .
+    restart: unless-stopped
+    environment:
+      Guardian__Matrix__Homeserver: "https://matrix.example.org"
+      Guardian__Matrix__RoomId: "!room-id:example.org"
+      Guardian__Matrix__AccessToken: "place-token-in-server-secret-store"
+      Guardian__IngestKey: "rotate-this-limited-ingest-key"
+    ports:
+      - "127.0.0.1:8080:8080"

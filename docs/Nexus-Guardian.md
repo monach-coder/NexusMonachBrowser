@@ -16,6 +16,9 @@ crashes visible before the browser starts.
    the integrity state. A critical mismatch blocks startup. A non-critical
    mismatch starts safe mode without local AI and extensions.
 5. Three abnormal exits in ten minutes activate crash-loop safe mode.
+6. A signature or file mismatch is written as a sanitized local integrity event
+   in the same Crash Vault used by crash reports. Identical integrity events are
+   deduplicated for 24 hours.
 
 The integrity manifest is created after optional Authenticode signing, because
 signing changes the executable bytes. Repair is deliberately not automatic in
@@ -44,7 +47,8 @@ full memory dump.
 The development default is **Local only**. Reports remain on this computer and
 are available from `Menu -> Nexus Guardian · local reports`. The local center
 shows integrity and safe-mode state, opens sanitized reports, creates a harmless
-diagnostic report, and supports copy, JSON export and deletion. None of these
+diagnostic report, runs a full on-demand hash check, and supports copy, JSON
+export and deletion. None of these
 actions uses the network. Automatic anonymous upload, when explicitly enabled
 in a future tester build, uses the same sanitized JSON. The repository does not
 embed a GitHub token or a third-party telemetry SDK.
@@ -105,6 +109,13 @@ for a build distributed to testers.
 
 ## Official signing setup
 
+For a normal local build, `RUN_BUILD.cmd` creates a per-workstation ECDSA
+development key on first use, stores it in the Git-ignored `.guardian-key`
+directory, signs the portable manifest and performs a full verification before
+creating the ZIP. The private key is never copied into `dist` and must not be
+shared. Later local builds reuse the same key. Official releases use a separate
+key from the protected CI secret and do not trust this development key.
+
 Run this once on a trusted Windows machine:
 
 ```powershell
@@ -121,9 +132,10 @@ $bytes = [IO.File]::ReadAllBytes('.guardian-key\integrity-private-key.pem')
 ```
 
 The Full Offline workflow signs the final manifest and immediately performs a
-full verification before publishing the ZIP. Until the key is configured, local
-and CI builds are explicitly marked `development-unverified`; they remain usable
-for development but are not presented as Guardian-verified releases.
+full verification before publishing the ZIP. Until the official key is
+configured, CI builds are explicitly marked `development-unverified`; local
+builds still exercise integrity verification with their per-workstation key but
+are not equivalent to an officially signed release.
 
 The release workflow compiles Guardian with `GUARDIAN_OFFICIAL`; that binary
 refuses to start without a valid signed manifest. Ordinary source builds omit the
@@ -136,6 +148,11 @@ NexusMonach.exe --full-integrity-check
 NexusMonach.exe --verify-only . --full-integrity-check
 ./scripts/New-IntegrityManifest.ps1 -Directory dist\NexusMonach-Portable -PrivateKeyPath <private.pem>
 ```
+
+Normal startup performs the fast verification: SHA-256 for executable, managed,
+adapter and UI files plus size checks for large model payloads. Use
+`--full-integrity-check` when validating a release or after copying the archive;
+it hashes every tracked file, including local AI models.
 
 After backing up local work, the complete crash pipeline can be tested without
 damaging files. This intentionally exits the browser and creates one sanitized

@@ -26,12 +26,12 @@ public static class BrowserEnvironment
                 "Не найден Microsoft Edge WebView2 Runtime. Установите Evergreen Runtime с официального сайта Microsoft.");
         }
 
-        ExtensionsEnabledAtStartup = SettingsService.Current.EnableExtensions;
+        ExtensionsEnabledAtStartup = SettingsService.Current.EnableExtensions && !GuardianRuntime.IsSafeMode;
         var options = new CoreWebView2EnvironmentOptions
         {
             AdditionalBrowserArguments = ProxyConfigurationService.BuildBrowserArguments(SettingsService.Current),
             Language = "ru-RU",
-            AreBrowserExtensionsEnabled = true,
+            AreBrowserExtensionsEnabled = ExtensionsEnabledAtStartup,
             EnableTrackingPrevention = true,
             AllowSingleSignOnUsingOSPrimaryAccount = false,
             IsCustomCrashReportingEnabled = true

@@ -6,7 +6,7 @@
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>NexusMonach</AssemblyName>
+    <AssemblyName>NexusMonach.Browser</AssemblyName>
     <RootNamespace>NexusMonach</RootNamespace>
     <ApplicationIcon>Assets\nexus-monach.ico</ApplicationIcon>
     <Version>2.7.2</Version>

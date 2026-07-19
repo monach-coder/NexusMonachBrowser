@@ -38,9 +38,16 @@ public partial class GuardianCenterWindow : Window
             DetailsBox.Text = "Локальных рапортов пока нет.\n\nНажмите «Создать тестовый рапорт», чтобы проверить весь локальный путь Guardian без аварийного завершения браузера.";
     }
 
-    private static string DescribeIntegrity(string status) => string.IsNullOrWhiteSpace(status) || status == "unknown"
-        ? "Не проверена в dev-запуске"
-        : status;
+    private static string DescribeIntegrity(string status) => status switch
+    {
+        "verified" => "Проверено · подпись и SHA-256",
+        "degraded" => "Изменены некритические файлы",
+        "critical-mismatch" => "Нарушена целостность",
+        "invalid-signature" => "Недействительная подпись",
+        "development-unverified" => "Локальная сборка без подписи",
+        "not-launched-by-guardian" => "Запуск выполнен без Guardian",
+        _ => "Не проверена в dev-запуске"
+    };
 
     private void ReportsList_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e) =>
         DetailsBox.Text = SelectedReport?.Details ?? string.Empty;
@@ -49,6 +56,69 @@ public partial class GuardianCenterWindow : Window
     {
         CrashReportService.CreateDiagnosticTestReport();
         RefreshReports();
+    }
+
+    private async void FullCheck_Click(object sender, RoutedEventArgs e)
+    {
+        var guardian = Path.Combine(AppContext.BaseDirectory, "NexusMonach.exe");
+        if (!File.Exists(guardian))
+        {
+            GlassDialogWindow.Show(this,
+                "Полная проверка доступна в portable-сборке, запущенной через NexusMonach.exe.",
+                "Nexus Guardian", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        FullCheckButton.IsEnabled = false;
+        IntegrityStatusText.Text = "Полная проверка выполняется…";
+        try
+        {
+            var info = new ProcessStartInfo(guardian)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = AppContext.BaseDirectory
+            };
+            info.ArgumentList.Add("--verify-only");
+            info.ArgumentList.Add(AppContext.BaseDirectory);
+            info.ArgumentList.Add("--full-integrity-check");
+            using var process = Process.Start(info) ??
+                throw new InvalidOperationException("Windows не создал процесс полной проверки.");
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            var output = (await outputTask).Trim();
+            var error = (await errorTask).Trim();
+            if (process.ExitCode == 0)
+            {
+                IntegrityStatusText.Text = "Проверено полностью · SHA-256";
+                GlassDialogWindow.Show(this,
+                    "Полная проверка завершена: подпись манифеста и SHA-256 всех файлов совпадают.",
+                    "Nexus Guardian", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            else
+            {
+                IntegrityStatusText.Text = "Полная проверка обнаружила изменение";
+                var details = string.Join("\n", new[] { output, error }.Where(x => !string.IsNullOrWhiteSpace(x)));
+                if (details.Length > 1800) details = details[..1800] + "…";
+                GlassDialogWindow.Show(this,
+                    "Проверка не пройдена. Не запускайте изменённую сборку и распакуйте официальный архив заново.\n\n" + details,
+                    "Nexus Guardian", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            IntegrityStatusText.Text = DescribeIntegrity(GuardianRuntime.IntegrityStatus);
+            CrashReportService.RecordNonFatal("guardian", "full-integrity-check", ex);
+            GlassDialogWindow.Show(this, "Полная проверка не завершена:\n\n" + ex.Message,
+                "Nexus Guardian", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            FullCheckButton.IsEnabled = true;
+        }
     }
 
     private void Refresh_Click(object sender, RoutedEventArgs e) => RefreshReports();
