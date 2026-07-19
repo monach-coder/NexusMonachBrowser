@@ -1,0 +1,135 @@
+<Window x:Class="NexusMonach.Views.GuardianCenterWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Nexus Guardian · локальный центр" Width="980" Height="680"
+        MinWidth="760" MinHeight="520" WindowStartupLocation="CenterOwner"
+        Icon="/Assets/nexus-monach.ico" Style="{StaticResource GlassPopupWindow}">
+    <Window.Resources>
+        <Style x:Key="GuardianButton" TargetType="Button">
+            <Setter Property="Padding" Value="14,8" />
+            <Setter Property="Margin" Value="0,0,8,8" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Background" Value="#285F67" />
+            <Setter Property="BorderBrush" Value="#557F83" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style x:Key="StatusCard" TargetType="Border">
+            <Setter Property="Background" Value="#33101010" />
+            <Setter Property="BorderBrush" Value="#55FFFFFF" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="12" />
+            <Setter Property="Padding" Value="14,10" />
+            <Setter Property="Margin" Value="0,0,10,0" />
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Border Width="54" Height="54" CornerRadius="27" BorderBrush="{StaticResource AccentBrush}"
+                    BorderThickness="1.5" Background="#22101010" Margin="0,0,14,0">
+                <TextBlock Text="G" FontSize="25" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                <TextBlock Text="NEXUS GUARDIAN" FontSize="23" FontWeight="SemiBold" />
+                <TextBlock Text="Локальный центр целостности и рапортов · сеть не используется"
+                           Foreground="{StaticResource MutedTextBrush}" Margin="0,3,0,0" />
+            </StackPanel>
+        </Grid>
+
+        <Grid Grid.Row="1" Margin="0,18,0,16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Border Style="{StaticResource StatusCard}">
+                <StackPanel>
+                    <TextBlock Text="ЦЕЛОСТНОСТЬ" FontSize="10" Foreground="{StaticResource MutedTextBrush}" />
+                    <TextBlock x:Name="IntegrityStatusText" FontSize="15" FontWeight="SemiBold"
+                               Foreground="{StaticResource AccentBrush}" Margin="0,4,0,0" />
+                </StackPanel>
+            </Border>
+            <Border Grid.Column="1" Style="{StaticResource StatusCard}">
+                <StackPanel>
+                    <TextBlock Text="РЕЖИМ ЗАПУСКА" FontSize="10" Foreground="{StaticResource MutedTextBrush}" />
+                    <TextBlock x:Name="SafeModeStatusText" FontSize="15" FontWeight="SemiBold" Margin="0,4,0,0" />
+                </StackPanel>
+            </Border>
+            <Border Grid.Column="2" Style="{StaticResource StatusCard}" Margin="0">
+                <StackPanel>
+                    <TextBlock Text="ЛОКАЛЬНЫЕ РАПОРТЫ" FontSize="10" Foreground="{StaticResource MutedTextBrush}" />
+                    <TextBlock x:Name="ReportCountText" FontSize="15" FontWeight="SemiBold" Margin="0,4,0,0" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="330" />
+                <ColumnDefinition Width="12" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Border Background="#33101010" BorderBrush="#55FFFFFF" BorderThickness="1" CornerRadius="12">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <TextBlock Text="Сохранённые события" FontSize="14" FontWeight="SemiBold" Margin="14,12" />
+                    <ListBox x:Name="ReportsList" Grid.Row="1" Margin="8,0,8,8"
+                             Background="Transparent" BorderThickness="0"
+                             SelectionChanged="ReportsList_SelectionChanged">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border Padding="10,8" Margin="0,2" Background="#25101010" CornerRadius="8">
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Title}" TextWrapping="Wrap" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" Margin="0,3,0,0"
+                                                   FontSize="11" Foreground="{StaticResource MutedTextBrush}" />
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
+
+            <Border Grid.Column="2" Background="#33101010" BorderBrush="#55FFFFFF"
+                    BorderThickness="1" CornerRadius="12" Padding="12">
+                <TextBox x:Name="DetailsBox" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
+                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                         BorderThickness="0" Background="Transparent" FontFamily="Consolas, Segoe UI"
+                         FontSize="12.5" />
+            </Border>
+        </Grid>
+
+        <DockPanel Grid.Row="3" Margin="0,16,0,0" LastChildFill="False">
+            <WrapPanel DockPanel.Dock="Left">
+                <Button Content="Создать тестовый рапорт" Style="{StaticResource GuardianButton}"
+                        Click="CreateTestReport_Click" />
+                <Button x:Name="FullCheckButton" Content="Полная проверка" Style="{StaticResource GuardianButton}"
+                        Click="FullCheck_Click" />
+                <Button Content="Обновить" Style="{StaticResource GuardianButton}" Click="Refresh_Click" />
+                <Button Content="Копировать" Style="{StaticResource GuardianButton}" Click="Copy_Click" />
+                <Button Content="Экспорт" Style="{StaticResource GuardianButton}" Click="Export_Click" />
+                <Button Content="Открыть папку" Style="{StaticResource GuardianButton}" Click="OpenFolder_Click" />
+                <Button Content="Удалить" Style="{StaticResource GuardianButton}" Background="#594044"
+                        BorderBrush="#8A6268" Click="Delete_Click" />
+            </WrapPanel>
+            <Button DockPanel.Dock="Right" Content="Закрыть" Style="{StaticResource GuardianButton}"
+                    Background="#303C49" BorderBrush="#526273" Margin="8,0,0,8" Click="Close_Click" />
+        </DockPanel>
+    </Grid>
+</Window>

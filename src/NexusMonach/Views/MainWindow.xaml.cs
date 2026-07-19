@@ -59,6 +59,7 @@ public partial class MainWindow : Window
     {
         _isPrivate = isPrivate;
         InitializeComponent();
+        CrashReportService.Initialize();
         DataContext = this;
         PrivateBadge.Visibility = isPrivate ? Visibility.Visible : Visibility.Collapsed;
         ExtensionsMenuItem.IsEnabled = !isPrivate && BrowserEnvironment.ExtensionsEnabledAtStartup;
@@ -69,6 +70,13 @@ public partial class MainWindow : Window
         _networkPerformanceTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _networkPerformanceTimer.Tick += NetworkPerformanceTimer_Tick;
         _networkPerformanceTimer.Start();
+        if (Environment.GetCommandLineArgs().Any(x =>
+                x.Equals("--guardian-test-crash", StringComparison.OrdinalIgnoreCase)))
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+                throw new InvalidOperationException("Intentional Nexus Guardian crash-pipeline test.")),
+                DispatcherPriority.ApplicationIdle);
+        }
     }
 
     public async Task InitializeAsync(bool waitForFirstPage)
@@ -713,6 +721,12 @@ public partial class MainWindow : Window
 
     private void ShowSettings_Click(object sender, RoutedEventArgs e) => ShowSettings();
 
+    private void ShowGuardianCenter_Click(object sender, RoutedEventArgs e)
+    {
+        var window = new GuardianCenterWindow { Owner = this };
+        window.ShowDialog();
+    }
+
     private async void ShowSettings()
     {
         var window = new SettingsWindow(SettingsService.Current.Clone()) { Owner = this };
@@ -956,7 +970,8 @@ public partial class MainWindow : Window
     {
         try
         {
-            var executable = Environment.ProcessPath;
+            var guardian = Path.Combine(AppContext.BaseDirectory, "NexusMonach.exe");
+            var executable = File.Exists(guardian) ? guardian : Environment.ProcessPath;
             if (string.IsNullOrWhiteSpace(executable)) return;
             var info = new ProcessStartInfo(executable)
             {

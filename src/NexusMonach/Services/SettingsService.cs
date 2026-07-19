@@ -9,7 +9,18 @@ public static class SettingsService
 
     public static async Task InitializeAsync()
     {
-        Current = await JsonStore.ReadAsync<BrowserSettings>(AppPaths.SettingsFile) ?? new BrowserSettings();
+        var stored = await JsonStore.ReadAsync<BrowserSettings>(AppPaths.SettingsFile);
+        Current = stored ?? new BrowserSettings();
+        if (Current.CrashReportDestination == CrashReportDestination.HttpsCollector &&
+            string.IsNullOrWhiteSpace(Current.CrashReportEndpoint) &&
+            Uri.TryCreate(GuardianReportingDefaults.Endpoint, UriKind.Absolute, out var endpoint) &&
+            endpoint.Scheme == Uri.UriSchemeHttps)
+        {
+            Current.CrashReportDestination = CrashReportDestination.HttpsCollector;
+            Current.CrashReportEndpoint = endpoint.AbsoluteUri;
+        }
+        if (stored is null && GuardianReportingDefaults.Mode.Equals("automatic", StringComparison.OrdinalIgnoreCase))
+            Current.CrashReportMode = CrashReportMode.AutomaticAnonymous;
         await SaveAsync(Current);
     }
 

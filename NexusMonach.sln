@@ -8,6 +8,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nexus.Intelligence.Contract
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nexus.Intelligence.Fabric", "src\Nexus.Intelligence.Fabric\Nexus.Intelligence.Fabric.csproj", "{42185D92-9E73-4F3B-87E4-F99993B417AC}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nexus.Guardian", "src\Nexus.Guardian\Nexus.Guardian.csproj", "{AC83C3A7-58D4-4C83-944C-C7E13EF4970A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nexus.Guardian.Relay", "src\Nexus.Guardian.Relay\Nexus.Guardian.Relay.csproj", "{26FBF961-04AA-4D50-9807-144479C5399D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -26,5 +30,13 @@ Global
 		{42185D92-9E73-4F3B-87E4-F99993B417AC}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{42185D92-9E73-4F3B-87E4-F99993B417AC}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{42185D92-9E73-4F3B-87E4-F99993B417AC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AC83C3A7-58D4-4C83-944C-C7E13EF4970A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AC83C3A7-58D4-4C83-944C-C7E13EF4970A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AC83C3A7-58D4-4C83-944C-C7E13EF4970A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AC83C3A7-58D4-4C83-944C-C7E13EF4970A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{26FBF961-04AA-4D50-9807-144479C5399D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{26FBF961-04AA-4D50-9807-144479C5399D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{26FBF961-04AA-4D50-9807-144479C5399D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{26FBF961-04AA-4D50-9807-144479C5399D}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

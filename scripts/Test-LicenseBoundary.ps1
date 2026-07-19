@@ -15,7 +15,10 @@ $required = @(
     'THIRD_PARTY_NOTICES.md',
     'src/Nexus.Intelligence.Contracts/Nexus.Intelligence.Contracts.csproj',
     'src/Nexus.Intelligence.Fabric/Nexus.Intelligence.Fabric.csproj',
-    'src/Nexus.Intelligence.Fabric/NexusIntelligenceFabric.cs'
+    'src/Nexus.Intelligence.Fabric/NexusIntelligenceFabric.cs',
+    'src/Nexus.Guardian/Nexus.Guardian.csproj',
+    'src/Nexus.Guardian.Relay/Nexus.Guardian.Relay.csproj',
+    'docs/Nexus-Guardian.md'
 )
 foreach ($relative in $required) {
     if (-not (Test-Path (Join-Path $Root $relative))) { $errors.Add("Missing required project file: $relative") }
@@ -52,6 +55,12 @@ if ($privateKeys) {
 $solution = Get-Content (Join-Path $Root 'NexusMonach.sln') -Raw
 if ($solution -notmatch 'Nexus\.Intelligence\.Fabric') {
     $errors.Add('Open Fabric project is not included in NexusMonach.sln.')
+}
+if ($solution -notmatch 'Nexus\.Guardian') {
+    $errors.Add('Nexus Guardian project is not included in NexusMonach.sln.')
+}
+if ($solution -notmatch 'Nexus\.Guardian\.Relay') {
+    $errors.Add('Nexus Guardian Relay project is not included in NexusMonach.sln.')
 }
 
 if ($errors.Count -gt 0) {

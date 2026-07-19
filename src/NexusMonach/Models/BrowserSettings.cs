@@ -26,6 +26,19 @@ public enum ProxyKind
     Socks5
 }
 
+public enum CrashReportMode
+{
+    AskBeforeSending,
+    AutomaticAnonymous,
+    LocalOnly
+}
+
+public enum CrashReportDestination
+{
+    HttpsCollector,
+    MatrixDirect
+}
+
 public sealed class BrowserSettings
 {
     public SearchEngineKind SearchEngine { get; set; } = SearchEngineKind.DuckDuckGo;
@@ -52,6 +65,11 @@ public sealed class BrowserSettings
     public int ProxyPort { get; set; } = 9050;
     public string ProxyBypassList { get; set; } = string.Empty;
     public string HomePage { get; set; } = "app://newtab";
+    public CrashReportMode CrashReportMode { get; set; } = CrashReportMode.LocalOnly;
+    public CrashReportDestination CrashReportDestination { get; set; } = CrashReportDestination.HttpsCollector;
+    public string CrashReportEndpoint { get; set; } = string.Empty;
+    public string MatrixHomeserver { get; set; } = string.Empty;
+    public string MatrixRoomId { get; set; } = string.Empty;
 
     public BrowserSettings Clone() => new()
     {
@@ -76,6 +94,11 @@ public sealed class BrowserSettings
         ProxyHost = ProxyHost,
         ProxyPort = ProxyPort,
         ProxyBypassList = ProxyBypassList,
-        HomePage = HomePage
+        HomePage = HomePage,
+        CrashReportMode = CrashReportMode,
+        CrashReportDestination = CrashReportDestination,
+        CrashReportEndpoint = CrashReportEndpoint,
+        MatrixHomeserver = MatrixHomeserver,
+        MatrixRoomId = MatrixRoomId
     };
 }

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>NexusMonach</AssemblyName>
+    <RootNamespace>Nexus.Guardian</RootNamespace>
+    <Version>2.7.2</Version>
+    <Product>Nexus Guardian</Product>
+    <Description>Проверка целостности и безопасный запуск Nexus Monach.</Description>
+    <ApplicationIcon>..\NexusMonach\Assets\nexus-monach.ico</ApplicationIcon>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+  <ItemGroup Condition="Exists('..\..\security\integrity-public-key.pem')">
+    <EmbeddedResource Include="..\..\security\integrity-public-key.pem"
+                      LogicalName="Nexus.Guardian.integrity-public-key.pem" />
+  </ItemGroup>
+</Project>
