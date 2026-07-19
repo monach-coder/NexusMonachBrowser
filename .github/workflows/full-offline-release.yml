@@ -24,11 +24,11 @@ jobs:
           node-version: 22.17.0
 
       - name: Verify repository and license hygiene
-        shell: powershell
+        shell: pwsh
         run: ./scripts/Test-LicenseBoundary.ps1
 
       - name: Download pinned offline AI payload
-        shell: powershell
+        shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $ai = 'src/NexusMonach/AI'
@@ -98,13 +98,17 @@ jobs:
 
           # End-to-end translation smoke test. Presence and hashes alone are not
           # enough: load every translation route and require Russian output.
+          function ConvertFrom-Utf8Base64([string]$Value) {
+            [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Value))
+          }
+
           $smoke = @{
             id = 'release-smoke'
             items = @(
               @{ id='en'; text='This browser translates text locally.'; source='en' },
-              @{ id='de'; text='Diese Seite enthält wichtige Informationen.'; source='auto' },
-              @{ id='ja'; text='このページには重要な情報が含まれています。'; source='auto' },
-              @{ id='ko'; text='이 페이지에는 중요한 정보가 포함되어 있습니다.'; source='ko' }
+              @{ id='de'; text=(ConvertFrom-Utf8Base64 'RGllc2UgU2VpdGUgZW50aMOkbHQgd2ljaHRpZ2UgSW5mb3JtYXRpb25lbi4='); source='auto' },
+              @{ id='ja'; text=(ConvertFrom-Utf8Base64 '44GT44Gu44Oa44O844K444Gr44Gv6YeN6KaB44Gq5oOF5aCx44GM5ZCr44G+44KM44Gm44GE44G+44GZ44CC'); source='auto' },
+              @{ id='ko'; text=(ConvertFrom-Utf8Base64 '7J20IO2OmOydtOyngOyXkOuKlCDspJHsmpTtlZwg7KCV67O06rCAIO2PrO2VqOuQmOyWtCDsnojsirXri4jri6Qu'); source='ko' }
             )
           } | ConvertTo-Json -Compress -Depth 5
           $translationOutput = $smoke | & "$ai/node/node.exe" "$ai/adapters/translate.mjs" `
@@ -116,13 +120,13 @@ jobs:
           $reply = $replyLine | ConvertFrom-Json
           if ($reply.error -or $reply.items.Count -ne 4) { throw "Translation smoke test failed: $($reply.error)" }
           foreach ($item in $reply.items) {
-            if (-not ($item.text -match '[А-Яа-яЁё]')) {
+            if (-not ($item.text -match '[\u0400-\u04FF]')) {
               throw "Translation smoke test did not produce Russian for $($item.id): $($item.text)"
             }
           }
 
       - name: Create verified AI pack
-        shell: powershell
+        shell: pwsh
         run: |
           $ai = 'src/NexusMonach/AI'
           Get-ChildItem $ai -File -Recurse | ForEach-Object {
@@ -132,7 +136,7 @@ jobs:
           Compress-Archive -Path $ai -DestinationPath NexusMonach-AI-Pack-win-x64.zip -CompressionLevel Optimal
 
       - name: Build and verify browser
-        shell: powershell
+        shell: pwsh
         env:
           INTEGRITY_PRIVATE_KEY_BASE64: ${{ secrets.NEXUS_INTEGRITY_PRIVATE_KEY_BASE64 }}
           NEXUS_GUARDIAN_REPORT_ENDPOINT: ${{ vars.NEXUS_GUARDIAN_REPORT_ENDPOINT }}
@@ -147,7 +151,7 @@ jobs:
           }
 
       - name: Sign official Windows binaries when certificate is configured
-        shell: powershell
+        shell: pwsh
         env:
           SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
           SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
@@ -169,7 +173,7 @@ jobs:
           }
 
       - name: Create and verify Nexus Guardian integrity manifest
-        shell: powershell
+        shell: pwsh
         env:
           INTEGRITY_PRIVATE_KEY_BASE64: ${{ secrets.NEXUS_INTEGRITY_PRIVATE_KEY_BASE64 }}
         run: |
@@ -203,7 +207,7 @@ jobs:
           Compress-Archive -Path "$portable/*" -DestinationPath dist/NexusMonach-Portable-win-x64.zip -CompressionLevel Optimal
 
       - name: Publish GitHub release with models
-        shell: powershell
+        shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
