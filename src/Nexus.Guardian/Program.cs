@@ -13,6 +13,11 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        var commandMode = args.Length > 0 &&
+            (args[0].Equals("--generate-key", StringComparison.OrdinalIgnoreCase) ||
+             args[0].Equals("--create-manifest", StringComparison.OrdinalIgnoreCase) ||
+             args[0].Equals("--verify-only", StringComparison.OrdinalIgnoreCase));
+
         try
         {
             if (args.Length > 0 && args[0].Equals("--generate-key", StringComparison.OrdinalIgnoreCase))
@@ -44,6 +49,12 @@ internal static class Program
         }
         catch (Exception ex)
         {
+            if (commandMode)
+            {
+                Console.Error.WriteLine("Nexus Guardian command failed: " + ex);
+                return 70;
+            }
+
             MessageBox.Show("Nexus Guardian не смог выполнить безопасный запуск.\n\n" + ex.Message,
                 "Nexus Guardian", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 70;
