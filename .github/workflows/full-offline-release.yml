@@ -174,16 +174,18 @@ jobs:
 
       - name: Create and verify Nexus Guardian integrity manifest
         shell: pwsh
+        timeout-minutes: 20
         env:
           INTEGRITY_PRIVATE_KEY_BASE64: ${{ secrets.NEXUS_INTEGRITY_PRIVATE_KEY_BASE64 }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $portable = 'dist/NexusMonach-Portable'
+          $portable = (Resolve-Path 'dist/NexusMonach-Portable').Path
           $guardian = Join-Path $portable 'NexusMonach.exe'
           if (-not (Test-Path $guardian)) { throw 'Nexus Guardian launcher is missing from the portable build.' }
 
           if ([string]::IsNullOrWhiteSpace($env:INTEGRITY_PRIVATE_KEY_BASE64)) {
             Write-Warning 'NEXUS_INTEGRITY_PRIVATE_KEY_BASE64 is not configured. Creating an unsigned developer manifest.'
+            Write-Host "Guardian: creating developer manifest in $portable"
             ./scripts/Invoke-Guardian.ps1 -Guardian $guardian -GuardianArguments @('--create-manifest', $portable)
             if ($LASTEXITCODE -ne 0) { throw "Guardian manifest generation failed: $LASTEXITCODE" }
           } else {
@@ -194,10 +196,13 @@ jobs:
             $privateKey = Join-Path $env:RUNNER_TEMP 'nexus-integrity-private-key.pem'
             try {
               [IO.File]::WriteAllBytes($privateKey, [Convert]::FromBase64String($env:INTEGRITY_PRIVATE_KEY_BASE64))
+              Write-Host "Guardian: creating signed manifest in $portable"
               ./scripts/Invoke-Guardian.ps1 -Guardian $guardian -GuardianArguments @('--create-manifest', $portable, '--private-key', $privateKey)
               if ($LASTEXITCODE -ne 0) { throw "Guardian signing failed: $LASTEXITCODE" }
+              Write-Host 'Guardian: running full signed payload verification'
               ./scripts/Invoke-Guardian.ps1 -Guardian $guardian -GuardianArguments @('--verify-only', $portable, '--full-integrity-check')
               if ($LASTEXITCODE -ne 0) { throw 'The signed Guardian manifest did not pass full verification.' }
+              Write-Host 'Guardian: signed payload verification completed successfully'
             } finally {
               Remove-Item $privateKey -Force -ErrorAction SilentlyContinue
             }
