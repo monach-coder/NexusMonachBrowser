@@ -215,7 +215,7 @@ jobs:
               Write-Host 'Guardian: running full signed payload verification'
               ./scripts/Invoke-Guardian.ps1 -Guardian $guardian -GuardianArguments @('--verify-only', $portable, '--full-integrity-check')
               if ($LASTEXITCODE -ne 0) { throw 'The signed Guardian manifest did not pass full verification.' }
-              $quickCheckTarget = Get-ChildItem (Join-Path $portable 'AI/node/node_modules') -Recurse -File `
+              $quickCheckTarget = Get-ChildItem (Join-Path $portable 'AI/node_modules') -Recurse -File `
                 -Include '*.js','*.mjs','*.cjs','*.node','*.dll' | Select-Object -First 1
               if ($null -eq $quickCheckTarget) {
                 throw 'Guardian quick-check regression test found no executable Node dependency.'
