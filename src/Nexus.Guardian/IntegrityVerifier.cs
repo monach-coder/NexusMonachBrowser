@@ -171,8 +171,7 @@ internal static class IntegrityVerifier
     {
         var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
         var info = new FileInfo(path);
-        var aiPayload = relative.StartsWith("AI/models/", StringComparison.OrdinalIgnoreCase) ||
-                        relative.StartsWith("AI/node/node_modules/", StringComparison.OrdinalIgnoreCase);
+        var largeModelBlob = IsLargeModelBlob(relative);
         var critical = IsCriticalPath(relative);
         return new IntegrityFile
         {
@@ -180,7 +179,7 @@ internal static class IntegrityVerifier
             Length = info.Length,
             Sha256 = ComputeSha256(path),
             Critical = critical,
-            Large = info.Length >= 64L * 1024 * 1024 || aiPayload
+            Large = info.Length >= 64L * 1024 * 1024 || largeModelBlob
         };
     }
 
@@ -195,15 +194,35 @@ internal static class IntegrityVerifier
 
     private static bool IsCriticalPath(string relative)
     {
-        var aiPayload = relative.StartsWith("AI/models/", StringComparison.OrdinalIgnoreCase) ||
-                        relative.StartsWith("AI/node/node_modules/", StringComparison.OrdinalIgnoreCase);
-        return !aiPayload && (
+        // Only immutable, large tensor/model blobs use the fast size check at
+        // startup. JavaScript, native Node modules, tokenizers and configuration
+        // files are executable or behaviour-controlling input and must always be
+        // hashed, including everything below AI/node/node_modules.
+        if (IsLargeModelBlob(relative)) return false;
+        return
             relative.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ||
             relative.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ||
+            relative.EndsWith(".node", StringComparison.OrdinalIgnoreCase) ||
+            relative.EndsWith(".wasm", StringComparison.OrdinalIgnoreCase) ||
             relative.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ||
             relative.EndsWith(".js", StringComparison.OrdinalIgnoreCase) ||
             relative.EndsWith(".mjs", StringComparison.OrdinalIgnoreCase) ||
-            relative.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase));
+            relative.EndsWith(".cjs", StringComparison.OrdinalIgnoreCase) ||
+            relative.EndsWith(".ps1", StringComparison.OrdinalIgnoreCase) ||
+            relative.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase) ||
+            relative.EndsWith(".bat", StringComparison.OrdinalIgnoreCase) ||
+            relative.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsLargeModelBlob(string relative)
+    {
+        if (!relative.StartsWith("AI/models/", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return relative.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase) ||
+               relative.EndsWith(".onnx", StringComparison.OrdinalIgnoreCase) ||
+               relative.EndsWith(".bin", StringComparison.OrdinalIgnoreCase) ||
+               relative.EndsWith(".spm", StringComparison.OrdinalIgnoreCase) ||
+               relative.EndsWith(".model", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string ComputeSha256(string path)

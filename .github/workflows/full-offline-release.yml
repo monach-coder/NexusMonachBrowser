@@ -15,11 +15,11 @@ jobs:
   build-release:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: 8.0.x
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22.17.0
           package-manager-cache: false
@@ -34,10 +34,22 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $ai = 'src/NexusMonach/AI'
           New-Item -ItemType Directory -Force "$ai/llama","$ai/whisper","$ai/node","$ai/models/qwen3-0.6b","$ai/models/whisper","$ai/models/smolvlm-500m","$ai/models/multilingual-e5-small/onnx","$ai/models/translation/mul-en/onnx","$ai/models/translation/ko-en/onnx","$ai/models/translation/en-ru/onnx" | Out-Null
-          function Get-Asset($Url, $Out) { curl.exe -L --fail --retry 5 --retry-delay 3 $Url -o $Out; if ($LASTEXITCODE) { throw "Download failed: $Url" } }
+          function Get-Asset([string]$Url, [string]$Out, [string]$Sha256 = '') {
+            curl.exe -L --fail --retry 5 --retry-delay 3 $Url -o $Out
+            if ($LASTEXITCODE) { throw "Download failed: $Url" }
+            if (-not [string]::IsNullOrWhiteSpace($Sha256)) {
+              $actual = (Get-FileHash $Out -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($actual -ne $Sha256.ToLowerInvariant()) {
+                Remove-Item $Out -Force -ErrorAction SilentlyContinue
+                throw "SHA-256 mismatch for downloaded asset: $Url"
+              }
+            }
+          }
 
-          Get-Asset 'https://github.com/ggml-org/llama.cpp/releases/download/b9966/llama-b9966-bin-win-cpu-x64.zip' "$env:TEMP/llama.zip"
-          Get-Asset 'https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.1/whisper-bin-x64.zip' "$env:TEMP/whisper.zip"
+          Get-Asset 'https://github.com/ggml-org/llama.cpp/releases/download/b9966/llama-b9966-bin-win-cpu-x64.zip' `
+            "$env:TEMP/llama.zip" 'a2e791df47c8abd09e23f85a00699d6d6552445f6bba21e810263eaeefbf672a'
+          Get-Asset 'https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.1/whisper-bin-x64.zip' `
+            "$env:TEMP/whisper.zip" '7d8be46ecd31828e1eb7a2ecdd0d6b314feafd82163038ab6092594b0a063539'
           Expand-Archive "$env:TEMP/llama.zip" "$ai/llama" -Force
           Expand-Archive "$env:TEMP/whisper.zip" "$ai/whisper" -Force
           if (@(Get-ChildItem "$ai/whisper" -Filter whisper-server.exe -Recurse).Count -eq 0) {
@@ -94,7 +106,7 @@ jobs:
           }
 
           Push-Location $ai
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
           Pop-Location
 
           # End-to-end translation smoke test. Presence and hashes alone are not
@@ -203,6 +215,26 @@ jobs:
               Write-Host 'Guardian: running full signed payload verification'
               ./scripts/Invoke-Guardian.ps1 -Guardian $guardian -GuardianArguments @('--verify-only', $portable, '--full-integrity-check')
               if ($LASTEXITCODE -ne 0) { throw 'The signed Guardian manifest did not pass full verification.' }
+              $quickCheckTarget = Get-ChildItem (Join-Path $portable 'AI/node/node_modules') -Recurse -File `
+                -Include '*.js','*.mjs','*.cjs','*.node','*.dll' | Select-Object -First 1
+              if ($null -eq $quickCheckTarget) {
+                throw 'Guardian quick-check regression test found no executable Node dependency.'
+              }
+              $originalBytes = [IO.File]::ReadAllBytes($quickCheckTarget.FullName)
+              try {
+                if ($originalBytes.Length -eq 0) { throw 'Guardian quick-check target is empty.' }
+                $tamperedBytes = [byte[]]$originalBytes.Clone()
+                $tamperedBytes[0] = $tamperedBytes[0] -bxor 1
+                [IO.File]::WriteAllBytes($quickCheckTarget.FullName, $tamperedBytes)
+                ./scripts/Invoke-Guardian.ps1 -Guardian $guardian -GuardianArguments @('--verify-only', $portable)
+                if ($LASTEXITCODE -eq 0) {
+                  throw 'Guardian quick verification accepted an equal-size Node dependency modification.'
+                }
+              } finally {
+                [IO.File]::WriteAllBytes($quickCheckTarget.FullName, $originalBytes)
+              }
+              ./scripts/Invoke-Guardian.ps1 -Guardian $guardian -GuardianArguments @('--verify-only', $portable)
+              if ($LASTEXITCODE -ne 0) { throw 'Guardian quick verification failed after restoring the test file.' }
               Write-Host 'Guardian: signed payload verification completed successfully'
             } finally {
               Remove-Item $privateKey -Force -ErrorAction SilentlyContinue
