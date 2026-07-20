@@ -14,7 +14,10 @@ public partial class GuardianCenterWindow : Window
     {
         InitializeComponent();
         ReportsList.ItemsSource = _reports;
+        WebView2RuntimeMonitor.StatusChanged += WebView2RuntimeMonitor_StatusChanged;
+        Closed += (_, _) => WebView2RuntimeMonitor.StatusChanged -= WebView2RuntimeMonitor_StatusChanged;
         RefreshReports();
+        RefreshCoreStatus(WebView2RuntimeMonitor.Check());
     }
 
     private GuardianReportSnapshot? SelectedReport => ReportsList.SelectedItem as GuardianReportSnapshot;
@@ -122,6 +125,83 @@ public partial class GuardianCenterWindow : Window
     }
 
     private void Refresh_Click(object sender, RoutedEventArgs e) => RefreshReports();
+
+    private void WebView2RuntimeMonitor_StatusChanged(object? sender, WebView2RuntimeSnapshot snapshot) =>
+        Dispatcher.BeginInvoke(new Action(() => RefreshCoreStatus(snapshot)));
+
+    private void RefreshCoreStatus(WebView2RuntimeSnapshot snapshot)
+    {
+        CoreStatusText.Text = snapshot.State switch
+        {
+            WebView2RuntimeState.Current => "Ядро работает штатно",
+            WebView2RuntimeState.RestartRequired => "Доступно после перезапуска",
+            WebView2RuntimeState.Missing => "Ядро не найдено",
+            _ => "Статус не определён"
+        };
+        CoreStatusText.Foreground = snapshot.State switch
+        {
+            WebView2RuntimeState.RestartRequired => System.Windows.Media.Brushes.DarkOrange,
+            WebView2RuntimeState.Missing => System.Windows.Media.Brushes.IndianRed,
+            WebView2RuntimeState.Unknown => System.Windows.Media.Brushes.DarkOrange,
+            _ => (System.Windows.Media.Brush)FindResource("AccentBrush")
+        };
+        CoreActiveVersionText.Text = snapshot.ActiveVersion;
+        CoreInstalledVersionText.Text = snapshot.InstalledVersion;
+        CoreLastCheckText.Text = "Проверено: " + snapshot.CheckedAt.ToString("dd.MM.yyyy HH:mm:ss");
+        CoreStatusText.ToolTip = snapshot.Message + $"\nSDK: {snapshot.SdkVersion}";
+        CheckCoreButton.Content = snapshot.State == WebView2RuntimeState.RestartRequired
+            ? "Перезапустить Nexus"
+            : "Проверить ядро";
+    }
+
+    private void CheckCore_Click(object sender, RoutedEventArgs e)
+    {
+        CheckCoreButton.IsEnabled = false;
+        CoreStatusText.Text = "Проверка локального ядра…";
+        try
+        {
+            var snapshot = WebView2RuntimeMonitor.Check();
+            RefreshCoreStatus(snapshot);
+            var restartReady = snapshot.State == WebView2RuntimeState.RestartRequired;
+            var answer = GlassDialogWindow.Show(this,
+                snapshot.Message + $"\n\nАктивная версия: {snapshot.ActiveVersion}" +
+                $"\nУстановленная версия: {snapshot.InstalledVersion}" +
+                $"\nВерсия SDK: {snapshot.SdkVersion}" +
+                (restartReady
+                    ? "\n\nПерезапустить Nexus сейчас? Вкладки и допустимые непарольные поля " +
+                      "будут локально зашифрованы средствами Windows."
+                    : "\n\nGuardian ничего не скачивает и не устанавливает."),
+                "Nexus Guardian · ядро WebView2",
+                restartReady ? MessageBoxButton.YesNo : MessageBoxButton.OK,
+                snapshot.State is WebView2RuntimeState.Missing or WebView2RuntimeState.Unknown
+                    ? MessageBoxImage.Warning
+                    : MessageBoxImage.Information);
+            if (restartReady && answer == MessageBoxResult.Yes)
+            {
+                if (Owner is MainWindow mainWindow)
+                {
+                    Close();
+                    mainWindow.RequestSecureRestart();
+                }
+                else
+                {
+                    GlassDialogWindow.Show(this,
+                        "Закройте все окна Nexus Monach и запустите браузер снова, чтобы применить новое ядро.",
+                        "Nexus Guardian", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("guardian", "webview2-runtime-check", ex);
+            GlassDialogWindow.Show(this, "Проверка ядра не завершена:\n\n" + ex.Message,
+                "Nexus Guardian", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            CheckCoreButton.IsEnabled = true;
+        }
+    }
 
     private void Copy_Click(object sender, RoutedEventArgs e)
     {

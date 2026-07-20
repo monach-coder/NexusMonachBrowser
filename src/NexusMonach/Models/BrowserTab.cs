@@ -56,6 +56,8 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     private readonly Queue<string> _developerEvents = new();
     private CoreWebView2DevToolsProtocolEventReceiver? _consoleReceiver;
     private CoreWebView2DevToolsProtocolEventReceiver? _exceptionReceiver;
+    private SecureRestartTabState? _pendingRestartState;
+    private bool _restartStateRestoreRunning;
 
     public BrowserTab(string initialUrl, bool isPrivate, bool navigateOnInitialize = true)
     {
@@ -249,6 +251,113 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         {
             return false;
         }
+    }
+
+    public void SetPendingRestartState(SecureRestartTabState state) => _pendingRestartState = state;
+
+    public async Task<SecureRestartTabState> CaptureSecureRestartStateAsync()
+    {
+        var fallback = SecureRestartSessionService.UrlOnly(CurrentUrl);
+        if (_isPrivate || Core is null || UrlService.IsInternal(CurrentUrl)) return fallback;
+        try
+        {
+            var json = await Core.ExecuteScriptAsync("""
+                (() => {
+                  const result={url:location.href,scrollX:scrollX||0,scrollY:scrollY||0,fields:[]};
+                  const pageKey=(location.hostname+location.pathname).toLowerCase();
+                  if(/(?:^|[.\/_-])(login|signin|sign-in|oauth|authorize|auth|checkout|payment|billing|bank)(?:[.\/_-]|$)/.test(pageKey))return result;
+                  const sensitiveKey=/pass|pwd|secret|token|auth|otp|one.?time|verification|2fa|mfa|card|credit|debit|cvv|cvc|iban|account|login|username|e.?mail/i;
+                  const sensitiveAutocomplete=/password|username|email|one-time-code|cc-|transaction|webauthn/i;
+                  const pathFor=element=>{
+                    if(element.id)return '#'+CSS.escape(element.id);
+                    const parts=[];let node=element;
+                    while(node&&node.nodeType===1&&node!==document.documentElement&&parts.length<7){
+                      let part=node.tagName.toLowerCase();
+                      const siblings=node.parentElement?[...node.parentElement.children].filter(x=>x.tagName===node.tagName):[];
+                      if(siblings.length>1)part+=':nth-of-type('+(siblings.indexOf(node)+1)+')';
+                      parts.unshift(part);node=node.parentElement;
+                    }
+                    return parts.join('>');
+                  };
+                  const nodes=[...document.querySelectorAll('input,textarea,select,[contenteditable="true"]')];
+                  let total=0;
+                  for(const element of nodes){
+                    if(result.fields.length>=80||total>=65536)break;
+                    const type=(element.type||'').toLowerCase();
+                    const autocomplete=(element.autocomplete||'').toLowerCase();
+                    const key=[element.name,element.id,element.placeholder,element.getAttribute('aria-label')].filter(Boolean).join(' ');
+                    if(['password','hidden','file','email','tel'].includes(type)||sensitiveAutocomplete.test(autocomplete)||sensitiveKey.test(key))continue;
+                    const selector=pathFor(element);if(!selector||selector.length>500)continue;
+                    let kind='text',value='',checked=null;
+                    if(type==='checkbox'||type==='radio'){kind='checkbox';checked=Boolean(element.checked)}
+                    else if(element.tagName==='SELECT'){kind='select';value=String(element.value||'')}
+                    else if(element.isContentEditable){kind='editable';value=String(element.innerText||'')}
+                    else value=String(element.value||'');
+                    if(value.length>4000)value=value.slice(0,4000);total+=value.length;
+                    if(!value&&checked===null)continue;
+                    result.fields.push({selector,kind,value,checked});
+                  }
+                  return result;
+                })();
+                """);
+            return JsonSerializer.Deserialize<SecureRestartTabState>(json,
+                       new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? fallback;
+        }
+        catch
+        {
+            return fallback;
+        }
+    }
+
+    private async Task TryRestoreSecureRestartStateAsync()
+    {
+        if (_restartStateRestoreRunning || _pendingRestartState is null || Core is null || _isPrivate) return;
+        _restartStateRestoreRunning = true;
+        try
+        {
+            await Task.Delay(350);
+            var state = _pendingRestartState;
+            var script = $$"""
+                (()=>{
+                  const state={{JsonSerializer.Serialize(state)}};
+                  let expected;try{expected=new URL(state.Url)}catch{return -1}
+                  if(location.origin!==expected.origin||location.pathname!==expected.pathname)return -1;
+                  const pageKey=(location.hostname+location.pathname).toLowerCase();
+                  if(/(?:^|[.\/_-])(login|signin|sign-in|oauth|authorize|auth|checkout|payment|billing|bank)(?:[.\/_-]|$)/.test(pageKey))return 0;
+                  const sensitiveKey=/pass|pwd|secret|token|auth|otp|one.?time|verification|2fa|mfa|card|credit|debit|cvv|cvc|iban|account|login|username|e.?mail/i;
+                  const sensitiveAutocomplete=/password|username|email|one-time-code|cc-|transaction|webauthn/i;
+                  let restored=0;
+                  for(const field of state.Fields||[]){
+                    let element;try{element=document.querySelector(field.Selector)}catch{continue}if(!element)continue;
+                    const type=(element.type||'').toLowerCase(),autocomplete=(element.autocomplete||'').toLowerCase();
+                    const key=[element.name,element.id,element.placeholder,element.getAttribute('aria-label')].filter(Boolean).join(' ');
+                    if(['password','hidden','file','email','tel'].includes(type)||sensitiveAutocomplete.test(autocomplete)||sensitiveKey.test(key))continue;
+                    if(field.Kind==='checkbox'&&(type==='checkbox'||type==='radio')){
+                      const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'checked')?.set;
+                      if(setter)setter.call(element,Boolean(field.Checked));else element.checked=Boolean(field.Checked);
+                    }else if(field.Kind==='select'&&element.tagName==='SELECT')element.value=field.Value||'';
+                    else if(field.Kind==='editable'&&element.isContentEditable)element.textContent=field.Value||'';
+                    else if(['INPUT','TEXTAREA'].includes(element.tagName)){
+                      const prototype=element.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;
+                      const setter=Object.getOwnPropertyDescriptor(prototype,'value')?.set;
+                      if(setter)setter.call(element,field.Value||'');else element.value=field.Value||'';
+                    }else continue;
+                    element.dispatchEvent(new Event('input',{bubbles:true}));
+                    element.dispatchEvent(new Event('change',{bubbles:true}));restored++;
+                  }
+                  scrollTo({left:state.ScrollX||0,top:state.ScrollY||0,behavior:'instant'});return restored;
+                })();
+                """;
+            var result = await Core.ExecuteScriptAsync(script);
+            if (int.TryParse(result, out var restored) && restored >= 0)
+            {
+                await Task.Delay(700);
+                if (Core is not null) await Core.ExecuteScriptAsync(script);
+                _pendingRestartState = null;
+            }
+        }
+        catch { /* Неподдерживаемая страница открывается без восстановления полей. */ }
+        finally { _restartStateRestoreRunning = false; }
     }
 
     public TabNetworkSnapshot GetNetworkSnapshot()
@@ -1088,7 +1197,10 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
             _firstNavigation.TrySetResult(e.IsSuccess);
             StateChanged?.Invoke(this, EventArgs.Empty);
             if (e.IsSuccess)
+            {
                 NavigationSucceeded?.Invoke(this, EventArgs.Empty);
+                _ = TryRestoreSecureRestartStateAsync();
+            }
         };
 
         core.NewWindowRequested += async (_, e) =>
@@ -1109,8 +1221,9 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         core.PermissionRequested += (_, e) => HandlePermission(e);
         core.WebMessageReceived += (_, e) => HandleWebMessage(e);
         core.DownloadStarting += (_, e) => HandleDownload(e);
-        core.ProcessFailed += (_, _) =>
+        core.ProcessFailed += (_, e) =>
         {
+            CrashReportService.RecordNonFatal("webview2", "process-" + e.ProcessFailedKind);
             Title = "Вкладка аварийно завершена";
             IsLoading = false;
             StateChanged?.Invoke(this, EventArgs.Empty);
