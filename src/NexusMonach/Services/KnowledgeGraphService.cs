@@ -185,10 +185,25 @@ public static class KnowledgeGraphService
                     edge.Score = Math.Min(1, edge.Score + .04);
                 }
             }
-            _data.ResearchSessions.Add(new KnowledgeResearchSession
+            var sourceDomain = _data.Nodes.FirstOrDefault(x => x.Id == nodeIds[0])?.Domain ?? string.Empty;
+            var sessionKind = pageKind == "товар" ? "shopping" :
+                pageKind == "исследование выбранного сайта" ? "site-research" : "search";
+            var session = _data.ResearchSessions.LastOrDefault(x =>
+                x.Query.Equals(report.Query, StringComparison.OrdinalIgnoreCase) &&
+                x.Kind.Equals(sessionKind, StringComparison.OrdinalIgnoreCase) &&
+                IsSameResearchDomain(x.SourceDomain, sourceDomain) &&
+                now - x.UpdatedAtUtc < TimeSpan.FromHours(2));
+            if (session is null)
             {
-                Query = report.Query, CreatedAtUtc = now, ResultNodeIds = nodeIds.Distinct().ToList()
-            });
+                session = new KnowledgeResearchSession
+                {
+                    Query = report.Query, CreatedAtUtc = now, UpdatedAtUtc = now,
+                    Kind = sessionKind, SourceDomain = sourceDomain
+                };
+                _data.ResearchSessions.Add(session);
+            }
+            session.UpdatedAtUtc = now;
+            session.ResultNodeIds = session.ResultNodeIds.Concat(nodeIds).Distinct().Take(40).ToList();
             if (_data.ResearchSessions.Count > 300)
                 _data.ResearchSessions.RemoveRange(0, _data.ResearchSessions.Count - 300);
             DeduplicateEdges();
@@ -370,6 +385,13 @@ public static class KnowledgeGraphService
     private static void NormalizeLoadedData()
     {
         _data.ResearchSessions ??= [];
+        foreach (var session in _data.ResearchSessions)
+        {
+            session.ResultNodeIds ??= [];
+            if (session.UpdatedAtUtc == default) session.UpdatedAtUtc = session.CreatedAtUtc;
+            session.Kind = string.IsNullOrWhiteSpace(session.Kind) ? "research" : session.Kind;
+            session.SourceDomain ??= string.Empty;
+        }
         foreach (var node in _data.Nodes)
         {
             node.Keywords ??= [];
@@ -405,7 +427,8 @@ public static class KnowledgeGraphService
 
     private static KnowledgeResearchSession Clone(KnowledgeResearchSession x) => new()
     {
-        Id = x.Id, Query = x.Query, CreatedAtUtc = x.CreatedAtUtc,
+        Id = x.Id, Query = x.Query, CreatedAtUtc = x.CreatedAtUtc, UpdatedAtUtc = x.UpdatedAtUtc,
+        Kind = x.Kind, SourceDomain = x.SourceDomain,
         ResultNodeIds = x.ResultNodeIds.ToList(), SelectedNodeId = x.SelectedNodeId
     };
 
@@ -413,6 +436,12 @@ public static class KnowledgeGraphService
         System.Text.RegularExpressions.Regex.IsMatch(query,
             @"(?:[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|\b\d{7,}\b|парол|password|одноразов\p{L}*\s+код|otp)",
             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    private static bool IsSameResearchDomain(string left, string right) =>
+        !string.IsNullOrWhiteSpace(left) && !string.IsNullOrWhiteSpace(right) &&
+        (left.Equals(right, StringComparison.OrdinalIgnoreCase) ||
+         left.EndsWith('.' + right, StringComparison.OrdinalIgnoreCase) ||
+         right.EndsWith('.' + left, StringComparison.OrdinalIgnoreCase));
 
     private static double Cosine(IReadOnlyList<float> left, IReadOnlyList<float> right)
     {

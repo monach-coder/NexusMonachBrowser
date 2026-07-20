@@ -5,6 +5,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Text.Json;
 using System.Windows.Threading;
+using System.Diagnostics;
 using Microsoft.Win32;
 using NexusMonach.Intelligence;
 using NexusMonach.Models;
@@ -29,6 +30,7 @@ public partial class LocalAiDockControl : UserControl
         new(StringComparer.OrdinalIgnoreCase);
     private bool _showingBackgroundResearch;
     private string _backgroundResearchHost = string.Empty;
+    private readonly List<string> _backgroundResearchStages = [];
 
     public LocalAiDockControl()
     {
@@ -246,6 +248,7 @@ public partial class LocalAiDockControl : UserControl
         _lastResearchQuery = query;
         _showingBackgroundResearch = true;
         _backgroundResearchHost = tab.CurrentHost;
+        _backgroundResearchStages.Clear();
         Visibility = Visibility.Visible;
         ModeTitleText.Text = "NEXUS СЛЕДОПЫТ";
         PageTitleText.Text = tab.Title + " · " + tab.CurrentHost;
@@ -256,6 +259,20 @@ public partial class LocalAiDockControl : UserControl
         ShowTextResult("Ищу важную информацию по запросу:\n«" + query +
                        "»\n\n1. Читаю открытую страницу…\n2. Отбираю релевантные разделы этого сайта…\n3. Сопоставляю факты локально…");
         StatusText.Text = "Следопыт работает · текущая страница остаётся доступной";
+    }
+
+    public void UpdateBackgroundResearchProgress(BrowserTab tab, string message)
+    {
+        if (!_showingBackgroundResearch || !ReferenceEquals(_tab, tab) ||
+            !IsSameSite(_backgroundResearchHost, tab.CurrentHost) || string.IsNullOrWhiteSpace(message)) return;
+        message = message.Trim();
+        if (_backgroundResearchStages.Count == 0 ||
+            !_backgroundResearchStages[^1].Equals(message, StringComparison.Ordinal))
+            _backgroundResearchStages.Add(message);
+        if (_backgroundResearchStages.Count > 8) _backgroundResearchStages.RemoveAt(0);
+        ShowTextResult("Следопыт продолжает исследование сайта…\n\n" +
+                       string.Join("\n", _backgroundResearchStages.Select(x => "• " + x)));
+        StatusText.Text = message;
     }
 
     public void FailBackgroundResearch(string message)
@@ -456,6 +473,11 @@ public partial class LocalAiDockControl : UserControl
         if (_model is null) { await EnsureModelAsync(); if (_model is null) return; }
         _cancellation?.Cancel(); _cancellation = new CancellationTokenSource();
         CancelButton.IsEnabled = true; ResultBox.Clear();
+        var stopwatch = Stopwatch.StartNew();
+        var rawCount = 0;
+        var pagesViewed = 0;
+        SledopytDiagnosticsService.Record("shopping", "started", "success");
+        CrashReportService.AddBreadcrumb("sledopyt", "shopping-started");
         try
         {
             if (!string.IsNullOrWhiteSpace(_shoppingImagePath))
@@ -497,6 +519,7 @@ public partial class LocalAiDockControl : UserControl
             for (var page = 1; page <= 5 && rawItems.Count < 150; page++)
             {
                 pages = page;
+                pagesViewed = page;
                 StatusText.Text = $"Сбор результатов: страница {page} из 5…";
                 async Task AppendCurrentPageAsync()
                 {
@@ -540,6 +563,7 @@ public partial class LocalAiDockControl : UserControl
                 await Task.Delay(1200, _cancellation.Token);
             }
             var count = rawItems.Count;
+            rawCount = count;
             if (count == 0)
             {
                 StatusText.Text = "Локальный AI определяет, что показал сайт…";
@@ -576,11 +600,34 @@ public partial class LocalAiDockControl : UserControl
                 await KnowledgeGraphService.RecordShoppingResearchAsync(report, _cancellation.Token);
             ShowShoppingCards(report);
             StatusText.Text = $"Готово. Просмотрено страниц: {pages}; вариантов в выводе: {report.Items.Count}.";
+            SledopytDiagnosticsService.Record("shopping", "completed", "success",
+                stopwatch.ElapsedMilliseconds, rawCount, report.Items.Count, $"pages-{pagesViewed}");
+            CrashReportService.AddBreadcrumb("sledopyt", "shopping-completed");
         }
-        catch (OperationCanceledException) { StatusText.Text = "Сбор остановлен."; }
-        catch (Exception ex) { ResultBox.Text = ex.Message; StatusText.Text = "Nexus Следопыт не собрал сравнение."; }
+        catch (OperationCanceledException)
+        {
+            SledopytDiagnosticsService.Record("shopping", "cancelled", "partial",
+                stopwatch.ElapsedMilliseconds, rawCount, code: "user-or-timeout");
+            StatusText.Text = "Сбор остановлен.";
+        }
+        catch (Exception ex)
+        {
+            SledopytDiagnosticsService.Record("shopping", "failed", "failed",
+                stopwatch.ElapsedMilliseconds, rawCount, code: ClassifyShoppingFailure(ex));
+            CrashReportService.AddBreadcrumb("sledopyt", "shopping-failed");
+            ResultBox.Text = ex.Message;
+            StatusText.Text = "Nexus Следопыт не собрал сравнение.";
+        }
         finally { CancelButton.IsEnabled = false; }
     }
+
+    private static string ClassifyShoppingFailure(Exception ex) => ex switch
+    {
+        TimeoutException => "timeout",
+        JsonException => "invalid-response",
+        InvalidOperationException => "catalog-unavailable",
+        _ => "operation-error"
+    };
 
     private void ShowTextResult(string text)
     {
@@ -606,27 +653,16 @@ public partial class LocalAiDockControl : UserControl
         foreach (var item in report.Items.Take(5))
         {
             var content = new StackPanel();
-            if (Uri.TryCreate(item.ImageUrl, UriKind.Absolute, out var imageUri) &&
-                imageUri.Scheme is "http" or "https")
+            if (!string.IsNullOrWhiteSpace(item.Url) || !string.IsNullOrWhiteSpace(item.ImageUrl))
             {
-                try
+                var image = new Image
                 {
-                    var bitmap = new BitmapImage();
-                    bitmap.BeginInit();
-                    bitmap.UriSource = imageUri;
-                    bitmap.DecodePixelWidth = 260;
-                    // Default/OnDemand keeps network image decoding off the UI
-                    // path so text cards appear immediately.
-                    bitmap.CacheOption = BitmapCacheOption.Default;
-                    bitmap.EndInit();
-                    content.Children.Add(new Image
-                    {
-                        Source = bitmap, Height = 130, Stretch = Stretch.Uniform,
-                        HorizontalAlignment = HorizontalAlignment.Left,
-                        Margin = new Thickness(0, 0, 0, 9)
-                    });
-                }
-                catch { /* Broken catalogue thumbnails must not break the report. */ }
+                    Height = 130, Stretch = Stretch.Uniform,
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    Margin = new Thickness(0, 0, 0, 9), Visibility = Visibility.Collapsed
+                };
+                content.Children.Add(image);
+                _ = LoadShoppingImageAsync(image, item);
             }
             content.Children.Add(new TextBlock { Text = item.Name, TextWrapping = TextWrapping.Wrap, FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White });
             content.Children.Add(new TextBlock { Text = $"Цена: {item.Price}   Рейтинг: {item.Rating}", Margin = new Thickness(0, 6, 0, 0), Foreground = new SolidColorBrush(Color.FromRgb(127, 245, 231)) });
@@ -652,6 +688,42 @@ public partial class LocalAiDockControl : UserControl
             TextWrapping = TextWrapping.Wrap, Foreground = Brushes.White, Margin = new Thickness(3, 5, 3, 12)
         });
         ShoppingCardsScroll.ScrollToHome();
+    }
+
+    private async Task LoadShoppingImageAsync(Image image, ShoppingCandidate item)
+    {
+        try
+        {
+            if (_tab is not null && !string.IsNullOrWhiteSpace(item.Url))
+            {
+                var bytes = await _tab.CaptureShoppingProductImageAsync(item.Url);
+                if (bytes is { Length: > 0 })
+                {
+                    using var stream = new MemoryStream(bytes, writable: false);
+                    var captured = new BitmapImage();
+                    captured.BeginInit();
+                    captured.CacheOption = BitmapCacheOption.OnLoad;
+                    captured.DecodePixelWidth = 320;
+                    captured.StreamSource = stream;
+                    captured.EndInit();
+                    captured.Freeze();
+                    image.Source = captured;
+                    image.Visibility = Visibility.Visible;
+                    return;
+                }
+            }
+            if (!Uri.TryCreate(item.ImageUrl, UriKind.Absolute, out var imageUri) ||
+                imageUri.Scheme is not ("http" or "https")) return;
+            var bitmap = new BitmapImage();
+            bitmap.BeginInit();
+            bitmap.UriSource = imageUri;
+            bitmap.DecodePixelWidth = 320;
+            bitmap.CacheOption = BitmapCacheOption.OnDemand;
+            bitmap.EndInit();
+            image.Source = bitmap;
+            image.Visibility = Visibility.Visible;
+        }
+        catch { /* Ошибка миниатюры не должна скрывать карточку товара. */ }
     }
 
     private void ShoppingProductOpen_Click(object sender, RoutedEventArgs e)

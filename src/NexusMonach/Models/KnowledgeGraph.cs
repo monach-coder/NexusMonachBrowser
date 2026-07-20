@@ -42,6 +42,9 @@ public sealed class KnowledgeResearchSession
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public string Query { get; set; } = string.Empty;
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+    public string Kind { get; set; } = "research";
+    public string SourceDomain { get; set; } = string.Empty;
     public List<string> ResultNodeIds { get; set; } = [];
     public string? SelectedNodeId { get; set; }
 }

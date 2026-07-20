@@ -168,6 +168,15 @@ sites rebuild forms dynamically, so restoring ordinary field values is best
 effort; if the encrypted snapshot cannot be written, Guardian cancels the
 restart and leaves the current window open.
 
+## Local Sledopyt diagnostics
+
+Guardian Center can display a bounded local journal for the Nexus Sledopyt crawl
+engine. It records only operation/stage identifiers, outcome, duration and
+candidate/result counters. Search queries, URLs, domains, page text, DOM, form
+values and exception messages are deliberately not accepted. The journal is not
+part of network crash-report delivery and remains under the local application
+data directory.
+
 ## Command line
 
 ```powershell

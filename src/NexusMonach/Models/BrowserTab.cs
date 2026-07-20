@@ -856,6 +856,20 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
               const sameSite=(a,b)=>a===b||a.endsWith('.'+b)||b.endsWith('.'+a);
               const safeUrl=value=>{try{const u=new URL(value,location.href);if(!/^https?:$/.test(u.protocol)||!sameSite(u.hostname,location.hostname))return '';u.hash='';return u.origin+u.pathname+u.search;}catch{return ''}};
               const safeImage=value=>{try{const u=new URL(value,location.href);if(!/^https?:$/.test(u.protocol))return '';return u.href.slice(0,1600)}catch{return ''}};
+              const bestImage=(image,host)=>{
+                if(image){
+                  const srcset=image.currentSrc||image.getAttribute('srcset')||image.getAttribute('data-srcset')||'';
+                  const selected=srcset.includes(',')?srcset.split(',').at(-1).trim().split(/\s+/)[0]:srcset.trim().split(/\s+/)[0];
+                  const direct=selected||image.src||image.getAttribute('data-src')||image.getAttribute('data-original')||image.getAttribute('data-lazy-src');
+                  if(direct)return direct;
+                }
+                const picture=host?.querySelector('picture source[srcset],picture source[data-srcset]');
+                const pictureSet=picture?.getAttribute('srcset')||picture?.getAttribute('data-srcset')||'';
+                if(pictureSet)return pictureSet.split(',').at(-1).trim().split(/\s+/)[0];
+                const styled=[host,...(host?[...host.querySelectorAll('*')].slice(0,24):[])].find(x=>x&&/url\(/i.test(getComputedStyle(x).backgroundImage||''));
+                const match=styled&&getComputedStyle(styled).backgroundImage.match(/url\(["']?([^"')]+)["']?\)/i);
+                return match?.[1]||'';
+              };
               const add=(name,text,url,price='',rating='',buyers='',source='DOM',imageUrl='')=>{
                 name=clean(name).slice(0,220);text=clean(text).slice(0,1200);url=safeUrl(url);imageUrl=safeImage(imageUrl);
                 if(name.length<3)return;const key=(url||name).toLowerCase();if(seen.has(key))return;
@@ -894,7 +908,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 const link=e.matches('a')?e:e.querySelector('a[href]');
                 const name=heading?.innerText||link?.getAttribute('aria-label')||link?.title||text.slice(0,180);
                 const image=e.querySelector('img');
-                const imageSource=image?.currentSrc||image?.src||image?.getAttribute('data-src')||image?.getAttribute('data-original')||image?.getAttribute('data-lazy-src')||'';
+                const imageSource=bestImage(image,e);
                 add(name,text,link?.href||e.getAttribute('itemid')||'','','','','product DOM',imageSource); if(result.length>=80) break;
               }
 
@@ -906,13 +920,47 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                   const text=clean(host?.innerText||link.innerText);if(text.length<8||text.length>1800||!currency.test(text))continue;
                   const image=link.querySelector('img')||host?.querySelector('img');
                   const name=link.innerText||link.getAttribute('aria-label')||image?.alt||link.title||text.slice(0,180);
-                  const imageSource=image?.currentSrc||image?.src||image?.getAttribute('data-src')||image?.getAttribute('data-original')||image?.getAttribute('data-lazy-src')||'';
+                  const imageSource=bestImage(image,host);
                   add(name,text,link.href,'','','','image + price',imageSource);if(result.length>=80)break;
                 }
               }
               return result.slice(0,80);
             })();
             """);
+    }
+
+    public async Task<byte[]?> CaptureShoppingProductImageAsync(string productUrl)
+    {
+        if (Core is null || !Uri.TryCreate(productUrl, UriKind.Absolute, out _)) return null;
+        var script = """
+            (() => {
+              try {
+                const target=new URL(__TARGET__);
+                const normalize=value=>{try{const u=new URL(value,location.href);return u.origin+u.pathname.replace(/\/$/,'')}catch{return ''}};
+                const wanted=normalize(target.href);
+                const anchor=[...document.querySelectorAll('a[href]')].find(a=>normalize(a.href)===wanted);
+                const host=anchor?.closest('article,li,[role="listitem"],[class*="product" i],[class*="card" i],[class*="item" i]')||anchor;
+                const image=host?.querySelector('img')||anchor?.querySelector('img');
+                if(!image||!image.complete||image.naturalWidth<2||image.naturalHeight<2)return '';
+                const scale=Math.min(1,320/image.naturalWidth,200/image.naturalHeight);
+                const canvas=document.createElement('canvas');
+                canvas.width=Math.max(1,Math.round(image.naturalWidth*scale));
+                canvas.height=Math.max(1,Math.round(image.naturalHeight*scale));
+                canvas.getContext('2d',{alpha:false}).drawImage(image,0,0,canvas.width,canvas.height);
+                return canvas.toDataURL('image/jpeg',.78);
+              } catch { return ''; }
+            })();
+            """.Replace("__TARGET__", JsonSerializer.Serialize(productUrl), StringComparison.Ordinal);
+        var json = await Core.ExecuteScriptAsync(script);
+        string? dataUrl;
+        try { dataUrl = JsonSerializer.Deserialize<string>(json); }
+        catch (JsonException) { return null; }
+        if (string.IsNullOrWhiteSpace(dataUrl) || !dataUrl.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
+            return null;
+        var separator = dataUrl.IndexOf(',');
+        if (separator < 0 || dataUrl.Length - separator > 1_500_000) return null;
+        try { return Convert.FromBase64String(dataUrl[(separator + 1)..]); }
+        catch (FormatException) { return null; }
     }
 
     public async Task<string?> GetNextShoppingPageUrlAsync()
