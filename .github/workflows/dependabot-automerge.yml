@@ -5,27 +5,37 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+  pull-requests: read
 
 jobs:
   verified-patch:
     if: github.actor == 'dependabot[bot]'
     runs-on: windows-latest
+    outputs:
+      update-type: ${{ steps.metadata.outputs.update-type }}
     steps:
       - name: Read Dependabot metadata
         id: metadata
-        uses: dependabot/fetch-metadata@v2
-      - uses: actions/checkout@v5
-      - uses: actions/setup-dotnet@v5
+        uses: dependabot/fetch-metadata@21025c705c08248db411dc16f3619e6b5f9ea21a # v2
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: 8.0.x
       - name: Restore and build
         run: |
           dotnet restore NexusMonach.sln
           dotnet build NexusMonach.sln --configuration Release --no-restore -warnaserror
+
+  enable-automerge:
+    needs: verified-patch
+    if: needs.verified-patch.outputs.update-type == 'version-update:semver-patch'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
       - name: Enable squash auto-merge
-        if: steps.metadata.outputs.update-type == 'version-update:semver-patch'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ github.event.pull_request.html_url }}
