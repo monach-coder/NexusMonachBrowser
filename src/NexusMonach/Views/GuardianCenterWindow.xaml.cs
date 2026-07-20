@@ -29,7 +29,9 @@ public partial class GuardianCenterWindow : Window
         foreach (var report in CrashReportService.GetLocalReports()) _reports.Add(report);
 
         IntegrityStatusText.Text = DescribeIntegrity(GuardianRuntime.IntegrityStatus);
-        SafeModeStatusText.Text = GuardianRuntime.IsSafeMode ? "Безопасный режим" : "Обычный режим";
+        SafeModeStatusText.Text = GuardianRuntime.IsSafeMode
+            ? "Безопасный режим · программный рендеринг"
+            : "Обычный режим";
         SafeModeStatusText.Foreground = GuardianRuntime.IsSafeMode
             ? System.Windows.Media.Brushes.DarkOrange
             : (System.Windows.Media.Brush)FindResource("AccentBrush");

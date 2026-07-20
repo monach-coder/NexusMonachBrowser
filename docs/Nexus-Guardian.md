@@ -15,7 +15,10 @@ crashes visible before the browser starts.
 4. A valid build starts `NexusMonach.Browser.exe` with an isolated session ID and
    the integrity state. A critical mismatch blocks startup. A non-critical
    mismatch starts safe mode without local AI and extensions.
-5. Three abnormal exits in ten minutes activate crash-loop safe mode.
+5. Three abnormal exits in ten minutes activate crash-loop safe mode. A recent
+   WPF compositor out-of-memory crash also activates it for the next launch.
+   Safe mode uses software rendering and disables WebView2 GPU compositing in
+   addition to local AI and extensions; ordinary launches keep acceleration.
 6. A signature or file mismatch is written as a sanitized local integrity event
    in the same Crash Vault used by crash reports. Identical integrity events are
    deduplicated for 24 hours.
@@ -43,6 +46,11 @@ flag and up to 50 predefined technical breadcrumbs. It never intentionally
 contains browsing history, full URLs, search queries, DOM/page text, cookies,
 tokens, passwords, form values, IP/DNS/fingerprint data, audio, screenshots or a
 full memory dump.
+
+Managed fatal reports carry the random Guardian session identifier. When WPF or
+.NET has already recorded the exact fatal exception, the launcher does not add a
+second generic `native-process` report for the same exit. A native report remains
+the fallback for access violations and exits that bypass managed crash handlers.
 
 The development default is **Local only**. Reports remain on this computer and
 are available from `Menu -> Nexus Guardian · local reports`. The local center

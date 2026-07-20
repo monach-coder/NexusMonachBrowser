@@ -1,6 +1,8 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
+using System.Windows.Media;
 using System.Diagnostics;
 using NexusMonach.Services;
 using NexusMonach.Views;
@@ -31,6 +33,11 @@ public partial class App : Application
         AppPaths.Initialize(e.Args);
         CrashReportService.Initialize();
         CrashReportService.AddBreadcrumb("startup", "app-paths-ready");
+        if (GuardianRuntime.IsSafeMode)
+        {
+            RenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly;
+            CrashReportService.AddBreadcrumb("guardian", "software-rendering-enabled");
+        }
         if (!GuardianRuntime.IsSafeMode)
         {
             DevToolsAiBridgeService.Start();
@@ -62,7 +69,7 @@ public partial class App : Application
             if (GuardianRuntime.IsSafeMode)
             {
                 GlassDialogWindow.Show(mainWindow,
-                    "Nexus Guardian включил безопасный режим после повторных сбоев или изменения некритических файлов. AI и расширения временно отключены.",
+                    "Nexus Guardian включил безопасный режим после повторных сбоев, графической ошибки или изменения некритических файлов. AI, расширения и аппаратное ускорение временно отключены.",
                     "Nexus Guardian — безопасный режим", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
             if (!GuardianRuntime.IsSafeMode)
