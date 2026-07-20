@@ -8,6 +8,7 @@ public static class AppPaths
     public static string BookmarksFile => Path.Combine(AppRoot, "bookmarks.json");
     public static string HistoryFile => Path.Combine(AppRoot, "history.json");
     public static string SessionFile => Path.Combine(AppRoot, "session.json");
+    public static string SecureRestartSessionFile => Path.Combine(AppRoot, "secure-restart-session.bin");
     public static string SiteRulesFile => Path.Combine(AppRoot, "site-rules.json");
     public static string ExtensionRegistryFile => Path.Combine(AppRoot, "extensions.json");
     public static string KnowledgeGraphFile => Path.Combine(AppRoot, "knowledge-graph.json");

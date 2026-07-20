@@ -41,6 +41,7 @@ public static class BrowserEnvironment
             browserExecutableFolder: null,
             userDataFolder: AppPaths.UserData,
             options: options);
+        WebView2RuntimeMonitor.Observe(_environment);
     }
 
     public static CoreWebView2ControllerOptions CreateControllerOptions(bool isPrivate)

@@ -29,6 +29,7 @@ public partial class MainWindow : Window
     private bool _closing;
     private bool _initialized;
     private bool _restartRequested;
+    private bool _coreUpdatePromptShown;
     private readonly DispatcherTimer _memoryTimer;
     private readonly DispatcherTimer _networkPerformanceTimer;
     private readonly Dictionary<string, (long Received, long Sent)> _networkCounters = new(StringComparer.Ordinal);
@@ -70,6 +71,11 @@ public partial class MainWindow : Window
         _networkPerformanceTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _networkPerformanceTimer.Tick += NetworkPerformanceTimer_Tick;
         _networkPerformanceTimer.Start();
+        if (!isPrivate)
+        {
+            WebView2RuntimeMonitor.StatusChanged += WebView2RuntimeMonitor_StatusChanged;
+            Closed += (_, _) => WebView2RuntimeMonitor.StatusChanged -= WebView2RuntimeMonitor_StatusChanged;
+        }
         if (Environment.GetCommandLineArgs().Any(x =>
                 x.Equals("--guardian-test-crash", StringComparison.OrdinalIgnoreCase)))
         {
@@ -85,11 +91,25 @@ public partial class MainWindow : Window
         _initialized = true;
         await DataInitialization.Value;
 
+        SecureRestartSession? secureRestartSession = null;
         BrowserSession? session = null;
         if (!_isPrivate)
-            session = await SessionService.LoadAsync();
+        {
+            secureRestartSession = await SecureRestartSessionService.LoadAsync();
+            if (secureRestartSession is null)
+                session = await SessionService.LoadAsync();
+        }
 
-        if (session is { Urls.Count: > 0 })
+        if (secureRestartSession is { Tabs.Count: > 0 })
+        {
+            foreach (var state in secureRestartSession.Tabs)
+            {
+                var tab = AddTab(state.Url);
+                tab.SetPendingRestartState(state);
+            }
+            TabsList.SelectedIndex = secureRestartSession.ActiveIndex;
+        }
+        else if (session is { Urls.Count: > 0 })
         {
             foreach (var url in session.Urls)
                 AddTab(url);
@@ -118,6 +138,10 @@ public partial class MainWindow : Window
             await PrivacyDock.SetEnabledAsync(SettingsService.Current.ShowPrivacyMonitor);
         else
             PrivacyDock.Visibility = Visibility.Collapsed;
+        if (secureRestartSession is not null)
+            SecureRestartSessionService.Delete();
+        if (!_isPrivate)
+            HandleCoreUpdateSnapshot(WebView2RuntimeMonitor.Check());
     }
 
     private BrowserTab AddTab(string url, bool navigateOnInitialize = true, bool insertAfterActive = false)
@@ -817,9 +841,34 @@ public partial class MainWindow : Window
     private void ToggleMaximize() => WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
     private void RestartWindow_Click(object sender, RoutedEventArgs e)
     {
+        RequestSecureRestart();
+    }
+
+    public void RequestSecureRestart()
+    {
         if (_closing) return;
         _restartRequested = true;
         Close();
+    }
+
+    private void WebView2RuntimeMonitor_StatusChanged(object? sender, WebView2RuntimeSnapshot snapshot) =>
+        Dispatcher.BeginInvoke(new Action(() => HandleCoreUpdateSnapshot(snapshot)));
+
+    private void HandleCoreUpdateSnapshot(WebView2RuntimeSnapshot snapshot)
+    {
+        if (_isPrivate || _closing || snapshot.State != WebView2RuntimeState.RestartRequired ||
+            _coreUpdatePromptShown || !IsLoaded) return;
+        _coreUpdatePromptShown = true;
+        var answer = GlassDialogWindow.Show(this,
+            "Microsoft Edge Update уже загрузила и установила новое ядро WebView2. " +
+            "Оно начнёт работать после перезапуска Nexus Monach.\n\n" +
+            $"Активная версия: {snapshot.ActiveVersion}\n" +
+            $"Готовая версия: {snapshot.InstalledVersion}\n\n" +
+            "Перезапустить сейчас? Обычные вкладки и разрешённые непарольные поля будут " +
+            "локально зашифрованы средствами Windows и восстановлены после запуска. " +
+            "Пароли, OTP, платёжные поля и приватные окна не сохраняются.",
+            "Nexus Guardian · обновление ядра готово", MessageBoxButton.YesNo, MessageBoxImage.Information);
+        if (answer == MessageBoxResult.Yes) RequestSecureRestart();
     }
 
     private void Window_StateChanged(object sender, EventArgs e)
@@ -940,8 +989,39 @@ public partial class MainWindow : Window
 
         if (!_isPrivate && _restartRequested)
         {
-            var urls = Tabs.Select(x => x.CurrentUrl).ToList();
-            await SessionService.SaveAsync(urls, Math.Max(0, TabsList.SelectedIndex));
+            try
+            {
+                var states = await Task.WhenAll(Tabs.Take(20).Select(async tab =>
+                {
+                    try
+                    {
+                        return await tab.CaptureSecureRestartStateAsync().WaitAsync(TimeSpan.FromSeconds(2));
+                    }
+                    catch
+                    {
+                        return SecureRestartSessionService.UrlOnly(tab.CurrentUrl);
+                    }
+                }));
+                await SecureRestartSessionService.SaveAsync(states, Math.Max(0, TabsList.SelectedIndex));
+
+                // The restart snapshot is DPAPI-encrypted. Do not leave a second,
+                // plaintext copy of the same tab list in the ordinary session file.
+                try { if (File.Exists(AppPaths.SessionFile)) File.Delete(AppPaths.SessionFile); }
+                catch { /* The encrypted snapshot remains the authoritative restart state. */ }
+            }
+            catch (Exception ex)
+            {
+                CrashReportService.RecordNonFatal("guardian", "secure-restart-session-write", ex);
+                _restartRequested = false;
+                _closing = false;
+                _memoryTimer.Start();
+                _networkPerformanceTimer.Start();
+                GlassDialogWindow.Show(this,
+                    "Безопасный перезапуск отменён: Nexus не смог зашифровать состояние вкладок. " +
+                    "Окно оставлено открытым, чтобы данные не потерялись.\n\n" + ex.Message,
+                    "Nexus Guardian", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
         }
         else if (!_isPrivate && SettingsService.Current.ClearBrowsingDataOnExit && ActiveTab?.Core is not null)
         {
@@ -951,6 +1031,7 @@ public partial class MainWindow : Window
             try { if (File.Exists(AppPaths.HistoryFile)) File.Delete(AppPaths.HistoryFile); } catch { }
             if (File.Exists(AppPaths.SessionFile))
                 File.Delete(AppPaths.SessionFile);
+            SecureRestartSessionService.Delete();
         }
         else if (!_isPrivate && SettingsService.Current.RestoreSession)
         {

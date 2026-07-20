@@ -141,6 +141,33 @@ The release workflow compiles Guardian with `GUARDIAN_OFFICIAL`; that binary
 refuses to start without a valid signed manifest. Ordinary source builds omit the
 flag and remain usable for development without a private release key.
 
+## WebView2 runtime monitoring
+
+Guardian Center shows the WebView2 Runtime version used by the current browser
+process and the newest Evergreen Runtime version already installed on Windows.
+It also subscribes to `NewBrowserVersionAvailable`. If Microsoft Edge Update
+installs a newer runtime while Nexus Monach is open, Guardian marks that a full
+browser restart is required. The check is local and does not send browsing or
+device data, download an installer, change Windows Update policy or restart the
+browser automatically. Evergreen Runtime installation and servicing remain
+under Microsoft Edge Update and the user's Windows administration policy.
+
+When an already installed Evergreen update is ready, the normal browser window
+and Guardian Center offer a safe restart. Before closing, Nexus captures at most
+20 ordinary tabs, their scroll positions and a bounded set of non-sensitive form
+controls. The one-shot snapshot is encrypted with Windows DPAPI for the current
+Windows user and expires after two hours. It is never uploaded and is removed
+after a successful restore.
+
+Nexus deliberately excludes private windows, passwords, OTP and verification
+codes, email and telephone inputs, payment/banking fields, file controls and
+pages whose path indicates sign-in, OAuth, checkout or billing. Authentication
+cookies and site storage are not copied into the restart snapshot: they remain
+in the normal WebView2 profile, where Windows and Chromium protect them. Some
+sites rebuild forms dynamically, so restoring ordinary field values is best
+effort; if the encrypted snapshot cannot be written, Guardian cancels the
+restart and leaves the current window open.
+
 ## Command line
 
 ```powershell
