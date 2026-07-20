@@ -157,18 +157,32 @@ public static partial class NexusSearchService
 
     private static HttpClient CreateClient()
     {
-        var handler = new HttpClientHandler
-        {
-            AutomaticDecompression = DecompressionMethods.All,
-            AllowAutoRedirect = false,
-            UseCookies = false
-        };
         var settings = SettingsService.Current;
+        HttpMessageHandler handler;
         if (settings.EnableCustomProxy && ProxyConfigurationService.TryValidate(settings.ProxyHost, settings.ProxyPort, out _))
         {
             var scheme = settings.ProxyKind == ProxyKind.Socks5 ? "socks5" : "http";
-            handler.Proxy = new WebProxy($"{scheme}://{settings.ProxyHost}:{settings.ProxyPort}");
-            handler.UseProxy = true;
+            handler = new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.All,
+                AllowAutoRedirect = false,
+                UseCookies = false,
+                Proxy = new WebProxy($"{scheme}://{settings.ProxyHost}:{settings.ProxyPort}"),
+                UseProxy = true
+            };
+        }
+        else
+        {
+            handler = new SocketsHttpHandler
+            {
+                AutomaticDecompression = DecompressionMethods.All,
+                AllowAutoRedirect = false,
+                UseCookies = false,
+                UseProxy = false,
+                ConnectTimeout = TimeSpan.FromSeconds(8),
+                PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+                ConnectCallback = NexusSearchNetworkGuard.ConnectPublicAsync
+            };
         }
         var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(16) };
         client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/136 Safari/537.36 NexusMonach/2.7");
@@ -208,7 +222,11 @@ public static partial class NexusSearchService
         SearchEngineKind provider, CancellationToken cancellationToken)
     {
         var providerUrl = BuildProviderUrl(provider, query);
-        var html = await client.GetStringAsync(providerUrl, cancellationToken);
+        await NexusSearchNetworkGuard.ValidatePublicDestinationAsync(providerUrl, cancellationToken);
+        using var providerResponse = await client.GetAsync(providerUrl, HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken);
+        providerResponse.EnsureSuccessStatusCode();
+        var html = await ReadBoundedHtmlAsync(providerResponse, cancellationToken);
         var providerHost = new Uri(providerUrl).Host;
         var result = new List<NexusSearchCandidate>();
         foreach (Match match in AnchorRegex().Matches(html))
@@ -231,25 +249,35 @@ public static partial class NexusSearchService
     {
         try
         {
+            await NexusSearchNetworkGuard.ValidatePublicDestinationAsync(candidate.Url, cancellationToken);
             using var response = await client.GetAsync(candidate.Url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
             if (!response.IsSuccessStatusCode || response.Content.Headers.ContentType?.MediaType is not string media ||
                 !media.Contains("html", StringComparison.OrdinalIgnoreCase)) return candidate;
-            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-            using var buffer = new MemoryStream();
-            var bytes = new byte[16_384];
-            while (buffer.Length < MaximumPageBytes)
-            {
-                var read = await stream.ReadAsync(bytes.AsMemory(0, (int)Math.Min(bytes.Length, MaximumPageBytes - buffer.Length)), cancellationToken);
-                if (read == 0) break;
-                buffer.Write(bytes, 0, read);
-            }
-            var encoding = Encoding.UTF8;
-            var html = encoding.GetString(buffer.ToArray());
+            var html = await ReadBoundedHtmlAsync(response, cancellationToken);
             candidate.Snippet = ExtractReadableText(html, 12_000);
             return candidate;
         }
         catch (OperationCanceledException) { throw; }
         catch { return candidate; }
+    }
+
+    private static async Task<string> ReadBoundedHtmlAsync(HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        if (response.Content.Headers.ContentLength is > MaximumPageBytes)
+            throw new HttpRequestException("Crawl Engine отклонил страницу, превышающую лимит ответа.");
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var buffer = new MemoryStream();
+        var bytes = new byte[16_384];
+        while (buffer.Length < MaximumPageBytes)
+        {
+            var remaining = (int)Math.Min(bytes.Length, MaximumPageBytes - buffer.Length);
+            var read = await stream.ReadAsync(bytes.AsMemory(0, remaining), cancellationToken);
+            if (read == 0) break;
+            buffer.Write(bytes, 0, read);
+        }
+        return Encoding.UTF8.GetString(buffer.GetBuffer(), 0, checked((int)buffer.Length));
     }
 
     private static string BuildProviderUrl(SearchEngineKind provider, string query)
@@ -313,25 +341,7 @@ public static partial class NexusSearchService
     }
 
     private static bool IsSafePublicUrl(string value, out Uri uri)
-    {
-        if (!Uri.TryCreate(value, UriKind.Absolute, out uri!) || uri.Scheme is not "http" and not "https" ||
-            !string.IsNullOrEmpty(uri.UserInfo) || !uri.IsDefaultPort || uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
-            uri.Host.EndsWith(".local", StringComparison.OrdinalIgnoreCase)) return false;
-        if (!IPAddress.TryParse(uri.Host.Trim('[', ']'), out var address)) return true;
-        var bytes = address.GetAddressBytes();
-        if (address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
-        {
-            return !(IPAddress.IsLoopback(address) ||
-                     bytes[0] is 0 or 10 or 127 ||
-                     bytes[0] == 169 && bytes[1] == 254 ||
-                     bytes[0] == 172 && bytes[1] is >= 16 and <= 31 ||
-                     bytes[0] == 192 && bytes[1] == 168 ||
-                     bytes[0] == 100 && bytes[1] is >= 64 and <= 127 ||
-                     bytes[0] >= 224);
-        }
-        return !(IPAddress.IsLoopback(address) || address.IsIPv6LinkLocal || address.IsIPv6SiteLocal ||
-                 address.IsIPv6Multicast || (bytes.Length == 16 && (bytes[0] & 0xfe) == 0xfc));
-    }
+        => NexusSearchNetworkGuard.TryParsePublicHttpUri(value, out uri);
 
     private static bool IsSearchProviderHost(string host) =>
         host.Contains("duckduckgo.", StringComparison.OrdinalIgnoreCase) ||
