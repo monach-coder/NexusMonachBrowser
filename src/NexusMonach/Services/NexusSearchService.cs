@@ -81,9 +81,11 @@ public static partial class NexusSearchService
     }
 
     public static async Task<NexusSearchReport> AnalyzeSelectedSiteAsync(string query, string title, string url,
-        string currentPageText, IReadOnlyList<string> internalLinks, CancellationToken cancellationToken = default)
+        string currentPageText, IReadOnlyList<string> internalLinks, IProgress<string>? progress = null,
+        CancellationToken cancellationToken = default)
     {
         query = Regex.Replace(query ?? string.Empty, @"\s+", " ").Trim();
+        progress?.Report("Открытая страница очищена от навигации и рекламы.");
         var candidates = new List<NexusSearchCandidate>
         {
             new()
@@ -105,12 +107,20 @@ public static partial class NexusSearchService
         async Task<NexusSearchCandidate?> ReadAsync(NexusSearchCandidate candidate)
         {
             await slots.WaitAsync(cancellationToken);
-            try { return await EnrichAsync(client, candidate, cancellationToken); }
+            try
+            {
+                var result = await EnrichAsync(client, candidate, cancellationToken);
+                if (!string.IsNullOrWhiteSpace(result?.Snippet))
+                    progress?.Report("Прочитан ещё один релевантный раздел сайта.");
+                return result;
+            }
             finally { slots.Release(); }
         }
+        progress?.Report($"Проверяю релевантные разделы: {safeLinks.Length}.");
         var enriched = await Task.WhenAll(safeLinks.Select(ReadAsync));
         candidates.AddRange(enriched.Where(x => x is not null && !string.IsNullOrWhiteSpace(x.Snippet))
             .Select(x => x!));
+        progress?.Report($"Сопоставляю факты из материалов: {candidates.Count}.");
         return await LocalIntelligenceService.AnalyzeWebSearchAsync(query, candidates, cancellationToken);
     }
 

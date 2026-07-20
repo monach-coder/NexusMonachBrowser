@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Net.Http;
 using System.Net.NetworkInformation;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -47,6 +48,8 @@ public partial class MainWindow : Window
     private readonly Dictionary<BrowserTab, string> _lastKnowledgeUrl = [];
     private readonly Dictionary<BrowserTab, CancellationTokenSource> _searchOperations = [];
     private readonly Dictionary<BrowserTab, string> _pendingSearchFollowUp = [];
+    private readonly Dictionary<BrowserTab, SiteResearchContext> _siteResearchContexts = [];
+    private readonly Dictionary<BrowserTab, CancellationTokenSource> _siteResearchOperations = [];
     private static readonly JsonSerializerOptions WebJson = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -55,6 +58,7 @@ public partial class MainWindow : Window
 
     public ObservableCollection<BrowserTab> Tabs { get; } = [];
     private BrowserTab? ActiveTab => TabsList.SelectedItem as BrowserTab;
+    private sealed record SiteResearchContext(string Query, string Host);
 
     public MainWindow(bool isPrivate)
     {
@@ -162,7 +166,16 @@ public partial class MainWindow : Window
                 !UrlService.IsInternal(tab.CurrentUrl) && !UrlService.IsSearchProviderUrl(tab.CurrentUrl))
             {
                 _pendingSearchFollowUp.Remove(tab);
-                _ = AnalyzeSelectedSearchResultAsync(tab, searchQuery);
+                _siteResearchContexts[tab] = new SiteResearchContext(searchQuery, tab.CurrentHost);
+                ScheduleSelectedSiteResearch(tab, searchQuery);
+            }
+            else if (_siteResearchContexts.TryGetValue(tab, out var context))
+            {
+                if (IsSameSite(context.Host, tab.CurrentHost) &&
+                    !UrlService.IsInternal(tab.CurrentUrl) && !UrlService.IsSearchProviderUrl(tab.CurrentUrl))
+                    ScheduleSelectedSiteResearch(tab, context.Query);
+                else
+                    StopSelectedSiteResearch(tab, forgetContext: true);
             }
             Dispatcher.Invoke(SyncUi);
         };
@@ -254,14 +267,35 @@ public partial class MainWindow : Window
         return Task.CompletedTask;
     }
 
-    private async Task AnalyzeSelectedSearchResultAsync(BrowserTab tab, string query)
+    private void ScheduleSelectedSiteResearch(BrowserTab tab, string query)
     {
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        StopSelectedSiteResearch(tab, forgetContext: false);
+        var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        _siteResearchOperations[tab] = cancellation;
+        _ = AnalyzeSelectedSearchResultAsync(tab, query, tab.CurrentUrl, cancellation);
+    }
+
+    private void StopSelectedSiteResearch(BrowserTab tab, bool forgetContext)
+    {
+        if (_siteResearchOperations.Remove(tab, out var operation))
+        {
+            operation.Cancel();
+        }
+        if (forgetContext) _siteResearchContexts.Remove(tab);
+    }
+
+    private async Task AnalyzeSelectedSearchResultAsync(BrowserTab tab, string query, string sourceUrl,
+        CancellationTokenSource cancellation)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var candidateCount = 0;
+        SledopytDiagnosticsService.Record("site-research", "started", "success");
+        CrashReportService.AddBreadcrumb("sledopyt", "site-research-started");
         try
         {
             await Task.Delay(TimeSpan.FromSeconds(2), cancellation.Token);
-            if (UrlService.IsInternal(tab.CurrentUrl) || UrlService.IsSearchProviderUrl(tab.CurrentUrl)) return;
-            var sourceUrl = tab.CurrentUrl;
+            if (!sourceUrl.Equals(tab.CurrentUrl, StringComparison.OrdinalIgnoreCase) ||
+                UrlService.IsInternal(tab.CurrentUrl) || UrlService.IsSearchProviderUrl(tab.CurrentUrl)) return;
             var sourceTitle = tab.Title;
             Dispatcher.Invoke(() =>
             {
@@ -270,11 +304,20 @@ public partial class MainWindow : Window
                 NetworkStatusText.Text = "Следопыт анализирует выбранный сайт…";
             });
             var pageText = await tab.GetReadablePageTextAsync();
+            SledopytDiagnosticsService.Record("site-research", "page-read", "success",
+                stopwatch.ElapsedMilliseconds);
             var links = await tab.GetResearchLinksAsync(query, 8);
+            candidateCount = links.Count + 1;
+            SledopytDiagnosticsService.Record("site-research", "links-read", "success",
+                stopwatch.ElapsedMilliseconds, candidateCount);
+            var progress = new Progress<string>(message => LocalAiDock.UpdateBackgroundResearchProgress(tab, message));
             var report = await NexusSearchService.AnalyzeSelectedSiteAsync(
-                query, sourceTitle, sourceUrl, pageText, links, cancellation.Token);
+                query, sourceTitle, sourceUrl, pageText, links, progress, cancellation.Token);
             if (!_isPrivate)
                 await KnowledgeGraphService.RecordResearchAsync(report, cancellation.Token, "исследование выбранного сайта");
+            SledopytDiagnosticsService.Record("site-research", "completed", "success",
+                stopwatch.ElapsedMilliseconds, candidateCount, report.Items.Count);
+            CrashReportService.AddBreadcrumb("sledopyt", "site-research-completed");
             Dispatcher.Invoke(() =>
             {
                 LocalAiDock.StoreBackgroundResearch(tab, sourceUrl, report);
@@ -283,6 +326,10 @@ public partial class MainWindow : Window
         }
         catch (OperationCanceledException)
         {
+            SledopytDiagnosticsService.Record("site-research", "cancelled", "partial",
+                stopwatch.ElapsedMilliseconds, candidateCount, code: "navigation-or-timeout");
+            if (!_siteResearchOperations.TryGetValue(tab, out var active) || !ReferenceEquals(active, cancellation))
+                return;
             Dispatcher.Invoke(() =>
             {
                 LocalAiDock.FailBackgroundResearch("Анализ выбранного сайта остановлен.");
@@ -291,13 +338,36 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            SledopytDiagnosticsService.Record("site-research", "failed", "failed",
+                stopwatch.ElapsedMilliseconds, candidateCount, code: ClassifySledopytFailure(ex));
+            CrashReportService.AddBreadcrumb("sledopyt", "site-research-failed");
             Dispatcher.Invoke(() =>
             {
                 LocalAiDock.FailBackgroundResearch(ex.Message);
                 NetworkStatusText.Text = "Следопыт: " + ex.Message;
             });
         }
+        finally
+        {
+            if (_siteResearchOperations.TryGetValue(tab, out var active) && ReferenceEquals(active, cancellation))
+                _siteResearchOperations.Remove(tab);
+            cancellation.Dispose();
+        }
     }
+
+    private static string ClassifySledopytFailure(Exception ex) => ex switch
+    {
+        TimeoutException => "timeout",
+        HttpRequestException => "network",
+        JsonException => "invalid-response",
+        _ => "operation-error"
+    };
+
+    private static bool IsSameSite(string left, string right) =>
+        !string.IsNullOrWhiteSpace(left) && !string.IsNullOrWhiteSpace(right) &&
+        (left.Equals(right, StringComparison.OrdinalIgnoreCase) ||
+         left.EndsWith('.' + right, StringComparison.OrdinalIgnoreCase) ||
+         right.EndsWith('.' + left, StringComparison.OrdinalIgnoreCase));
 
     private async Task RunNexusSearchAsync(BrowserTab tab, string query)
     {
@@ -574,6 +644,7 @@ public partial class MainWindow : Window
             BrowserHost.Content = null;
         _lastKnowledgeUrl.Remove(tab);
         _pendingSearchFollowUp.Remove(tab);
+        StopSelectedSiteResearch(tab, forgetContext: true);
         if (_searchOperations.Remove(tab, out var search)) { search.Cancel(); search.Dispose(); }
         Tabs.Remove(tab);
         tab.Dispose();

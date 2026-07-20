@@ -12,6 +12,7 @@ public static class AppPaths
     public static string SiteRulesFile => Path.Combine(AppRoot, "site-rules.json");
     public static string ExtensionRegistryFile => Path.Combine(AppRoot, "extensions.json");
     public static string KnowledgeGraphFile => Path.Combine(AppRoot, "knowledge-graph.json");
+    public static string SledopytDiagnosticsFile => Path.Combine(AppRoot, "Guardian", "sledopyt-diagnostics.json");
     public static string Extensions => Path.Combine(AppRoot, "Extensions");
     public static string WebAssets => Path.Combine(AppContext.BaseDirectory, "Assets", "Web");
     public static string BuiltInDevToolsExtension => Path.Combine(AppContext.BaseDirectory, "Assets", "NexusDevTools");

@@ -33,7 +33,7 @@ public partial class GuardianCenterWindow : Window
         SafeModeStatusText.Foreground = GuardianRuntime.IsSafeMode
             ? System.Windows.Media.Brushes.DarkOrange
             : (System.Windows.Media.Brush)FindResource("AccentBrush");
-        ReportCountText.Text = $"Всего: {_reports.Count} · ожидают: {CrashReportService.PendingCount}";
+        ReportCountText.Text = $"Рапорты: {_reports.Count} · Следопыт: {SledopytDiagnosticsService.Count}";
 
         ReportsList.SelectedItem = _reports.FirstOrDefault(x =>
             string.Equals(x.FilePath, selectedPath, StringComparison.OrdinalIgnoreCase)) ?? _reports.FirstOrDefault();
@@ -125,6 +125,13 @@ public partial class GuardianCenterWindow : Window
     }
 
     private void Refresh_Click(object sender, RoutedEventArgs e) => RefreshReports();
+
+    private void SledopytJournal_Click(object sender, RoutedEventArgs e)
+    {
+        ReportsList.SelectedItem = null;
+        DetailsBox.Text = SledopytDiagnosticsService.FormatForDisplay();
+        DetailsBox.ScrollToHome();
+    }
 
     private void WebView2RuntimeMonitor_StatusChanged(object? sender, WebView2RuntimeSnapshot snapshot) =>
         Dispatcher.BeginInvoke(new Action(() => RefreshCoreStatus(snapshot)));
