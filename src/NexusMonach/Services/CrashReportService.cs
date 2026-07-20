@@ -338,6 +338,7 @@ public static partial class CrashReportService
                 StackTrace = Sanitize(exception.StackTrace ?? string.Empty),
                 IntegrityStatus = GuardianRuntime.IntegrityStatus,
                 SafeMode = GuardianRuntime.IsSafeMode,
+                GuardianSession = GuardianRuntime.SessionId,
                 Breadcrumbs = Breadcrumbs.ToArray()
             };
             var path = Path.Combine(VaultPath, $"{report.TimestampUtc:yyyyMMdd-HHmmss}-{report.Id}.pending.json");
@@ -415,6 +416,7 @@ public static partial class CrashReportService
         public string StackTrace { get; set; } = string.Empty;
         public string IntegrityStatus { get; set; } = string.Empty;
         public bool SafeMode { get; set; }
+        public string GuardianSession { get; set; } = string.Empty;
         public IReadOnlyList<CrashBreadcrumb> Breadcrumbs { get; set; } = [];
     }
 

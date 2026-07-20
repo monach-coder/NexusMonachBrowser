@@ -114,7 +114,8 @@ internal static class Program
         var clean = ReadCleanSession(sessionId);
         var normalExit = process.ExitCode == 0 && clean;
         RecordExit(normalExit);
-        if (!normalExit) WriteNativeCrashReport(sessionId, process.ExitCode, integrity.CompactStatus, safeMode);
+        if (!normalExit && !HasManagedFatalReport(sessionId))
+            WriteNativeCrashReport(sessionId, process.ExitCode, integrity.CompactStatus, safeMode);
         return process.ExitCode;
     }
 
@@ -123,7 +124,69 @@ internal static class Program
         var state = ReadCrashState();
         var threshold = DateTimeOffset.UtcNow.AddMinutes(-10);
         state.AbnormalExitsUtc.RemoveAll(x => x < threshold);
-        return state.AbnormalExitsUtc.Count >= 3;
+        return state.AbnormalExitsUtc.Count >= 3 || HasRecentGraphicsMemoryCrash();
+    }
+
+    private static bool HasManagedFatalReport(string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId)) return false;
+        var vault = Path.Combine(GuardianRoot, "CrashVault");
+        if (!Directory.Exists(vault)) return false;
+
+        try
+        {
+            var recent = DateTime.UtcNow.AddMinutes(-5);
+            foreach (var path in Directory.EnumerateFiles(vault, "*.json")
+                         .OrderByDescending(File.GetLastWriteTimeUtc).Take(40))
+            {
+                if (File.GetLastWriteTimeUtc(path) < recent) break;
+                using var document = JsonDocument.Parse(File.ReadAllText(path));
+                var root = document.RootElement;
+                if (!root.TryGetProperty("Fatal", out var fatal) || fatal.ValueKind != JsonValueKind.True)
+                    continue;
+                if (root.TryGetProperty("GuardianSession", out var session) &&
+                    session.ValueKind == JsonValueKind.String &&
+                    sessionId.Equals(session.GetString(), StringComparison.Ordinal))
+                    return true;
+            }
+        }
+        catch { /* A damaged local report must not block the native fallback. */ }
+
+        return false;
+    }
+
+    private static bool HasRecentGraphicsMemoryCrash()
+    {
+        var vault = Path.Combine(GuardianRoot, "CrashVault");
+        if (!Directory.Exists(vault)) return false;
+
+        try
+        {
+            var recent = DateTimeOffset.UtcNow.AddMinutes(-30);
+            foreach (var path in Directory.EnumerateFiles(vault, "*.json")
+                         .OrderByDescending(File.GetLastWriteTimeUtc).Take(40))
+            {
+                using var document = JsonDocument.Parse(File.ReadAllText(path));
+                var root = document.RootElement;
+                if (!root.TryGetProperty("TimestampUtc", out var timestamp) ||
+                    !timestamp.TryGetDateTimeOffset(out var timestampUtc) || timestampUtc < recent)
+                    continue;
+                var component = root.TryGetProperty("Component", out var componentValue)
+                    ? componentValue.GetString() : null;
+                var exception = root.TryGetProperty("ExceptionType", out var exceptionValue)
+                    ? exceptionValue.GetString() : null;
+                var stack = root.TryGetProperty("StackTrace", out var stackValue)
+                    ? stackValue.GetString() ?? string.Empty : string.Empty;
+                if (component?.Equals("wpf", StringComparison.OrdinalIgnoreCase) == true &&
+                    exception?.Equals("System.OutOfMemoryException", StringComparison.Ordinal) == true &&
+                    (stack.Contains("DUCE.Channel", StringComparison.Ordinal) ||
+                     stack.Contains("HwndTarget", StringComparison.Ordinal)))
+                    return true;
+            }
+        }
+        catch { /* Safe-mode detection is best effort. */ }
+
+        return false;
     }
 
     private static void RecordExit(bool clean)

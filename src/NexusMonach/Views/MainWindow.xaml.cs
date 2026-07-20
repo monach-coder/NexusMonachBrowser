@@ -1052,6 +1052,13 @@ public partial class MainWindow : Window
         e.Cancel = true;
         if (_closing) return;
         _closing = true;
+
+        // Always unwind the original WPF Closing event before the asynchronous
+        // shutdown pipeline eventually calls Close() again. Some fast paths do
+        // not otherwise yield, and WPF rejects a nested Close while the first
+        // Closing notification is still being dispatched.
+        await Dispatcher.Yield(DispatcherPriority.Background);
+
         _memoryTimer.Stop();
         _networkPerformanceTimer.Stop();
         LocalAiDock.StopVideoTranslation();
@@ -1113,9 +1120,10 @@ public partial class MainWindow : Window
         BrowserHost.Content = null;
         foreach (var tab in Tabs.ToList()) tab.Dispose();
         Tabs.Clear();
-        if (_restartRequested) StartNewInstance();
+        var restartRequested = _restartRequested;
         _closeReady = true;
         Close();
+        if (restartRequested) StartNewInstance();
     }
 
     private static void StartNewInstance()
