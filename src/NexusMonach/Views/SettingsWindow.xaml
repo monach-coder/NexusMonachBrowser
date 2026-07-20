@@ -56,7 +56,7 @@
                 <CheckBox x:Name="ExtensionsCheck" Content="Разрешить распакованные расширения (требуется перезапуск)" />
                 <CheckBox x:Name="PasswordCheck" Content="Разрешить WebView2 сохранять и подставлять пароли" />
                 <CheckBox x:Name="AutofillCheck" Content="Разрешить автозаполнение обычных форм" />
-                <TextBlock Text="F12 открывает Chromium DevTools. Встроенное расширение добавляет внутрь него вкладку Nexus AI для анализа $0 и Network."
+                <TextBlock Text="F12 открывает стандартные Chromium DevTools: Elements, Console, Sources, Network, Performance и другие инструменты."
                            TextWrapping="Wrap" Margin="0,7,0,0" FontSize="11" Foreground="{StaticResource MutedTextBrush}" />
 
                 <Separator Margin="0,18,0,18" Background="#2D4053" />

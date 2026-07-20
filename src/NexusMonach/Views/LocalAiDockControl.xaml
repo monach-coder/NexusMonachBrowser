@@ -17,7 +17,7 @@
             <Grid>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                 <StackPanel>
-                    <TextBlock x:Name="ModeTitleText" Text="DEVTOOLS AI" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
+                    <TextBlock x:Name="ModeTitleText" Text="NEXUS СЛЕДОПЫТ" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
                     <TextBlock x:Name="PageTitleText" Margin="0,3,0,0" FontSize="10.5"
                                Foreground="{StaticResource MutedTextBrush}" TextTrimming="CharacterEllipsis" />
                 </StackPanel>
@@ -44,8 +44,6 @@
             </Border>
 
             <Grid Grid.Row="2" Margin="0,12,0,0">
-                <Button x:Name="DeveloperAnalyzeButton" Content="Повторить анализ и подсветку" Visibility="Collapsed"
-                        Padding="14,8" HorizontalAlignment="Left" Click="DeveloperAnalyze_Click" />
                 <StackPanel x:Name="ShoppingAgentPanel" Visibility="Collapsed">
                     <Grid>
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
@@ -64,34 +62,12 @@
                 </StackPanel>
             </Grid>
 
-            <StackPanel x:Name="DeveloperGuidePanel" Grid.Row="3" Margin="0,11,0,0" Visibility="Collapsed">
-                <TextBlock Text="Задержи мышь на разделе на 2 секунды" FontSize="10.5"
-                           Foreground="{StaticResource MutedTextBrush}" />
-                <WrapPanel Margin="0,5,0,0">
-                    <Button Content="Elements" Tag="Elements показывает DOM и CSS. Здесь ищут элемент, меняют стили для проверки и смотрят рассчитанные свойства. Изменения временные." Margin="0,0,5,5" Padding="8,5" MouseEnter="DevTopic_MouseEnter" MouseLeave="DevTopic_MouseLeave" />
-                    <Button Content="Console" Tag="Console показывает ошибки JavaScript и позволяет вручную выполнять выражения. Не вставляй сюда неизвестный код: он получает права открытой страницы." Margin="0,0,5,5" Padding="8,5" MouseEnter="DevTopic_MouseEnter" MouseLeave="DevTopic_MouseLeave" />
-                    <Button Content="Sources" Tag="Sources показывает загруженные файлы, точки остановки и пошаговую отладку JavaScript. Правки обычно исчезают после перезагрузки." Margin="0,0,5,5" Padding="8,5" MouseEnter="DevTopic_MouseEnter" MouseLeave="DevTopic_MouseLeave" />
-                    <Button Content="Network" Tag="Network показывает запросы, ответы, тайминги, размеры и инициаторов. Тела запросов могут содержать секреты — Nexus не передаёт их локальным моделям." Margin="0,0,5,5" Padding="8,5" MouseEnter="DevTopic_MouseEnter" MouseLeave="DevTopic_MouseLeave" />
-                    <Button Content="Performance" Tag="Performance записывает работу страницы во времени и помогает находить долгие задачи, зависания интерфейса и проблемы отрисовки." Margin="0,0,5,5" Padding="8,5" MouseEnter="DevTopic_MouseEnter" MouseLeave="DevTopic_MouseLeave" />
-                    <Button Content="Memory" Tag="Memory создаёт снимки памяти и помогает находить утечки, удерживаемые DOM-узлы и рост JavaScript heap. Снимок может на короткое время нагрузить страницу." Margin="0,0,5,5" Padding="8,5" MouseEnter="DevTopic_MouseEnter" MouseLeave="DevTopic_MouseLeave" />
-                    <Button Content="Application" Tag="Application показывает хранилища сайта, service worker, manifest и кэш. Удаление данных может разлогинить пользователя." Margin="0,0,5,5" Padding="8,5" MouseEnter="DevTopic_MouseEnter" MouseLeave="DevTopic_MouseLeave" />
-                    <Button Content="Security" Tag="Security объясняет TLS, сертификат и происхождение ресурсов страницы. Красные предупреждения требуют проверки до ввода данных." Margin="0,0,5,5" Padding="8,5" MouseEnter="DevTopic_MouseEnter" MouseLeave="DevTopic_MouseLeave" />
-                </WrapPanel>
-                <Grid Margin="0,3,0,0">
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                    <TextBox x:Name="DeveloperQuestionBox" Padding="9,7" KeyDown="DeveloperQuestionBox_KeyDown"
-                             ToolTip="Например: где увидеть медленные запросы?" />
-                    <Button Grid.Column="1" Content="Спросить" Padding="10,7" Margin="6,0,0,0"
-                            Click="DeveloperQuestion_Click" />
-                </Grid>
-            </StackPanel>
-
             <Grid Grid.Row="4" Margin="0,12,0,0">
                 <TextBox x:Name="ResultBox" Padding="12"
                          Background="#80101010" BorderBrush="#66FFFFFF" Foreground="{StaticResource TextBrush}"
                          IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
                          VerticalScrollBarVisibility="Auto"
-                         Text="Открой DevTools через F12 или нажми AI для поиска товаров." />
+                         Text="Нажми AI, чтобы начать локальный поиск и анализ текущего сайта." />
                 <ScrollViewer x:Name="ShoppingCardsScroll" Visibility="Collapsed"
                               VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <StackPanel x:Name="ShoppingCardsPanel" />
@@ -111,13 +87,6 @@
                 <ProgressBar x:Name="ModelProgress" />
             </Grid>
 
-            <Popup x:Name="DevHelpPopup" AllowsTransparency="True" Placement="Mouse" StaysOpen="False">
-                <Border Width="360" Padding="13" CornerRadius="12" Background="#B3101010"
-                        BorderBrush="#80FFFFFF" BorderThickness="1">
-                    <TextBlock x:Name="DevHelpText" TextWrapping="Wrap" FontSize="12.5"
-                               Foreground="White" LineHeight="19" />
-                </Border>
-            </Popup>
         </Grid>
     </Border>
 </UserControl>

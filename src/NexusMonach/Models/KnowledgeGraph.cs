@@ -81,19 +81,6 @@ public sealed class AgentStep
     public string Description { get; set; } = string.Empty;
 }
 
-public sealed class DeveloperAnalysis
-{
-    public string Summary { get; set; } = string.Empty;
-    public List<string> Suggestions { get; set; } = [];
-    public List<DeveloperHighlight> Highlights { get; set; } = [];
-}
-
-public sealed class DeveloperHighlight
-{
-    public string Selector { get; set; } = string.Empty;
-    public string Reason { get; set; } = string.Empty;
-}
-
 public sealed class ShoppingReport
 {
     public string Query { get; set; } = string.Empty;

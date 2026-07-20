@@ -4,7 +4,6 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Text.Json;
-using System.Windows.Threading;
 using System.Diagnostics;
 using Microsoft.Win32;
 using NexusMonach.Intelligence;
@@ -20,8 +19,6 @@ public partial class LocalAiDockControl : UserControl
     private string? _pageUrl;
     private CancellationTokenSource? _cancellation;
     private CancellationTokenSource? _videoCancellation;
-    private readonly DispatcherTimer _devHelpTimer;
-    private string? _pendingDevHelp;
     private IReadOnlyList<NexusResearchDocument> _lastResearchDocuments = [];
     private IReadOnlyList<string> _lastResearchNotes = [];
     private string _lastResearchQuery = string.Empty;
@@ -35,8 +32,6 @@ public partial class LocalAiDockControl : UserControl
     public LocalAiDockControl()
     {
         InitializeComponent();
-        _devHelpTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-        _devHelpTimer.Tick += DevHelpTimer_Tick;
     }
 
     public async Task ShowForTabAsync(BrowserTab tab)
@@ -47,7 +42,7 @@ public partial class LocalAiDockControl : UserControl
             _cancellation?.Cancel();
             _tab = tab;
             _pageUrl = tab.CurrentUrl;
-            ResultBox.Text = "DevTools AI готовит диагностику текущей страницы…";
+            ResultBox.Text = "Nexus Следопыт готовит локальный анализ текущей страницы…";
         }
         PageTitleText.Text = tab.Title + " · " + tab.CurrentHost;
         await EnsureModelAsync();
@@ -214,8 +209,6 @@ public partial class LocalAiDockControl : UserControl
         await ShowForTabAsync(tab);
         ModeTitleText.Text = "NEXUS СЛЕДОПЫТ";
         TestLocalAiButton.Visibility = Visibility.Collapsed;
-        DeveloperAnalyzeButton.Visibility = Visibility.Collapsed;
-        DeveloperGuidePanel.Visibility = Visibility.Collapsed;
         ShoppingAgentPanel.Visibility = Visibility.Visible;
         ShoppingQueryBox.Text = "Что нужно найти?";
         _shoppingImagePath = null;
@@ -253,8 +246,6 @@ public partial class LocalAiDockControl : UserControl
         ModeTitleText.Text = "NEXUS СЛЕДОПЫТ";
         PageTitleText.Text = tab.Title + " · " + tab.CurrentHost;
         TestLocalAiButton.Visibility = Visibility.Collapsed;
-        DeveloperAnalyzeButton.Visibility = Visibility.Collapsed;
-        DeveloperGuidePanel.Visibility = Visibility.Collapsed;
         ShoppingAgentPanel.Visibility = Visibility.Collapsed;
         ShowTextResult("Ищу важную информацию по запросу:\n«" + query +
                        "»\n\n1. Читаю открытую страницу…\n2. Отбираю релевантные разделы этого сайта…\n3. Сопоставляю факты локально…");
@@ -353,23 +344,10 @@ public partial class LocalAiDockControl : UserControl
         ShoppingCardsScroll.ScrollToHome();
     }
 
-    public async Task AnalyzeDeveloperContextAsync(BrowserTab tab)
-    {
-        await ShowForTabAsync(tab);
-        ModeTitleText.Text = "DEVTOOLS AI";
-        TestLocalAiButton.Visibility = Visibility.Visible;
-        ShoppingAgentPanel.Visibility = Visibility.Collapsed;
-        DeveloperAnalyzeButton.Visibility = Visibility.Visible;
-        DeveloperGuidePanel.Visibility = Visibility.Visible;
-        await RunDeveloperAnalysisAsync();
-    }
-
     public async Task ShowSearchFollowUpAsync(BrowserTab tab, string query)
     {
         await ShowForTabAsync(tab);
         ModeTitleText.Text = "NEXUS · ИССЛЕДОВАТЕЛЬ";
-        DeveloperAnalyzeButton.Visibility = Visibility.Collapsed;
-        DeveloperGuidePanel.Visibility = Visibility.Collapsed;
         ShoppingAgentPanel.Visibility = Visibility.Collapsed;
         ShowTextResult("Анализирую выбранную страницу по исходному запросу…");
         _cancellation?.Cancel();
@@ -966,90 +944,6 @@ public partial class LocalAiDockControl : UserControl
         lines.AddRange(documents.Select(x => $"{x.Id.ToUpperInvariant()}. {x.Title}\n   {x.Url}"));
         lines.Add("\nNexus Следопыт ничего не вводил в формы, не авторизовывался и не совершал действий от имени пользователя.");
         return string.Join("\n", lines);
-    }
-
-    private async void DeveloperAnalyze_Click(object sender, RoutedEventArgs e) => await RunDeveloperAnalysisAsync();
-
-    private void DevTopic_MouseEnter(object sender, MouseEventArgs e)
-    {
-        _pendingDevHelp = (sender as FrameworkElement)?.Tag as string;
-        _devHelpTimer.Stop();
-        _devHelpTimer.Start();
-    }
-
-    private void DevTopic_MouseLeave(object sender, MouseEventArgs e)
-    {
-        _devHelpTimer.Stop();
-        _pendingDevHelp = null;
-    }
-
-    private void DevHelpTimer_Tick(object? sender, EventArgs e)
-    {
-        _devHelpTimer.Stop();
-        if (string.IsNullOrWhiteSpace(_pendingDevHelp)) return;
-        DevHelpText.Text = _pendingDevHelp;
-        DevHelpPopup.IsOpen = true;
-    }
-
-    private async void DeveloperQuestion_Click(object sender, RoutedEventArgs e) => await RunDeveloperQuestionAsync();
-
-    private async void DeveloperQuestionBox_KeyDown(object sender, KeyEventArgs e)
-    {
-        if (e.Key != Key.Enter) return;
-        e.Handled = true;
-        await RunDeveloperQuestionAsync();
-    }
-
-    private async Task RunDeveloperQuestionAsync()
-    {
-        if (_tab is null || string.IsNullOrWhiteSpace(DeveloperQuestionBox.Text)) return;
-        if (_model is null) { await EnsureModelAsync(); if (_model is null) return; }
-        _cancellation?.Cancel();
-        _cancellation = new CancellationTokenSource();
-        CancelButton.IsEnabled = true;
-        try
-        {
-            StatusText.Text = "Nexus Fast Intelligence готовит маршрут по DevTools…";
-            var context = await _tab.GetDeveloperContextAsync();
-            var answer = await LocalIntelligenceService.AnswerDeveloperQuestionAsync(
-                DeveloperQuestionBox.Text.Trim(), context, _cancellation.Token);
-            var highlighted = await _tab.HighlightDeveloperSelectorsAsync(answer.Highlights);
-            ResultBox.Text = answer.Summary + "\n\n" +
-                             string.Join("\n", answer.Suggestions.Select((x, i) => $"{i + 1}. {x}")) +
-                             (highlighted > 0 ? $"\n\nНа самой странице подсвечено элементов: {highlighted}." : string.Empty);
-            ResultBox.ScrollToHome();
-            StatusText.Text = "Подсказка готова. Nexus ничего не нажимал.";
-        }
-        catch (OperationCanceledException) { StatusText.Text = "Подсказка остановлена."; }
-        catch (Exception ex) { ResultBox.Text = ex.Message; StatusText.Text = "Не удалось подготовить подсказку."; }
-        finally { CancelButton.IsEnabled = false; }
-    }
-
-    private async Task RunDeveloperAnalysisAsync()
-    {
-        if (_tab is null || UrlService.IsInternal(_tab.CurrentUrl))
-        { StatusText.Text = "Открой обычную веб-страницу."; return; }
-        if (_model is null) { await EnsureModelAsync(); if (_model is null) return; }
-        _cancellation?.Cancel(); _cancellation = new CancellationTokenSource();
-        CancelButton.IsEnabled = true; ResultBox.Clear();
-        try
-        {
-            StatusText.Text = "Сбор безопасного DOM, консоли и сетевой сводки…";
-            var context = await _tab.GetDeveloperContextAsync();
-            if (string.IsNullOrWhiteSpace(context)) throw new InvalidOperationException("Нет DevTools-контекста.");
-            StatusText.Text = "Nexus Fast Intelligence анализирует проблемы…";
-            var analysis = await LocalIntelligenceService.AnalyzeDeveloperContextAsync(context, _cancellation.Token);
-            var highlighted = await _tab.HighlightDeveloperSelectorsAsync(analysis.Highlights);
-            ResultBox.Text = analysis.Summary + "\n\n" +
-                             string.Join("\n", analysis.Suggestions.Select((x, i) => $"{i + 1}. {x}")) +
-                             (analysis.Highlights.Count == 0 ? string.Empty : "\n\nПодсветка:\n" +
-                              string.Join("\n", analysis.Highlights.Select(x => $"{x.Selector} — {x.Reason}")));
-            ResultBox.ScrollToHome();
-            StatusText.Text = $"Анализ готов. Подсвечено элементов: {highlighted}.";
-        }
-        catch (OperationCanceledException) { StatusText.Text = "DevTools-анализ остановлен."; }
-        catch (Exception ex) { ResultBox.Text = ex.Message; StatusText.Text = "Ошибка DevTools AI."; }
-        finally { CancelButton.IsEnabled = false; }
     }
 
     private void Cancel_Click(object sender, RoutedEventArgs e) => _cancellation?.Cancel();

@@ -11,7 +11,6 @@ public static class ExtensionService
     private static readonly SemaphoreSlim Gate = new(1, 1);
     private static List<ExtensionRecord> _records = [];
     private static readonly HashSet<string> EnsuredProfiles = new(StringComparer.OrdinalIgnoreCase);
-    public static string? BuiltInDevToolsError { get; private set; }
 
     public static async Task InitializeAsync() =>
         _records = await JsonStore.ReadAsync<List<ExtensionRecord>>(AppPaths.ExtensionRegistryFile) ?? [];
@@ -27,19 +26,16 @@ public static class ExtensionService
         try
         {
             var installed = await profile.GetBrowserExtensionsAsync();
-            var builtInManifest = Path.Combine(AppPaths.BuiltInDevToolsExtension, "manifest.json");
-            if (File.Exists(builtInManifest) && !installed.Any(x =>
-                    x.Name.Equals("Nexus Monach DevTools AI", StringComparison.OrdinalIgnoreCase)))
+            // Remove the retired built-in DevTools AI extension from profiles
+            // that used an earlier Nexus release. User-installed extensions are
+            // identified by the managed registry and remain untouched.
+            foreach (var retired in installed.Where(x =>
+                         x.Name.Equals("Nexus Monach DevTools AI", StringComparison.OrdinalIgnoreCase)).ToList())
             {
-                try
-                {
-                    var builtIn = await profile.AddBrowserExtensionAsync(AppPaths.BuiltInDevToolsExtension)
-                                  ?? throw new InvalidOperationException("WebView2 не загрузил встроенный Nexus DevTools AI.");
-                    installed = installed.Append(builtIn).ToList();
-                    BuiltInDevToolsError = null;
-                }
-                catch (Exception ex) { BuiltInDevToolsError = ex.Message; }
+                try { await retired.RemoveAsync(); }
+                catch { /* Retired extension cleanup must not block browsing. */ }
             }
+            installed = await profile.GetBrowserExtensionsAsync();
             if (!BrowserEnvironment.ExtensionsEnabledAtStartup)
             {
                 foreach (var extension in installed.Where(x => _records.Any(r => r.Id == x.Id)).ToList())

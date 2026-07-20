@@ -15,7 +15,6 @@ public static class AppPaths
     public static string SledopytDiagnosticsFile => Path.Combine(AppRoot, "Guardian", "sledopyt-diagnostics.json");
     public static string Extensions => Path.Combine(AppRoot, "Extensions");
     public static string WebAssets => Path.Combine(AppContext.BaseDirectory, "Assets", "Web");
-    public static string BuiltInDevToolsExtension => Path.Combine(AppContext.BaseDirectory, "Assets", "NexusDevTools");
 
     public static void Initialize(IEnumerable<string> args)
     {

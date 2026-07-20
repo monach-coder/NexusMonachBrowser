@@ -798,14 +798,11 @@ public partial class MainWindow : Window
     private void SshTerminal_CloseRequested(object? sender, EventArgs e) =>
         SshTerminalDock.Visibility = Visibility.Collapsed;
 
-    private void ShowDeveloperAi_Click(object sender, RoutedEventArgs e)
+    private void ShowDeveloperTools_Click(object sender, RoutedEventArgs e)
     {
         if (ActiveTab?.Core is null) return;
         SshTerminalDock.Visibility = Visibility.Collapsed;
         ActiveTab.Core.OpenDevToolsWindow();
-        if (!string.IsNullOrWhiteSpace(ExtensionService.BuiltInDevToolsError))
-            GlassDialogWindow.Show(this, "Стандартный DevTools открыт, но вкладка Nexus AI не загрузилась:\n\n" +
-                ExtensionService.BuiltInDevToolsError, "Nexus DevTools AI", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private async void ShowPrivacyMonitor_Click(object sender, RoutedEventArgs e)
@@ -886,7 +883,7 @@ public partial class MainWindow : Window
         else if (Keyboard.Modifiers == ModifierKeys.Alt && e.Key == Key.Right) { ActiveTab?.GoForward(); e.Handled = true; }
         else if (e.Key == Key.F12 ||
                  (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.I))
-        { ShowDeveloperAi_Click(sender, e); e.Handled = true; }
+        { ShowDeveloperTools_Click(sender, e); e.Handled = true; }
         else if (e.Key == Key.F5) { ActiveTab?.ReloadOrStop(); e.Handled = true; }
     }
 

@@ -195,7 +195,7 @@ public static class LocalAiService
         var assistant = response >= 0 ? -1 : value.LastIndexOf(assistantMarker, StringComparison.Ordinal);
         // llama-cli с --no-display-prompt возвращает только ответ модели, без маркера
         // assistant. Прежняя проверка отбрасывала корректный ответ целиком, из-за чего
-        // переводчик, агент и DevTools AI выглядели неработающими.
+        // переводчик и исследовательский агент выглядели неработающими.
         if (assistant >= 0)
             value = value[(assistant + assistantMarker.Length)..];
         value = Regex.Replace(value, @"<think>[\s\S]*?</think>", string.Empty,

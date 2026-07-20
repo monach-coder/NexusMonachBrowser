@@ -214,7 +214,7 @@
                         <Separator />
                         <MenuItem x:Name="ExtensionsMenuItem" Header="Расширения" Click="ShowExtensions_Click" />
                         <MenuItem Header="Показать / скрыть Privacy Dock" Click="ShowPrivacyMonitor_Click" />
-                        <MenuItem Header="DevTools · вкладка Nexus AI" InputGestureText="F12" Click="ShowDeveloperAi_Click" />
+                        <MenuItem Header="Инструменты разработчика" InputGestureText="F12" Click="ShowDeveloperTools_Click" />
                         <MenuItem Header="SSH-терминал Linux" Click="SshTerminal_Click" />
                         <MenuItem Header="Nexus Guardian · локальные рапорты" Click="ShowGuardianCenter_Click" />
                         <MenuItem Header="Настройки" Click="ShowSettings_Click" />

@@ -33,8 +33,6 @@
     <Resource Include="Assets\nexus-monach-512.png" />
     <None Remove="Assets\Web\**\*" />
     <Content Include="Assets\Web\**\*" CopyToOutputDirectory="PreserveNewest" />
-    <None Remove="Assets\NexusDevTools\**\*" />
-    <Content Include="Assets\NexusDevTools\**\*" CopyToOutputDirectory="PreserveNewest" />
     <None Remove="AI\**\*" />
     <Content Include="AI\**\*" Exclude="AI\**\.*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

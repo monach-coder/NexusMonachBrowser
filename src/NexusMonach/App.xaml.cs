@@ -40,7 +40,6 @@ public partial class App : Application
         }
         if (!GuardianRuntime.IsSafeMode)
         {
-            DevToolsAiBridgeService.Start();
             NexusFabricRuntime.Initialize();
         }
 
@@ -99,7 +98,6 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        DevToolsAiBridgeService.Stop();
         NexusFabricRuntime.Shutdown();
         SemanticEmbeddingService.Stop();
         WhisperService.Shutdown();

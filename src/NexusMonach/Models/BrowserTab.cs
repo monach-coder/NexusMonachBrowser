@@ -52,10 +52,6 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     private int _requestCount;
     private string _networkTopHost = string.Empty;
     private string _agentDomToken = string.Empty;
-    private readonly object _developerLock = new();
-    private readonly Queue<string> _developerEvents = new();
-    private CoreWebView2DevToolsProtocolEventReceiver? _consoleReceiver;
-    private CoreWebView2DevToolsProtocolEventReceiver? _exceptionReceiver;
     private SecureRestartTabState? _pendingRestartState;
     private bool _restartStateRestoreRunning;
 
@@ -700,56 +696,6 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         return results;
     }
 
-    public async Task<string> GetDeveloperContextAsync()
-    {
-        if (Core is null || UrlService.IsInternal(CurrentUrl)) return string.Empty;
-        var dom = await Core.ExecuteScriptAsync("""
-            (() => {
-              const root=document.documentElement.cloneNode(true);
-              root.querySelectorAll('script,style,noscript,iframe,canvas,svg').forEach(e=>e.remove());
-              root.querySelectorAll('input,textarea,select').forEach(e=>{e.removeAttribute('value');e.textContent='';});
-              root.querySelectorAll('*').forEach(e=>[...e.attributes].forEach(a=>{
-                if(/^on/i.test(a.name)||/token|secret|password|nonce|auth|cookie|session/i.test(a.name)) e.removeAttribute(a.name);
-              }));
-              return root.outerHTML.slice(0,18000);
-            })();
-            """);
-        string domText;
-        try { domText = JsonSerializer.Deserialize<string>(dom) ?? string.Empty; }
-        catch { domText = string.Empty; }
-        string events;
-        lock (_developerLock) events = string.Join("\n", _developerEvents.TakeLast(80));
-        var network = GetNetworkSnapshot();
-        return $"URL: {StripSensitiveUrl(CurrentUrl)}\nЗаголовок: {Title}\n" +
-               $"Консоль и исключения:\n{(string.IsNullOrWhiteSpace(events) ? "—" : events)}\n\n" +
-               $"Сеть: {network.RequestCount} запросов; порты {string.Join(", ", network.ObservedPorts)}; " +
-               $"сторонние узлы {string.Join(", ", network.ThirdPartyHosts.Take(40))}; " +
-               $"заблокированы {string.Join(", ", network.BlockedTrackerHosts.Take(30))}.\n\n" +
-               $"Безопасный DOM:\n{domText}";
-    }
-
-    public async Task<int> HighlightDeveloperSelectorsAsync(IReadOnlyList<DeveloperHighlight> highlights)
-    {
-        if (Core is null || highlights.Count == 0) return 0;
-        var safe = highlights.Select(x => new { selector = x.Selector, reason = x.Reason }).ToArray();
-        var json = await Core.ExecuteScriptAsync($$"""
-            (() => {
-              document.querySelectorAll('[data-nexus-devtools-highlight]').forEach(e=>{
-                e.style.removeProperty('outline'); e.removeAttribute('data-nexus-devtools-highlight');
-              });
-              const items={{JsonSerializer.Serialize(safe)}}; let count=0;
-              for(const item of items){
-                let found=[]; try { found=[...document.querySelectorAll(item.selector)].slice(0,8); } catch { continue; }
-                for(const e of found){ e.style.outline='3px solid #dab96a'; e.dataset.nexusDevtoolsHighlight=item.reason||'Проверить';
-                  e.title=(e.title?e.title+'\n':'')+'Nexus AI: '+(item.reason||'Проверить'); count++; }
-              }
-              document.querySelector('[data-nexus-devtools-highlight]')?.scrollIntoView({behavior:'smooth',block:'center'});
-              return count;
-            })();
-            """);
-        return int.TryParse(json, out var count) ? count : 0;
-    }
-
     public async Task<bool> SearchCurrentSiteForAgentAsync(string query, CancellationToken cancellationToken = default)
     {
         if (Core is null || UrlService.IsInternal(CurrentUrl) || string.IsNullOrWhiteSpace(query)) return false;
@@ -1110,7 +1056,6 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         Address = _navigateOnInitialize ? UrlService.Resolve(InitialUrl) : "about:blank";
         ConfigureSettings(core.Settings, UrlService.IsInternal(Address));
         AttachEvents(core);
-        await AttachDeveloperDiagnosticsAsync(core);
         TrackingProtectionService.Attach(core, () => core.Source, () =>
         {
             Application.Current.Dispatcher.Invoke(() =>
@@ -1122,39 +1067,6 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
 
         if (_navigateOnInitialize)
             core.Navigate(Address);
-    }
-
-    private async Task AttachDeveloperDiagnosticsAsync(CoreWebView2 core)
-    {
-        try
-        {
-            await core.CallDevToolsProtocolMethodAsync("Runtime.enable", "{}");
-            _consoleReceiver = core.GetDevToolsProtocolEventReceiver("Runtime.consoleAPICalled");
-            _exceptionReceiver = core.GetDevToolsProtocolEventReceiver("Runtime.exceptionThrown");
-            _consoleReceiver.DevToolsProtocolEventReceived += (_, e) => CaptureDeveloperEvent("console", e.ParameterObjectAsJson);
-            _exceptionReceiver.DevToolsProtocolEventReceived += (_, e) => CaptureDeveloperEvent("exception", e.ParameterObjectAsJson);
-        }
-        catch { /* DevTools AI покажет DOM и сеть, даже если CDP-журнал недоступен. */ }
-    }
-
-    private void CaptureDeveloperEvent(string kind, string json)
-    {
-        var safe = RedactDeveloperText(json);
-        if (safe.Length > 1800) safe = safe[..1800] + "…";
-        lock (_developerLock)
-        {
-            _developerEvents.Enqueue($"[{DateTime.Now:HH:mm:ss}] {kind}: {safe}");
-            while (_developerEvents.Count > 200) _developerEvents.Dequeue();
-        }
-    }
-
-    private static string RedactDeveloperText(string value)
-    {
-        var redacted = System.Text.RegularExpressions.Regex.Replace(value,
-            """(?i)(authorization|cookie|password|passwd|token|secret|session)["']?\s*[:=]\s*["']?[^\s,;"']+""",
-            "$1:[REDACTED]");
-        return System.Text.RegularExpressions.Regex.Replace(redacted,
-            @"eyJ[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}(?:\.[A-Za-z0-9_-]{8,})?", "[JWT REDACTED]");
     }
 
     private static string StripSensitiveUrl(string value)
