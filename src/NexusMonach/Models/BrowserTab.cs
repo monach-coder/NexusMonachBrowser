@@ -1241,8 +1241,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
 
     private void HandleWebMessage(CoreWebView2WebMessageReceivedEventArgs e)
     {
-        if (!Uri.TryCreate(e.Source, UriKind.Absolute, out var source) ||
-            !source.Host.Equals("nexus.local", StringComparison.OrdinalIgnoreCase))
+        if (!TryGetInternalMessagePage(e.Source, out var page))
             return;
 
         try
@@ -1250,6 +1249,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
             using var json = JsonDocument.Parse(e.WebMessageAsJson);
             var root = json.RootElement;
             var type = root.TryGetProperty("type", out var t) ? t.GetString() : null;
+            if (!IsAllowedInternalMessage(page, type)) return;
             if (type == "navigate")
             {
                 var value = root.TryGetProperty("value", out var v) ? v.GetString() : null;
@@ -1279,6 +1279,25 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
             // Сообщения неизвестного формата отбрасываются.
         }
     }
+
+    private static bool TryGetInternalMessagePage(string sourceValue, out string page)
+    {
+        page = string.Empty;
+        if (!Uri.TryCreate(sourceValue, UriKind.Absolute, out var source) ||
+            source.Scheme != Uri.UriSchemeHttps || !source.IsDefaultPort ||
+            !string.IsNullOrEmpty(source.UserInfo) ||
+            !source.Host.Equals("nexus.local", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        page = source.AbsolutePath;
+        return page.Equals("/start.html", StringComparison.OrdinalIgnoreCase) ||
+               page.Equals("/search.html", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsAllowedInternalMessage(string page, string? type) =>
+        page.Equals("/start.html", StringComparison.OrdinalIgnoreCase)
+            ? type is "navigate" or "search" or "settings"
+            : page.Equals("/search.html", StringComparison.OrdinalIgnoreCase) && type == "result-open";
 
     private void HandleDownload(CoreWebView2DownloadStartingEventArgs e)
     {

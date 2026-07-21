@@ -28,6 +28,10 @@ jobs:
         shell: pwsh
         run: ./scripts/Test-LicenseBoundary.ps1
 
+      - name: Verify local AI security boundary
+        shell: pwsh
+        run: ./scripts/Test-LocalAiBoundary.ps1
+
       - name: Download pinned offline AI payload
         shell: pwsh
         run: |

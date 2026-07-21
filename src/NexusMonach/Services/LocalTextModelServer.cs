@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
@@ -15,13 +17,10 @@ namespace NexusMonach.Services;
 internal static class LocalTextModelServer
 {
     private static readonly SemaphoreSlim StartupGate = new(1, 1);
-    private static readonly HttpClient Client = new(new SocketsHttpHandler
-    {
-        UseProxy = false,
-        AutomaticDecompression = DecompressionMethods.All
-    }) { Timeout = Timeout.InfiniteTimeSpan };
+    private static readonly HttpClient Client = LocalAiLoopbackTransport.CreateClient(automaticDecompression: true);
     private static Process? _process;
     private static Uri? _endpoint;
+    private static string? _apiKey;
 
     public static bool CanRun => AiModelCatalog.LlamaServer is not null && AiModelCatalog.TextModel is not null;
 
@@ -37,6 +36,8 @@ internal static class LocalTextModelServer
     {
         await EnsureStartedAsync(cancellationToken);
         var endpoint = _endpoint ?? throw new InvalidOperationException("Локальный AI-сервер не запущен.");
+        var apiKey = _apiKey ?? throw new InvalidOperationException("Сессия локального AI-сервера не защищена.");
+        LocalAiLoopbackTransport.EnsureAllowedEndpoint(endpoint);
         var payload = JsonSerializer.Serialize(new
         {
             model = "nexus-local",
@@ -53,6 +54,7 @@ internal static class LocalTextModelServer
         {
             Content = new StringContent(payload, Encoding.UTF8, "application/json")
         };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         using var response = await Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
@@ -68,14 +70,15 @@ internal static class LocalTextModelServer
 
     private static async Task EnsureStartedAsync(CancellationToken cancellationToken)
     {
-        if (_process is { HasExited: false } && _endpoint is not null) return;
+        if (_process is { HasExited: false } && _endpoint is not null && _apiKey is not null) return;
         await StartupGate.WaitAsync(cancellationToken);
         try
         {
-            if (_process is { HasExited: false } && _endpoint is not null) return;
+            if (_process is { HasExited: false } && _endpoint is not null && _apiKey is not null) return;
             Shutdown();
             if (!CanRun) throw new InvalidOperationException("llama-server.exe отсутствует в AI-комплекте.");
             var port = ReserveLoopbackPort();
+            var apiKey = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
             var start = new ProcessStartInfo(AiModelCatalog.LlamaServer!)
             {
                 UseShellExecute = false,
@@ -84,6 +87,7 @@ internal static class LocalTextModelServer
                 RedirectStandardError = true,
                 WorkingDirectory = AiModelCatalog.LlamaRoot
             };
+            start.Environment["LLAMA_API_KEY"] = apiKey;
             foreach (var argument in new[]
                      {
                          "-m", AiModelCatalog.TextModel!, "--host", "127.0.0.1", "--port", port.ToString(),
@@ -97,6 +101,8 @@ internal static class LocalTextModelServer
             _process.BeginOutputReadLine();
             _process.BeginErrorReadLine();
             _endpoint = new Uri($"http://127.0.0.1:{port}/");
+            _apiKey = apiKey;
+            LocalAiLoopbackTransport.EnsureAllowedEndpoint(_endpoint);
 
             var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(75);
             while (DateTime.UtcNow < deadline)
@@ -106,7 +112,14 @@ internal static class LocalTextModelServer
                 try
                 {
                     using var health = await Client.GetAsync(new Uri(_endpoint, "health"), cancellationToken);
-                    if (health.IsSuccessStatusCode) return;
+                    if (health.IsSuccessStatusCode)
+                    {
+                        await VerifyAuthenticationAsync(_endpoint, apiKey, cancellationToken);
+                        await Task.Delay(100, cancellationToken);
+                        if (_process.HasExited)
+                            throw new InvalidOperationException("llama-server.exe потерял локальный порт при запуске.");
+                        return;
+                    }
                 }
                 catch (HttpRequestException) { }
                 await Task.Delay(350, cancellationToken);
@@ -121,10 +134,28 @@ internal static class LocalTextModelServer
         finally { StartupGate.Release(); }
     }
 
+    private static async Task VerifyAuthenticationAsync(Uri endpoint, string apiKey,
+        CancellationToken cancellationToken)
+    {
+        var protectedEndpoint = new Uri(endpoint, "props");
+        using (var anonymous = await Client.GetAsync(protectedEndpoint, cancellationToken))
+        {
+            if (anonymous.StatusCode is not (HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden))
+                throw new InvalidOperationException("llama-server запущен без обязательной локальной аутентификации.");
+        }
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, protectedEndpoint);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        using var authenticated = await Client.SendAsync(request, cancellationToken);
+        if (!authenticated.IsSuccessStatusCode)
+            throw new InvalidOperationException("llama-server не принял ключ защищённой локальной сессии.");
+    }
+
     public static void Shutdown()
     {
         var process = Interlocked.Exchange(ref _process, null);
         _endpoint = null;
+        _apiKey = null;
         if (process is null) return;
         try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
         process.Dispose();

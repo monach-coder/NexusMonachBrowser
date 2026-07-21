@@ -21,6 +21,9 @@ jobs:
       - name: Verify repository and license hygiene
         shell: pwsh
         run: ./scripts/Test-LicenseBoundary.ps1
+      - name: Verify local AI security boundary
+        shell: pwsh
+        run: ./scripts/Test-LocalAiBoundary.ps1
       - name: Build
         run: dotnet build NexusMonach.sln --configuration Release --no-restore -warnaserror
       - name: Ensure runtime code has no external AI endpoints
