@@ -14,7 +14,7 @@
             <Image Width="112" Height="112" Source="/Assets/nexus-monach-512.png" />
             <TextBlock Text="NEXUS MONACH" Margin="0,12,0,0" FontSize="25" FontWeight="SemiBold"
                        HorizontalAlignment="Center" />
-            <TextBlock Text="Версия 2.7.2 · Chromium / WebView2" Margin="0,4,0,0"
+            <TextBlock x:Name="VersionText" Margin="0,4,0,0"
                        Foreground="{StaticResource AccentBrush}" HorizontalAlignment="Center" />
         </StackPanel>
         <StackPanel Grid.Row="1" Margin="0,22,0,0">

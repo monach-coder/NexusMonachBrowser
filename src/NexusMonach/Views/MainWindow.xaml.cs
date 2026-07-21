@@ -456,6 +456,12 @@ public partial class MainWindow : Window
             : "Нет доступа";
         var snapshot = tab.GetNetworkSnapshot();
         var route = SettingsService.Current.EnableCustomProxy ? "прокси браузера" : "системный маршрут";
+        var identity = NetworkIdentityService.Capture(_isPrivate);
+        NetworkIdentityText.Text = $"{identity.Id} · {identity.Route}";
+        NetworkIdentityText.ToolTip = identity.Details;
+        NetworkIdentityText.Foreground = identity.RouteProtected
+            ? (Brush)FindResource("AccentBrush")
+            : Brushes.DarkOrange;
         DownloadRateText.Text = $"↓ {FormatRate(_downloadBytesPerSecond)}";
         DownloadRateText.Foreground = RateBrush(_downloadBytesPerSecond);
         UploadRateText.Text = $"↑ {FormatRate(_uploadBytesPerSecond)}";
@@ -508,13 +514,18 @@ public partial class MainWindow : Window
     private void BrowserNode_Click(object sender, RoutedEventArgs e)
     {
         var settings = SettingsService.Current;
+        var identity = NetworkIdentityService.Capture(_isPrivate);
+        var effectivePrivacy = _isPrivate ? PrivacyLevel.Strict : settings.PrivacyLevel;
         var runtime = Microsoft.Web.WebView2.Core.CoreWebView2Environment.GetAvailableBrowserVersionString();
         ShowTopologyDetails("Nexus Monach",
             "Локальная оболочка браузера и активные механизмы защиты.",
             $"Режим окна: {(_isPrivate ? "InPrivate" : "обычный")}\n" +
-            $"Уровень защиты: {settings.PrivacyLevel}\n" +
-            $"Do Not Track: {(settings.SendDoNotTrack ? "включён" : "выключен")}\n" +
-            $"Global Privacy Control: {(settings.SendGlobalPrivacyControl ? "включён" : "выключен")}\n" +
+            $"Сетевая личность: {identity.Id} ({identity.Mode})\n" +
+            $"Маршрут: {identity.Route}\n" +
+            $"Изоляция: {identity.Isolation}\n" +
+            $"Уровень защиты: {effectivePrivacy}\n" +
+            $"Do Not Track: {(_isPrivate || settings.SendDoNotTrack ? "включён" : "выключен")}\n" +
+            $"Global Privacy Control: {(_isPrivate || settings.SendGlobalPrivacyControl ? "включён" : "выключен")}\n" +
             $"Защита WebRTC: {(settings.PreventWebRtcIpLeak ? "включена" : "выключена")}\n" +
             $"Экономия памяти: {(settings.MemorySaver ? "включена" : "выключена")}\n" +
             $"WebView2 Runtime: {runtime}");
@@ -558,10 +569,12 @@ public partial class MainWindow : Window
     private void RoutingNode_Click(object sender, RoutedEventArgs e)
     {
         var settings = SettingsService.Current;
+        var identity = NetworkIdentityService.Capture(_isPrivate);
         var summary = settings.EnableCustomProxy
             ? $"Браузер направляет трафик через {settings.ProxyKind}."
             : "Встроенный прокси выключен; действует системный маршрут Windows/VPN.";
         ShowTopologyDetails("Маршрутизация", summary,
+            $"Сетевая личность: {identity.Id}\nСтатус: {identity.Route}\n{identity.WebRtc}\n\n" +
             $"Встроенный прокси: {(settings.EnableCustomProxy ? "включён" : "выключен")}\n" +
             $"Тип: {settings.ProxyKind}\nУзел: {settings.ProxyHost}:{settings.ProxyPort}\n" +
             $"Прямые исключения:\n{(string.IsNullOrWhiteSpace(settings.ProxyBypassList) ? "—" : settings.ProxyBypassList)}\n\n" +

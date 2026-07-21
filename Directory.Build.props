@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- Single source of truth for the browser, Guardian and Guardian Relay. -->
+    <NexusProductVersion>2.8.0</NexusProductVersion>
+  </PropertyGroup>
+</Project>

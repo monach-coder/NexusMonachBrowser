@@ -173,9 +173,10 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         if (Core is null) return;
         var settings = SettingsService.Current;
         Core.Settings.AreDevToolsEnabled = true;
-        Core.Settings.IsPasswordAutosaveEnabled = settings.EnablePasswordAutosave;
-        Core.Settings.IsGeneralAutofillEnabled = settings.EnableGeneralAutofill;
-        BrowserEnvironment.ApplyPrivacyLevel(Core.Profile, settings.PrivacyLevel);
+        Core.Settings.IsPasswordAutosaveEnabled = !_isPrivate && settings.EnablePasswordAutosave;
+        Core.Settings.IsGeneralAutofillEnabled = !_isPrivate && settings.EnableGeneralAutofill;
+        BrowserEnvironment.ApplyPrivacyLevel(Core.Profile,
+            _isPrivate ? PrivacyLevel.Strict : settings.PrivacyLevel);
         await Task.CompletedTask;
     }
 
@@ -1041,7 +1042,8 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
 
         var core = Core!;
         BrowserEnvironment.RegisterProfile(core.Profile);
-        BrowserEnvironment.ApplyPrivacyLevel(core.Profile, SettingsService.Current.PrivacyLevel);
+        BrowserEnvironment.ApplyPrivacyLevel(core.Profile,
+            _isPrivate ? PrivacyLevel.Strict : SettingsService.Current.PrivacyLevel);
         if (!_isPrivate)
             await ExtensionService.EnsureInstalledAsync(core.Profile);
 
@@ -1063,7 +1065,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 BlockedCount++;
                 StateChanged?.Invoke(this, EventArgs.Empty);
             });
-        }, RecordNetworkRequest);
+        }, RecordNetworkRequest, forceStrict: _isPrivate);
 
         if (_navigateOnInitialize)
             core.Navigate(Address);
@@ -1090,8 +1092,8 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         settings.IsPinchZoomEnabled = true;
         settings.IsBuiltInErrorPageEnabled = true;
         settings.IsReputationCheckingRequired = true;
-        settings.IsPasswordAutosaveEnabled = app.EnablePasswordAutosave;
-        settings.IsGeneralAutofillEnabled = app.EnableGeneralAutofill;
+        settings.IsPasswordAutosaveEnabled = !_isPrivate && app.EnablePasswordAutosave;
+        settings.IsGeneralAutofillEnabled = !_isPrivate && app.EnableGeneralAutofill;
         // User-Agent намеренно не меняется: стандартный Chromium-отпечаток менее уникален.
     }
 
@@ -1123,7 +1125,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 StateChanged?.Invoke(this, EventArgs.Empty);
                 return;
             }
-            var cleaned = UrlService.CleanTrackingParameters(e.Uri);
+            var cleaned = UrlService.CleanTrackingParameters(e.Uri, force: _isPrivate);
             if (!cleaned.Equals(e.Uri, StringComparison.Ordinal))
             {
                 e.Cancel = true;

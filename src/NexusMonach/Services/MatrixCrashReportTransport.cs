@@ -8,6 +8,9 @@ namespace NexusMonach.Services;
 
 public static class MatrixCrashReportTransport
 {
+    private static readonly string ProductVersion =
+        typeof(MatrixCrashReportTransport).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+
     public static async Task<bool> SendReportAsync(
         HttpClient client,
         string homeserver,
@@ -66,7 +69,7 @@ public static class MatrixCrashReportTransport
     private static void ConfigureClient(HttpClient client, string accessToken)
     {
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("NexusGuardian/2.7.2");
+        client.DefaultRequestHeaders.UserAgent.ParseAdd($"NexusGuardian/{ProductVersion}");
     }
 
     private static async Task<bool> IsPlaintextRoomAsync(
