@@ -12,6 +12,8 @@ public sealed class DownloadItem : INotifyPropertyChanged
     private string _securityDetails = "Ожидание завершения загрузки";
     private string _sha256 = string.Empty;
     private string _signatureInfo = "Не проверена";
+    private bool _signatureTrusted;
+    private bool _requiresOpenConfirmation;
 
     public string FileName { get; init; } = string.Empty;
     public string FilePath { get; init; } = string.Empty;
@@ -63,6 +65,18 @@ public sealed class DownloadItem : INotifyPropertyChanged
     {
         get => _signatureInfo;
         set { _signatureInfo = value; OnPropertyChanged(); OnPropertyChanged(nameof(SecuritySummary)); }
+    }
+
+    public bool SignatureTrusted
+    {
+        get => _signatureTrusted;
+        set { _signatureTrusted = value; OnPropertyChanged(); }
+    }
+
+    public bool RequiresOpenConfirmation
+    {
+        get => _requiresOpenConfirmation;
+        set { _requiresOpenConfirmation = value; OnPropertyChanged(); }
     }
 
     public string SecuritySummary => $"Риск: {RiskLevel} · {SecurityDetails} · {SignatureInfo}";
