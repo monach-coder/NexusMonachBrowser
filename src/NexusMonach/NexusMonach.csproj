@@ -36,4 +36,9 @@
     <None Remove="AI\**\*" />
     <Content Include="AI\**\*" Exclude="AI\**\.*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <ItemGroup Condition="Exists('..\..\security\crash-report-public-key.pem')">
+    <EmbeddedResource Include="..\..\security\crash-report-public-key.pem"
+                      LogicalName="NexusMonach.crash-report-public-key.pem" />
+  </ItemGroup>
 </Project>

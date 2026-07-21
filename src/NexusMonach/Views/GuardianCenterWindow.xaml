@@ -44,7 +44,7 @@
             </Border>
             <StackPanel Grid.Column="1" VerticalAlignment="Center">
                 <TextBlock Text="NEXUS GUARDIAN" FontSize="23" FontWeight="SemiBold" />
-                <TextBlock Text="Локальный центр целостности и рапортов · сеть не используется"
+                <TextBlock Text="Локальный центр целостности и рапортов · почта только по явному действию"
                            Foreground="{StaticResource MutedTextBrush}" Margin="0,3,0,0" />
             </StackPanel>
         </Grid>
@@ -158,6 +158,8 @@
                         Click="SledopytJournal_Click" />
                 <Button Content="Копировать" Style="{StaticResource GuardianButton}" Click="Copy_Click" />
                 <Button Content="Экспорт" Style="{StaticResource GuardianButton}" Click="Export_Click" />
+                <Button Content="Отправить по почте" Style="{StaticResource GuardianButton}"
+                        Click="SendEmail_Click" />
                 <Button Content="Открыть папку" Style="{StaticResource GuardianButton}" Click="OpenFolder_Click" />
                 <Button Content="Удалить" Style="{StaticResource GuardianButton}" Background="#594044"
                         BorderBrush="#8A6268" Click="Delete_Click" />

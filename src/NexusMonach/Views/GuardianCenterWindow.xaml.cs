@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Windows;
+using System.Windows.Interop;
 using Microsoft.Win32;
 using NexusMonach.Services;
 
@@ -238,6 +239,48 @@ public partial class GuardianCenterWindow : Window
         if (!CrashReportService.ExportLocalReport(SelectedReport.FilePath, dialog.FileName))
             GlassDialogWindow.Show(this, "Не удалось экспортировать выбранный рапорт.", "Nexus Guardian",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
+    private void SendEmail_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedReport is null)
+        {
+            GlassDialogWindow.Show(this, "Сначала выберите локальный рапорт.", "Nexus Guardian",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (!CrashReportMailService.IsEncryptionReady)
+        {
+            GlassDialogWindow.Show(this,
+                "В этой сборке отсутствует открытый ключ шифрования почтовых рапортов.\n\n" +
+                "Разработчику необходимо выполнить scripts/New-CrashReportKey.ps1 и пересобрать Nexus Monach.",
+                "Nexus Guardian", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var answer = GlassDialogWindow.Show(this,
+            "Guardian создаст отдельную зашифрованную копию выбранного рапорта и откроет почтовый клиент.\n\n" +
+            $"Получатель: {CrashReportMailService.Recipient}\n" +
+            "Письмо не отправляется автоматически: проверьте его и подтвердите отправку самостоятельно.",
+            "Nexus Guardian · отправка рапорта", MessageBoxButton.YesNo, MessageBoxImage.Question);
+        if (answer != MessageBoxResult.Yes) return;
+
+        try
+        {
+            var result = CrashReportMailService.Compose(SelectedReport,
+                new WindowInteropHelper(this).EnsureHandle());
+            GlassDialogWindow.Show(this,
+                result.Message + $"\n\nЗашифрованный файл:\n{result.AttachmentPath}",
+                "Nexus Guardian · почта", MessageBoxButton.OK,
+                result.Opened ? MessageBoxImage.Information : MessageBoxImage.Warning);
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("guardian-mail", "compose", ex);
+            GlassDialogWindow.Show(this,
+                "Не удалось подготовить письмо. Исходный локальный рапорт не изменён.\n\n" + ex.Message,
+                "Nexus Guardian", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private void OpenFolder_Click(object sender, RoutedEventArgs e)
