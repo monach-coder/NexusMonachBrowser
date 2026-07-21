@@ -63,6 +63,8 @@ public static class UrlService
 
     public static bool IsInternal(string? url) =>
         Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+        uri.Scheme == Uri.UriSchemeHttps && uri.IsDefaultPort &&
+        string.IsNullOrEmpty(uri.UserInfo) &&
         uri.Host.Equals("nexus.local", StringComparison.OrdinalIgnoreCase);
 
     public static bool IsSearchQuery(string? input)

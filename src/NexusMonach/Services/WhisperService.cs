@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace NexusMonach.Services;
@@ -17,11 +18,7 @@ public static class WhisperService
 {
     private static readonly SemaphoreSlim StartGate = new(1, 1);
     private static readonly SemaphoreSlim InferenceGate = new(1, 1);
-    private static readonly HttpClient Client = new(new SocketsHttpHandler
-    {
-        UseProxy = false,
-        PooledConnectionLifetime = TimeSpan.FromMinutes(10)
-    }) { Timeout = Timeout.InfiniteTimeSpan };
+    private static readonly HttpClient Client = LocalAiLoopbackTransport.CreateClient();
 
     private static Process? _server;
     private static Uri? _inferenceEndpoint;
@@ -112,6 +109,9 @@ public static class WhisperService
         await InferenceGate.WaitAsync(cancellationToken);
         try
         {
+            var endpoint = _inferenceEndpoint
+                           ?? throw new InvalidOperationException("Локальная сессия Whisper не запущена.");
+            LocalAiLoopbackTransport.EnsureAllowedEndpoint(endpoint);
             using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             budget.CancelAfter(TimeSpan.FromSeconds(55));
             using var content = new MultipartFormDataContent();
@@ -124,7 +124,7 @@ public static class WhisperService
             content.Add(new StringContent("auto"), "language");
             content.Add(new StringContent("false"), "translate");
 
-            using var response = await Client.PostAsync(_inferenceEndpoint!, content, budget.Token);
+            using var response = await Client.PostAsync(endpoint, content, budget.Token);
             var payload = await response.Content.ReadAsStringAsync(budget.Token);
             if (!response.IsSuccessStatusCode)
                 throw new InvalidOperationException($"Whisper server: HTTP {(int)response.StatusCode}: " +
@@ -185,6 +185,8 @@ public static class WhisperService
             var executable = AiModelCatalog.WhisperServer
                 ?? throw new InvalidOperationException("whisper-server.exe не найден.");
             var port = ReserveLoopbackPort();
+            var routeToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
+            var inferencePath = $"/nexus-{routeToken}/inference";
             var start = new ProcessStartInfo(executable)
             {
                 UseShellExecute = false,
@@ -197,7 +199,7 @@ public static class WhisperService
             foreach (var argument in new[]
                      {
                          "-m", AiModelCatalog.WhisperModel!, "--host", IPAddress.Loopback.ToString(),
-                         "--port", port.ToString(), "--inference-path", "/inference", "-l", "auto",
+                         "--port", port.ToString(), "--inference-path", inferencePath, "-l", "auto",
                          "-t", threads.ToString(), "-p", "1", "-sns"
                      })
                 start.ArgumentList.Add(argument);
@@ -205,7 +207,8 @@ public static class WhisperService
             var server = Process.Start(start)
                          ?? throw new InvalidOperationException("Не удалось запустить встроенный whisper-server.");
             _server = server;
-            _inferenceEndpoint = new Uri($"http://127.0.0.1:{port}/inference");
+            _inferenceEndpoint = new Uri($"http://127.0.0.1:{port}{inferencePath}");
+            LocalAiLoopbackTransport.EnsureAllowedEndpoint(_inferenceEndpoint);
             _ = DrainAsync(server.StandardOutput);
             _ = DrainAsync(server.StandardError);
             Status = "Whisper загружает модель один раз…";
