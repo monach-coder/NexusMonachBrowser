@@ -1,5 +1,22 @@
 # Nexus Guardian
 
+## Зашифрованная отправка по почте
+
+Guardian продолжает хранить первичный очищенный JSON только локально. Команда
+«Отправить по почте» создаёт отдельный контейнер `.ncrash`, зашифрованный для
+владельца адреса `nexus.guardian.reports@proton.me`, и открывает установленный
+почтовый клиент. Отправка всегда требует явного действия пользователя.
+
+Тема содержит только версию, уровень, компонент и устойчивый fingerprint.
+По ней на почтовом сервере можно настроить правило `[Nexus Guardian]` → папка
+`Nexus Guardian Reports`. Полный текст ошибки находится только внутри
+зашифрованного вложения.
+
+Перед первой официальной сборкой владелец выполняет
+`scripts/New-CrashReportKey.ps1`, коммитит только открытый ключ из `security`, а
+закрытый ключ хранит офлайн. Для чтения вложения используется
+`scripts/Read-CrashReport.ps1`.
+
 Nexus Guardian is the local trust and crash-recovery layer of Nexus Monach. It
 does not replace Windows Defender, Authenticode, browser sandboxing or regular
 updates. It makes accidental corruption, replaced runtime files and reproducible
