@@ -9,7 +9,7 @@
     <AssemblyName>NexusMonach.Browser</AssemblyName>
     <RootNamespace>NexusMonach</RootNamespace>
     <ApplicationIcon>Assets\nexus-monach.ico</ApplicationIcon>
-    <Version>2.7.2</Version>
+    <Version>$(NexusProductVersion)</Version>
     <Authors>CoderMonach; OpenAI Codex</Authors>
     <Product>Nexus Monach Browser</Product>
     <Description>Лёгкий приватный браузер на базе WebView2.</Description>

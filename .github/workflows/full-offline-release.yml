@@ -6,7 +6,7 @@ on:
       tag:
         description: Release tag
         required: true
-        default: v2.7.2
+        default: v2.8.0
 
 permissions:
   contents: write
@@ -23,6 +23,21 @@ jobs:
         with:
           node-version: 22.17.0
           package-manager-cache: false
+
+      - name: Verify release tag matches product version
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          [xml]$props = Get-Content Directory.Build.props -Raw
+          $version = [string]$props.Project.PropertyGroup.NexusProductVersion
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw 'NexusProductVersion is missing from Directory.Build.props.'
+          }
+          if ($env:TAG -ne "v$version") {
+            throw "Release tag '$env:TAG' does not match product version '$version'. Expected v$version."
+          }
+          "NEXUS_VERSION=$version" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Verify repository and license hygiene
         shell: pwsh
@@ -254,8 +269,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
         run: |
-          $notes = @'
-          Nexus Monach 2.7.2 Full Offline
+          $notes = @"
+          Nexus Monach $env:NEXUS_VERSION Full Offline
 
           Includes pinned local Qwen3 0.6B, Whisper base q5_1, SmolVLM 500M,
           multilingual-e5-small and dedicated OPUS multilingual/Korean/Russian translation models.
@@ -263,10 +278,10 @@ jobs:
           The open Nexus Intelligence Fabric is built from the same repository and includes deep page analysis,
           controlled same-origin research and an agent summary with sources, conflicts and missing information.
           See CHANGELOG.md for privacy, compatibility and build details.
-          '@
+          "@
           cmd.exe /d /c "gh release view %TAG% >nul 2>nul"
           if ($LASTEXITCODE -eq 0) {
             gh release upload $env:TAG NexusMonach-AI-Pack-win-x64.zip dist/NexusMonach-Portable-win-x64.zip --clobber
           } else {
-            gh release create $env:TAG NexusMonach-AI-Pack-win-x64.zip dist/NexusMonach-Portable-win-x64.zip --title "Nexus Monach 2.7.2 Full Offline" --notes $notes
+            gh release create $env:TAG NexusMonach-AI-Pack-win-x64.zip dist/NexusMonach-Portable-win-x64.zip --title "Nexus Monach $env:NEXUS_VERSION Full Offline" --notes $notes
           }
