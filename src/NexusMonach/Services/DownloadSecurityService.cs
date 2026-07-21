@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Runtime.InteropServices;
 using NexusMonach.Models;
 
 namespace NexusMonach.Services;
@@ -12,6 +13,7 @@ public enum DownloadRiskLevel
 }
 
 public sealed record DownloadRiskAssessment(DownloadRiskLevel Level, string Description);
+public sealed record AuthenticodeAssessment(bool IsSigned, bool IsTrusted, string Description);
 
 public static class DownloadSecurityService
 {
@@ -57,6 +59,18 @@ public static class DownloadSecurityService
         return new DownloadRiskAssessment(DownloadRiskLevel.Low, "Явных локальных признаков риска не найдено");
     }
 
+    public static string SanitizeSourceForDisplay(string? sourceUrl)
+    {
+        if (!Uri.TryCreate(sourceUrl, UriKind.Absolute, out var source) ||
+            source.Scheme is not "http" and not "https" ||
+            string.IsNullOrWhiteSpace(source.Host) ||
+            !string.IsNullOrEmpty(source.UserInfo))
+            return "неизвестный источник";
+
+        return new UriBuilder(source.Scheme, source.IdnHost, source.IsDefaultPort ? -1 : source.Port)
+            .Uri.GetLeftPart(UriPartial.Authority);
+    }
+
     public static async Task InspectCompletedAsync(DownloadItem item)
     {
         var preliminary = Assess(item.FileName, item.SourceUrl);
@@ -80,7 +94,9 @@ public static class DownloadSecurityService
             item.Sha256 = "Ошибка вычисления: " + ex.Message;
         }
 
-        item.SignatureInfo = ReadSignature(item.FilePath);
+        var signature = VerifyAuthenticode(item.FilePath);
+        item.SignatureTrusted = signature.IsTrusted;
+        item.SignatureInfo = signature.Description;
     }
 
     public static void SetAssessment(DownloadItem item, DownloadRiskAssessment assessment)
@@ -92,20 +108,126 @@ public static class DownloadSecurityService
             _ => "низкий"
         };
         item.SecurityDetails = assessment.Description;
+        item.RequiresOpenConfirmation = assessment.Level is DownloadRiskLevel.High or DownloadRiskLevel.Medium;
     }
 
-    private static string ReadSignature(string path)
+    public static AuthenticodeAssessment VerifyAuthenticode(string path)
     {
+        if (!OperatingSystem.IsWindows() || !File.Exists(path))
+            return new AuthenticodeAssessment(false, false, "Authenticode: файл недоступен для проверки");
+
+        IntPtr filePathPointer = IntPtr.Zero;
+        IntPtr fileInfoPointer = IntPtr.Zero;
+        IntPtr trustDataPointer = IntPtr.Zero;
+        var action = WinTrustActionGenericVerifyV2;
+        var trustData = new WinTrustData();
         try
         {
-            using var certificate = X509Certificate.CreateFromSignedFile(path);
-            return string.IsNullOrWhiteSpace(certificate.Subject)
-                ? "В файле найден сертификат подписи"
-                : "Сертификат в файле: " + certificate.Subject;
+            filePathPointer = Marshal.StringToCoTaskMemUni(Path.GetFullPath(path));
+            var fileInfo = new WinTrustFileInfo
+            {
+                CbStruct = (uint)Marshal.SizeOf<WinTrustFileInfo>(),
+                FilePath = filePathPointer
+            };
+            fileInfoPointer = Marshal.AllocHGlobal(Marshal.SizeOf<WinTrustFileInfo>());
+            Marshal.StructureToPtr(fileInfo, fileInfoPointer, false);
+
+            trustData = new WinTrustData
+            {
+                CbStruct = (uint)Marshal.SizeOf<WinTrustData>(),
+                UiChoice = 2, // WTD_UI_NONE
+                RevocationChecks = 0, // no network revocation lookup
+                UnionChoice = 1, // WTD_CHOICE_FILE
+                FileInfo = fileInfoPointer,
+                StateAction = 1, // WTD_STATEACTION_VERIFY
+                ProviderFlags = 0x00001000 // WTD_CACHE_ONLY_URL_RETRIEVAL
+            };
+            trustDataPointer = Marshal.AllocHGlobal(Marshal.SizeOf<WinTrustData>());
+            Marshal.StructureToPtr(trustData, trustDataPointer, false);
+
+            var status = WinVerifyTrust(IntPtr.Zero, action, trustDataPointer);
+            if (status == 0)
+            {
+                string signer;
+                try
+                {
+                    using var certificate = X509Certificate.CreateFromSignedFile(path);
+                    signer = certificate.Subject;
+                }
+                catch
+                {
+                    signer = string.Empty;
+                }
+
+                return new AuthenticodeAssessment(true, true,
+                    string.IsNullOrWhiteSpace(signer)
+                        ? "Authenticode: подпись доверена Windows"
+                        : "Authenticode: доверенная подпись · " + signer);
+            }
+
+            var unsigned = status == unchecked((int)0x800B0100) ||
+                           status == unchecked((int)0x800B0003) ||
+                           status == unchecked((int)0x800B0004);
+            return unsigned
+                ? new AuthenticodeAssessment(false, false, "Authenticode: подпись отсутствует")
+                : new AuthenticodeAssessment(true, false,
+                    $"Authenticode: подпись недействительна или не доверена Windows (0x{status:X8})");
         }
-        catch
+        catch (Exception ex)
         {
-            return "Сертификат цифровой подписи не обнаружен";
+            return new AuthenticodeAssessment(false, false,
+                "Authenticode: ошибка проверки · " + ex.GetType().Name);
+        }
+        finally
+        {
+            if (trustDataPointer != IntPtr.Zero)
+            {
+                try
+                {
+                    trustData = Marshal.PtrToStructure<WinTrustData>(trustDataPointer);
+                    trustData.StateAction = 2; // WTD_STATEACTION_CLOSE
+                    Marshal.StructureToPtr(trustData, trustDataPointer, false);
+                    _ = WinVerifyTrust(IntPtr.Zero, action, trustDataPointer);
+                }
+                catch { }
+                Marshal.FreeHGlobal(trustDataPointer);
+            }
+            if (fileInfoPointer != IntPtr.Zero) Marshal.FreeHGlobal(fileInfoPointer);
+            if (filePathPointer != IntPtr.Zero) Marshal.FreeCoTaskMem(filePathPointer);
         }
     }
+
+    private static readonly Guid WinTrustActionGenericVerifyV2 =
+        new("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WinTrustFileInfo
+    {
+        public uint CbStruct;
+        public IntPtr FilePath;
+        public IntPtr FileHandle;
+        public IntPtr KnownSubject;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WinTrustData
+    {
+        public uint CbStruct;
+        public IntPtr PolicyCallbackData;
+        public IntPtr SipClientData;
+        public uint UiChoice;
+        public uint RevocationChecks;
+        public uint UnionChoice;
+        public IntPtr FileInfo;
+        public uint StateAction;
+        public IntPtr StateData;
+        public IntPtr UrlReference;
+        public uint ProviderFlags;
+        public uint UiContext;
+        public IntPtr SignatureSettings;
+    }
+
+    [DllImport("wintrust.dll", ExactSpelling = true, CharSet = CharSet.Unicode)]
+    private static extern int WinVerifyTrust(IntPtr windowHandle,
+        [MarshalAs(UnmanagedType.LPStruct)] Guid actionId, IntPtr trustData);
 }

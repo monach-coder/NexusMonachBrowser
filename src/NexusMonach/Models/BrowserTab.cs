@@ -1214,7 +1214,18 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         if (!needsOurPrompt)
             return;
 
-        var origin = Uri.TryCreate(e.Uri, UriKind.Absolute, out var uri) ? uri.Host : e.Uri;
+        if (!TryGetExactWebOrigin(e.Uri, out var requestingOrigin) ||
+            !TryGetExactWebOrigin(Core?.Source, out var topLevelOrigin) ||
+            !OriginsEqual(requestingOrigin, topLevelOrigin) ||
+            requestingOrigin.Scheme != Uri.UriSchemeHttps ||
+            requestingOrigin.Host.Equals("nexus.local", StringComparison.OrdinalIgnoreCase))
+        {
+            e.State = CoreWebView2PermissionState.Deny;
+            e.Handled = true;
+            return;
+        }
+
+        var origin = requestingOrigin.GetLeftPart(UriPartial.Authority);
         var permission = e.PermissionKind switch
         {
             CoreWebView2PermissionKind.Camera => "доступ к камере",
@@ -1238,6 +1249,24 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         e.State = result == MessageBoxResult.Yes ? CoreWebView2PermissionState.Allow : CoreWebView2PermissionState.Deny;
         e.Handled = true;
     }
+
+    private static bool TryGetExactWebOrigin(string? value, out Uri origin)
+    {
+        origin = null!;
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
+            uri.Scheme is not "http" and not "https" ||
+            string.IsNullOrWhiteSpace(uri.Host) ||
+            !string.IsNullOrEmpty(uri.UserInfo))
+            return false;
+
+        origin = new UriBuilder(uri.Scheme, uri.IdnHost, uri.IsDefaultPort ? -1 : uri.Port).Uri;
+        return true;
+    }
+
+    private static bool OriginsEqual(Uri left, Uri right) =>
+        left.Scheme.Equals(right.Scheme, StringComparison.OrdinalIgnoreCase) &&
+        left.IdnHost.Equals(right.IdnHost, StringComparison.OrdinalIgnoreCase) &&
+        left.Port == right.Port;
 
     private void HandleWebMessage(CoreWebView2WebMessageReceivedEventArgs e)
     {
@@ -1312,11 +1341,12 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         }
 
         var fileName = Path.GetFileName(path);
-        var assessment = DownloadSecurityService.Assess(fileName, operation.Uri);
+        var safeSource = DownloadSecurityService.SanitizeSourceForDisplay(operation.Uri);
+        var assessment = DownloadSecurityService.Assess(fileName, safeSource);
         if (assessment.Level == DownloadRiskLevel.High)
         {
             var owner = Window.GetWindow(View);
-            var message = $"Файл: {fileName}\nИсточник: {operation.Uri}\n\n{assessment.Description}.\n\nПродолжить загрузку?";
+            var message = $"Файл: {fileName}\nИсточник: {safeSource}\n\n{assessment.Description}.\n\nПродолжить загрузку?";
             var decision = owner is null
                 ? GlassDialogWindow.Show(message, "Опасная загрузка", MessageBoxButton.YesNo, MessageBoxImage.Warning)
                 : GlassDialogWindow.Show(owner, message, "Опасная загрузка", MessageBoxButton.YesNo, MessageBoxImage.Warning);
@@ -1333,7 +1363,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         {
             FileName = Path.GetFileName(path),
             FilePath = path,
-            SourceUrl = operation.Uri,
+            SourceUrl = safeSource,
             BytesReceived = operation.BytesReceived,
             TotalBytes = NormalizeTotalBytes(operation.TotalBytesToReceive)
         };
