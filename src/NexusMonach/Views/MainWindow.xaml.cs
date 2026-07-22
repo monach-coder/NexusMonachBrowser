@@ -472,6 +472,7 @@ public partial class MainWindow : Window
                                   $"сайт: {(string.IsNullOrWhiteSpace(tab.CurrentHost) ? "—" : tab.CurrentHost)}  ·  " +
                                   $"запросы: {snapshot.RequestCount}  ·  порты: {FormatInline(snapshot.ObservedPorts)}  ·  " +
                                   $"сторонние узлы: {snapshot.ThirdPartyHosts.Count}  ·  заблокировано: {tab.BlockedCount}";
+        PrivacyDock.SetCurrentTransport(tab.CurrentUrl);
         Title = (_isPrivate ? "Nexus Monach — приватно" : "Nexus Monach") +
                 (string.IsNullOrWhiteSpace(tab.Title) ? string.Empty : " · " + tab.Title);
     }
@@ -843,6 +844,8 @@ public partial class MainWindow : Window
                            SettingsService.Current.ProxyPort != window.ResultSettings.ProxyPort ||
                            !SettingsService.Current.ProxyHost.Equals(window.ResultSettings.ProxyHost, StringComparison.OrdinalIgnoreCase) ||
                            !SettingsService.Current.ProxyBypassList.Equals(window.ResultSettings.ProxyBypassList, StringComparison.OrdinalIgnoreCase);
+        var secureNetworkChanged = SettingsService.Current.SecureDnsMode != window.ResultSettings.SecureDnsMode ||
+                                   SettingsService.Current.SecureDnsProvider != window.ResultSettings.SecureDnsProvider;
         await SettingsService.SaveAsync(window.ResultSettings);
         foreach (var tab in Tabs.Where(x => x.IsInitialized))
             await tab.ApplySettingsAsync();
@@ -851,11 +854,13 @@ public partial class MainWindow : Window
         if (!_isPrivate)
             await PrivacyDock.SetEnabledAsync(SettingsService.Current.ShowPrivacyMonitor);
         ExtensionsMenuItem.IsEnabled = !_isPrivate && BrowserEnvironment.ExtensionsEnabledAtStartup;
-        if (extensionsChanged || proxyChanged)
+        if (extensionsChanged || proxyChanged || secureNetworkChanged)
         {
-            var reason = extensionsChanged && proxyChanged
-                ? "Изменены поддержка расширений и сетевой прокси."
-                : extensionsChanged ? "Изменена поддержка расширений." : "Изменены настройки сетевого прокси.";
+            var reasons = new List<string>();
+            if (extensionsChanged) reasons.Add("поддержка расширений");
+            if (proxyChanged) reasons.Add("сетевой прокси");
+            if (secureNetworkChanged) reasons.Add("защищённый DNS");
+            var reason = "Изменены: " + string.Join(", ", reasons) + ".";
             GlassDialogWindow.Show(this,
                 reason + " Изменения вступят в силу после полного перезапуска Nexus Monach.",
                 "Требуется перезапуск", MessageBoxButton.OK, MessageBoxImage.Information);

@@ -24,6 +24,9 @@ jobs:
       - name: Verify local AI security boundary
         shell: pwsh
         run: ./scripts/Test-LocalAiBoundary.ps1
+      - name: Verify secure network boundary
+        shell: pwsh
+        run: ./scripts/Test-SecureNetworkBoundary.ps1
       - name: Build
         run: dotnet build NexusMonach.sln --configuration Release --no-restore -warnaserror
       - name: Ensure runtime code has no external AI endpoints

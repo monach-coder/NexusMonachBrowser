@@ -42,11 +42,11 @@
             <Border Grid.Column="5" Background="#294252" />
 
             <StackPanel Grid.Column="6" Margin="10,0" MinWidth="220">
-                <TextBlock x:Name="MatchText" FontSize="11" TextWrapping="Wrap" Text="Часовой пояс и язык: —" />
-                <TextBlock x:Name="DnsText" Margin="0,3,0,0" FontSize="10.5" TextTrimming="CharacterEllipsis"
+                <TextBlock x:Name="TransportText" FontSize="11" Text="Транспорт сайта: —" />
+                <TextBlock x:Name="DnsText" Margin="0,2,0,0" FontSize="10.5" TextTrimming="CharacterEllipsis"
                            Foreground="{StaticResource MutedTextBrush}" Text="DNS Windows: —" />
-                <TextBlock x:Name="FingerprintText" Margin="0,2,0,0" FontSize="10.5"
-                           Foreground="{StaticResource MutedTextBrush}" Text="Отпечаток: —" />
+                <TextBlock x:Name="MatchText" Margin="0,2,0,0" FontSize="10.5" TextTrimming="CharacterEllipsis"
+                           Foreground="{StaticResource MutedTextBrush}" Text="Часовой пояс и язык: —" />
             </StackPanel>
 
             <StackPanel Grid.Column="7" Orientation="Horizontal" VerticalAlignment="Center">

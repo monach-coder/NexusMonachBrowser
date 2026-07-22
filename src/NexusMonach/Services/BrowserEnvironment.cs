@@ -27,7 +27,7 @@ public static class BrowserEnvironment
         }
 
         ExtensionsEnabledAtStartup = SettingsService.Current.EnableExtensions && !GuardianRuntime.IsSafeMode;
-        var browserArguments = ProxyConfigurationService.BuildBrowserArguments(SettingsService.Current);
+        var browserArguments = SecureNetworkConfigurationService.BuildBrowserArguments(SettingsService.Current);
         if (GuardianRuntime.IsSafeMode)
             browserArguments = (browserArguments + " --disable-gpu --disable-gpu-compositing").Trim();
         var options = new CoreWebView2EnvironmentOptions

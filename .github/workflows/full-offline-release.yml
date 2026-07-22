@@ -47,6 +47,10 @@ jobs:
         shell: pwsh
         run: ./scripts/Test-LocalAiBoundary.ps1
 
+      - name: Verify secure network boundary
+        shell: pwsh
+        run: ./scripts/Test-SecureNetworkBoundary.ps1
+
       - name: Download pinned offline AI payload
         shell: pwsh
         run: |

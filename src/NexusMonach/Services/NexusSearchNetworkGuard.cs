@@ -38,6 +38,26 @@ internal static class NexusSearchNetworkGuard
         return host.Contains('.');
     }
 
+    public static bool TryNormalizePublicHttpsUri(string value, out Uri uri)
+    {
+        uri = null!;
+        if (!TryParsePublicHttpUri(value, out var candidate)) return false;
+        if (candidate.Scheme == Uri.UriSchemeHttps)
+        {
+            uri = candidate;
+            return true;
+        }
+
+        // The crawler never sends page contents or a search query over plain
+        // HTTP. Public default-port links are upgraded before validation.
+        uri = new UriBuilder(candidate)
+        {
+            Scheme = Uri.UriSchemeHttps,
+            Port = -1
+        }.Uri;
+        return true;
+    }
+
     public static async Task ValidatePublicDestinationAsync(string value, CancellationToken cancellationToken)
     {
         if (!TryParsePublicHttpUri(value, out var uri))
@@ -134,7 +154,7 @@ internal static class NexusSearchNetworkGuard
         }
         else
         {
-            addresses = await Dns.GetHostAddressesAsync(host, cancellationToken).ConfigureAwait(false);
+            addresses = await SecureDnsResolver.ResolveAsync(host, cancellationToken).ConfigureAwait(false);
         }
 
         var distinct = addresses.Distinct().Take(17).ToArray();

@@ -26,6 +26,19 @@ public enum ProxyKind
     Socks5
 }
 
+public enum SecureDnsMode
+{
+    System,
+    Automatic,
+    Strict
+}
+
+public enum SecureDnsProvider
+{
+    Cloudflare,
+    Quad9
+}
+
 public enum CrashReportMode
 {
     AskBeforeSending,
@@ -59,6 +72,9 @@ public sealed class BrowserSettings
     public bool MemorySaver { get; set; } = true;
     public bool ShowPrivacyMonitor { get; set; } = true;
     public bool PreventWebRtcIpLeak { get; set; } = true;
+    public bool HttpsFirstEnabled { get; set; } = true;
+    public SecureDnsMode SecureDnsMode { get; set; } = SecureDnsMode.Strict;
+    public SecureDnsProvider SecureDnsProvider { get; set; } = SecureDnsProvider.Cloudflare;
     public bool EnableCustomProxy { get; set; }
     public ProxyKind ProxyKind { get; set; } = ProxyKind.Socks5;
     public string ProxyHost { get; set; } = "127.0.0.1";
@@ -89,6 +105,9 @@ public sealed class BrowserSettings
         MemorySaver = MemorySaver,
         ShowPrivacyMonitor = ShowPrivacyMonitor,
         PreventWebRtcIpLeak = PreventWebRtcIpLeak,
+        HttpsFirstEnabled = HttpsFirstEnabled,
+        SecureDnsMode = SecureDnsMode,
+        SecureDnsProvider = SecureDnsProvider,
         EnableCustomProxy = EnableCustomProxy,
         ProxyKind = ProxyKind,
         ProxyHost = ProxyHost,

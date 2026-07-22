@@ -98,11 +98,12 @@ public static partial class NexusSearchService
         };
         using var client = CreateClient();
         using var slots = new SemaphoreSlim(2, 2);
-        var safeLinks = internalLinks.Where(link => IsSafePublicUrl(link, out var uri) &&
-                                                    Uri.TryCreate(url, UriKind.Absolute, out var root) &&
-                                                    IsSameSite(uri.Host, root.Host))
-            .Distinct(StringComparer.OrdinalIgnoreCase).Take(6)
-            .Select(link => new NexusSearchCandidate { Title = link, Url = link, Snippet = string.Empty })
+        var safeLinks = internalLinks.Select(link => TryGetSecureCrawlerUri(link, out var uri) ? uri : null)
+            .OfType<Uri>().Where(uri => Uri.TryCreate(url, UriKind.Absolute, out var root) &&
+                                        IsSameSite(uri.Host, root.Host))
+            .DistinctBy(uri => uri.AbsoluteUri, StringComparer.OrdinalIgnoreCase).Take(6)
+            .Select(uri => new NexusSearchCandidate
+                { Title = uri.AbsoluteUri, Url = uri.AbsoluteUri, Snippet = string.Empty })
             .ToArray();
         async Task<NexusSearchCandidate?> ReadAsync(NexusSearchCandidate candidate)
         {
@@ -234,7 +235,7 @@ public static partial class NexusSearchService
             var raw = WebUtility.HtmlDecode(match.Groups["url"].Value);
             var title = CleanText(match.Groups["title"].Value, 180);
             var url = UnwrapResultUrl(raw);
-            if (title.Length < 3 || !IsSafePublicUrl(url, out var uri) ||
+            if (title.Length < 3 || !TryGetSecureCrawlerUri(url, out var uri) ||
                 uri.Host.Equals(providerHost, StringComparison.OrdinalIgnoreCase) ||
                 IsSearchProviderHost(uri.Host) || result.Any(x => x.Url.Equals(uri.AbsoluteUri, StringComparison.OrdinalIgnoreCase)))
                 continue;
@@ -249,8 +250,10 @@ public static partial class NexusSearchService
     {
         try
         {
-            await NexusSearchNetworkGuard.ValidatePublicDestinationAsync(candidate.Url, cancellationToken);
-            using var response = await client.GetAsync(candidate.Url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            if (!TryGetSecureCrawlerUri(candidate.Url, out var secureUri)) return candidate;
+            await NexusSearchNetworkGuard.ValidatePublicDestinationAsync(secureUri.AbsoluteUri, cancellationToken);
+            using var response = await client.GetAsync(secureUri, HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
             if (!response.IsSuccessStatusCode || response.Content.Headers.ContentType?.MediaType is not string media ||
                 !media.Contains("html", StringComparison.OrdinalIgnoreCase)) return candidate;
             var html = await ReadBoundedHtmlAsync(response, cancellationToken);
@@ -340,8 +343,11 @@ public static partial class NexusSearchService
         return uri.AbsoluteUri;
     }
 
-    private static bool IsSafePublicUrl(string value, out Uri uri)
-        => NexusSearchNetworkGuard.TryParsePublicHttpUri(value, out uri);
+    private static bool IsSafePublicUrl(string value, out Uri uri) =>
+        TryGetSecureCrawlerUri(value, out uri);
+
+    private static bool TryGetSecureCrawlerUri(string value, out Uri uri) =>
+        NexusSearchNetworkGuard.TryNormalizePublicHttpsUri(value, out uri);
 
     private static bool IsSearchProviderHost(string host) =>
         host.Contains("duckduckgo.", StringComparison.OrdinalIgnoreCase) ||
