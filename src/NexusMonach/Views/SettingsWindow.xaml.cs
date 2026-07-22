@@ -51,6 +51,21 @@ public partial class SettingsWindow : Window
             new Choice<ProxyKind>("SOCKS5 — подходит для Tor и локальных туннелей", ProxyKind.Socks5),
             new Choice<ProxyKind>("HTTP / HTTPS proxy", ProxyKind.Http)
         };
+        var secureDnsModeChoices = new[]
+        {
+            new Choice<SecureDnsMode>("Строгий DoH — без незашифрованного fallback (рекомендуется)",
+                SecureDnsMode.Strict),
+            new Choice<SecureDnsMode>("Автоматический DoH — системный fallback при ошибке",
+                SecureDnsMode.Automatic),
+            new Choice<SecureDnsMode>("DNS системы Windows", SecureDnsMode.System)
+        };
+        var secureDnsProviderChoices = new[]
+        {
+            new Choice<SecureDnsProvider>("Cloudflare 1.1.1.1 — без категорийной фильтрации",
+                SecureDnsProvider.Cloudflare),
+            new Choice<SecureDnsProvider>("Quad9 Secure — блокирует известные вредоносные домены",
+                SecureDnsProvider.Quad9)
+        };
         var crashChoices = new[]
         {
             new Choice<CrashReportMode>("Хранить только локально — рекомендуется сейчас", CrashReportMode.LocalOnly),
@@ -65,11 +80,15 @@ public partial class SettingsWindow : Window
         SearchEngineCombo.ItemsSource = searchChoices;
         PrivacyLevelCombo.ItemsSource = privacyChoices;
         ProxyTypeCombo.ItemsSource = proxyChoices;
+        SecureDnsModeCombo.ItemsSource = secureDnsModeChoices;
+        SecureDnsProviderCombo.ItemsSource = secureDnsProviderChoices;
         CrashReportModeCombo.ItemsSource = crashChoices;
         CrashReportDestinationCombo.ItemsSource = crashDestinationChoices;
         SearchEngineCombo.SelectedItem = searchChoices.FirstOrDefault(x => x.Value == settings.SearchEngine) ?? searchChoices[0];
         PrivacyLevelCombo.SelectedItem = privacyChoices.First(x => x.Value == settings.PrivacyLevel);
         ProxyTypeCombo.SelectedItem = proxyChoices.First(x => x.Value == settings.ProxyKind);
+        SecureDnsModeCombo.SelectedItem = secureDnsModeChoices.First(x => x.Value == settings.SecureDnsMode);
+        SecureDnsProviderCombo.SelectedItem = secureDnsProviderChoices.First(x => x.Value == settings.SecureDnsProvider);
         CrashReportModeCombo.SelectedItem = crashChoices.First(x => x.Value == settings.CrashReportMode);
         CrashReportDestinationCombo.SelectedItem = crashDestinationChoices.First(x => x.Value == settings.CrashReportDestination);
         HomePageBox.Text = settings.HomePage;
@@ -88,6 +107,7 @@ public partial class SettingsWindow : Window
         ProxyHostBox.Text = settings.ProxyHost;
         ProxyPortBox.Text = settings.ProxyPort.ToString();
         ProxyBypassBox.Text = settings.ProxyBypassList;
+        HttpsFirstCheck.IsChecked = settings.HttpsFirstEnabled;
         PrivacyMonitorCheck.IsChecked = settings.ShowPrivacyMonitor;
         PreventWebRtcLeakCheck.IsChecked = settings.PreventWebRtcIpLeak;
         CrashReportEndpointBox.Text = settings.CrashReportEndpoint;
@@ -173,6 +193,11 @@ public partial class SettingsWindow : Window
         _settings.ProxyHost = ProxyHostBox.Text.Trim();
         _settings.ProxyPort = proxyPort;
         _settings.ProxyBypassList = ProxyBypassBox.Text.Trim();
+        _settings.HttpsFirstEnabled = HttpsFirstCheck.IsChecked == true;
+        _settings.SecureDnsMode = SecureDnsModeCombo.SelectedItem is Choice<SecureDnsMode> dnsMode
+            ? dnsMode.Value : SecureDnsMode.Strict;
+        _settings.SecureDnsProvider = SecureDnsProviderCombo.SelectedItem is Choice<SecureDnsProvider> dnsProvider
+            ? dnsProvider.Value : SecureDnsProvider.Cloudflare;
         _settings.ShowPrivacyMonitor = PrivacyMonitorCheck.IsChecked == true;
         _settings.PreventWebRtcIpLeak = PreventWebRtcLeakCheck.IsChecked == true;
         _settings.CrashReportMode = CrashReportModeCombo.SelectedItem is Choice<CrashReportMode> crashMode

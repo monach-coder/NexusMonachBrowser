@@ -22,6 +22,8 @@ $ai = Join-Path $root "src\NexusMonach\AI"
 
 & (Join-Path $PSScriptRoot "Test-LicenseBoundary.ps1") -Root $root
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& (Join-Path $PSScriptRoot "Test-SecureNetworkBoundary.ps1") -Root $root
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
     Write-Host "The .NET 8 SDK was not found." -ForegroundColor Red
