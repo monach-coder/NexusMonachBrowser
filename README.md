@@ -214,6 +214,6 @@ src/NexusMonach/
 scripts/         сборка и проверка
 ```
 
-Весь собственный исходный код оболочки, `Nexus.Intelligence.Contracts` и `Nexus.Intelligence.Fabric` распространяется по MIT. Название и эмблема регулируются политикой `TRADEMARKS.md`, а сторонние runtime и модели сохраняют собственные лицензии.
+Весь собственный исходный код оболочки, `Nexus.Intelligence.Contracts` и `Nexus.Intelligence.Fabric` распространяется по Mozilla Public License 2.0 (MPL-2.0). Название и эмблема регулируются политикой `TRADEMARKS.md`, а сторонние runtime и модели сохраняют собственные лицензии.
 
 Идея, видение и направление проекта — **CoderMonach**. Проектирование и код создаются совместно с **OpenAI Codex**.
