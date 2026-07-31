@@ -54,6 +54,9 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     private string _agentDomToken = string.Empty;
     private SecureRestartTabState? _pendingRestartState;
     private bool _restartStateRestoreRunning;
+    private string? _pendingHttpFallback;
+    private string? _upgradedHttpsUrl;
+    private string? _httpAllowedOnce;
 
     public BrowserTab(string initialUrl, bool isPrivate, bool navigateOnInitialize = true)
     {
@@ -173,9 +176,10 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         if (Core is null) return;
         var settings = SettingsService.Current;
         Core.Settings.AreDevToolsEnabled = true;
-        Core.Settings.IsPasswordAutosaveEnabled = settings.EnablePasswordAutosave;
-        Core.Settings.IsGeneralAutofillEnabled = settings.EnableGeneralAutofill;
-        BrowserEnvironment.ApplyPrivacyLevel(Core.Profile, settings.PrivacyLevel);
+        Core.Settings.IsPasswordAutosaveEnabled = !_isPrivate && settings.EnablePasswordAutosave;
+        Core.Settings.IsGeneralAutofillEnabled = !_isPrivate && settings.EnableGeneralAutofill;
+        BrowserEnvironment.ApplyPrivacyLevel(Core.Profile,
+            _isPrivate ? PrivacyLevel.Strict : settings.PrivacyLevel);
         await Task.CompletedTask;
     }
 
@@ -1041,7 +1045,8 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
 
         var core = Core!;
         BrowserEnvironment.RegisterProfile(core.Profile);
-        BrowserEnvironment.ApplyPrivacyLevel(core.Profile, SettingsService.Current.PrivacyLevel);
+        BrowserEnvironment.ApplyPrivacyLevel(core.Profile,
+            _isPrivate ? PrivacyLevel.Strict : SettingsService.Current.PrivacyLevel);
         if (!_isPrivate)
             await ExtensionService.EnsureInstalledAsync(core.Profile);
 
@@ -1063,7 +1068,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 BlockedCount++;
                 StateChanged?.Invoke(this, EventArgs.Empty);
             });
-        }, RecordNetworkRequest);
+        }, RecordNetworkRequest, forceStrict: _isPrivate);
 
         if (_navigateOnInitialize)
             core.Navigate(Address);
@@ -1090,9 +1095,71 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         settings.IsPinchZoomEnabled = true;
         settings.IsBuiltInErrorPageEnabled = true;
         settings.IsReputationCheckingRequired = true;
-        settings.IsPasswordAutosaveEnabled = app.EnablePasswordAutosave;
-        settings.IsGeneralAutofillEnabled = app.EnableGeneralAutofill;
+        settings.IsPasswordAutosaveEnabled = !_isPrivate && app.EnablePasswordAutosave;
+        settings.IsGeneralAutofillEnabled = !_isPrivate && app.EnableGeneralAutofill;
         // User-Agent намеренно не меняется: стандартный Chromium-отпечаток менее уникален.
+    }
+
+    private bool HandleHttpsFirstNavigation(CoreWebView2 core, CoreWebView2NavigationStartingEventArgs e)
+    {
+        if (!SettingsService.Current.HttpsFirstEnabled ||
+            !Uri.TryCreate(e.Uri, UriKind.Absolute, out var uri) ||
+            uri.Scheme != Uri.UriSchemeHttp) return false;
+
+        if (string.Equals(_httpAllowedOnce, uri.AbsoluteUri, StringComparison.OrdinalIgnoreCase))
+        {
+            _httpAllowedOnce = null;
+            SecurityWarning = "Незашифрованное HTTP-соединение разрешено пользователем только для этого перехода.";
+            return false;
+        }
+
+        // A server that redirects the HTTPS attempt back to the original HTTP
+        // address must not create an endless upgrade loop.
+        if (_upgradedHttpsUrl is not null &&
+            string.Equals(_pendingHttpFallback, uri.AbsoluteUri, StringComparison.OrdinalIgnoreCase))
+        {
+            _pendingHttpFallback = null;
+            _upgradedHttpsUrl = null;
+            e.Cancel = true;
+            AskToOpenHttpOnce(core, uri.AbsoluteUri,
+                "Сайт перенаправил защищённый HTTPS-переход обратно на незашифрованный HTTP.");
+            return true;
+        }
+
+        e.Cancel = true;
+        if (!NexusSearchNetworkGuard.TryParsePublicHttpUri(uri.AbsoluteUri, out _))
+        {
+            AskToOpenHttpOnce(core, uri.AbsoluteUri,
+                "Адрес использует незашифрованный HTTP и не может быть безопасно обновлён автоматически " +
+                "(локальный адрес, нестандартный порт или служебное имя).");
+            return true;
+        }
+
+        var secure = new UriBuilder(uri)
+        {
+            Scheme = Uri.UriSchemeHttps,
+            Port = -1
+        }.Uri.AbsoluteUri;
+        _pendingHttpFallback = uri.AbsoluteUri;
+        _upgradedHttpsUrl = secure;
+        SecurityWarning = "HTTPS-first обновил незашифрованный адрес до HTTPS.";
+        Application.Current.Dispatcher.BeginInvoke(new Action(() => core.Navigate(secure)));
+        return true;
+    }
+
+    private void AskToOpenHttpOnce(CoreWebView2 core, string url, string reason)
+    {
+        var owner = Window.GetWindow(View);
+        var message = reason + "\n\nПродолжить только для этого перехода? " +
+                      "Адрес и передаваемые данные смогут видеть или изменять участники сети.";
+        var decision = owner is null
+            ? GlassDialogWindow.Show(message, "Незашифрованное соединение", MessageBoxButton.YesNo,
+                MessageBoxImage.Warning)
+            : GlassDialogWindow.Show(owner, message, "Незашифрованное соединение", MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+        if (decision != MessageBoxResult.Yes) return;
+        _httpAllowedOnce = url;
+        Application.Current.Dispatcher.BeginInvoke(new Action(() => core.Navigate(url)));
     }
 
     private void AttachEvents(CoreWebView2 core)
@@ -1102,6 +1169,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         {
             ResetNetworkSnapshot(e.Uri);
             core.Settings.IsWebMessageEnabled = UrlService.IsInternal(e.Uri);
+            if (HandleHttpsFirstNavigation(core, e)) return;
             var phishing = PhishingProtectionService.Analyze(e.Uri);
             PhishingRisk = phishing.Level;
             SecurityWarning = phishing.Description;
@@ -1123,7 +1191,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 StateChanged?.Invoke(this, EventArgs.Empty);
                 return;
             }
-            var cleaned = UrlService.CleanTrackingParameters(e.Uri);
+            var cleaned = UrlService.CleanTrackingParameters(e.Uri, force: _isPrivate);
             if (!cleaned.Equals(e.Uri, StringComparison.Ordinal))
             {
                 e.Cancel = true;
@@ -1158,8 +1226,31 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
             StateChanged?.Invoke(this, EventArgs.Empty);
             if (e.IsSuccess)
             {
+                _pendingHttpFallback = null;
+                _upgradedHttpsUrl = null;
                 NavigationSucceeded?.Invoke(this, EventArgs.Empty);
                 _ = TryRestoreSecureRestartStateAsync();
+            }
+            else if (_pendingHttpFallback is not null && _upgradedHttpsUrl is not null)
+            {
+                var fallback = _pendingHttpFallback;
+                _pendingHttpFallback = null;
+                _upgradedHttpsUrl = null;
+                var owner = Window.GetWindow(View);
+                var message = "Защищённое HTTPS-соединение установить не удалось. " +
+                              $"Ошибка WebView2: {e.WebErrorStatus}.\n\n" +
+                              "Продолжить по незашифрованному HTTP? Адрес и передаваемые данные смогут видеть " +
+                              "или изменять участники сети.";
+                var decision = owner is null
+                    ? GlassDialogWindow.Show(message, "HTTPS-first", MessageBoxButton.YesNo,
+                        MessageBoxImage.Warning)
+                    : GlassDialogWindow.Show(owner, message, "HTTPS-first", MessageBoxButton.YesNo,
+                        MessageBoxImage.Warning);
+                if (decision == MessageBoxResult.Yes)
+                {
+                    _httpAllowedOnce = fallback;
+                    Application.Current.Dispatcher.BeginInvoke(new Action(() => core.Navigate(fallback)));
+                }
             }
         };
 

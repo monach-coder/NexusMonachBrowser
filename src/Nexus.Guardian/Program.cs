@@ -15,6 +15,8 @@ internal static class Program
     {
         var commandMode = args.Length > 0 &&
             (args[0].Equals("--generate-key", StringComparison.OrdinalIgnoreCase) ||
+             args[0].Equals("--generate-report-key", StringComparison.OrdinalIgnoreCase) ||
+             args[0].Equals("--decrypt-report", StringComparison.OrdinalIgnoreCase) ||
              args[0].Equals("--create-manifest", StringComparison.OrdinalIgnoreCase) ||
              args[0].Equals("--verify-only", StringComparison.OrdinalIgnoreCase));
 
@@ -23,6 +25,20 @@ internal static class Program
             if (args.Length > 0 && args[0].Equals("--generate-key", StringComparison.OrdinalIgnoreCase))
             {
                 IntegrityVerifier.GenerateKeyPair(args.Length > 1 ? args[1] : Environment.CurrentDirectory);
+                return 0;
+            }
+
+            if (args.Length > 0 && args[0].Equals("--generate-report-key", StringComparison.OrdinalIgnoreCase))
+            {
+                CrashReportCrypto.GenerateKeyPair(args.Length > 1 ? args[1] : Environment.CurrentDirectory);
+                return 0;
+            }
+
+            if (args.Length > 0 && args[0].Equals("--decrypt-report", StringComparison.OrdinalIgnoreCase))
+            {
+                if (args.Length < 4)
+                    throw new ArgumentException("Использование: --decrypt-report <report.ncrash> <private-key.pem> <output.json>");
+                CrashReportCrypto.Decrypt(args[1], args[2], args[3]);
                 return 0;
             }
 

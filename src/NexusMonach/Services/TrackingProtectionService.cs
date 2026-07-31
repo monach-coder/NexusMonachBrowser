@@ -17,13 +17,13 @@ public static class TrackingProtectionService
     ];
 
     public static void Attach(CoreWebView2 core, Func<string?> topLevelUrl, Action onBlocked,
-        Action<string, bool>? onObserved = null)
+        Action<string, bool>? onObserved = null, bool forceStrict = false)
     {
         core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);
         core.WebResourceRequested += (_, e) =>
         {
-            ApplyPrivacyHeaders(e.Request.Headers);
-            var shouldBlock = SettingsService.Current.PrivacyLevel == PrivacyLevel.Strict &&
+            ApplyPrivacyHeaders(e.Request.Headers, forceStrict);
+            var shouldBlock = (forceStrict || SettingsService.Current.PrivacyLevel == PrivacyLevel.Strict) &&
                               e.ResourceContext != CoreWebView2WebResourceContext.Document &&
                               ShouldBlock(e.Request.Uri, topLevelUrl());
             onObserved?.Invoke(e.Request.Uri, shouldBlock);
@@ -40,13 +40,13 @@ public static class TrackingProtectionService
         };
     }
 
-    private static void ApplyPrivacyHeaders(CoreWebView2HttpRequestHeaders headers)
+    private static void ApplyPrivacyHeaders(CoreWebView2HttpRequestHeaders headers, bool forceStrict)
     {
         try
         {
-            if (SettingsService.Current.SendDoNotTrack)
+            if (forceStrict || SettingsService.Current.SendDoNotTrack)
                 headers.SetHeader("DNT", "1");
-            if (SettingsService.Current.SendGlobalPrivacyControl)
+            if (forceStrict || SettingsService.Current.SendGlobalPrivacyControl)
                 headers.SetHeader("Sec-GPC", "1");
         }
         catch

@@ -35,9 +35,9 @@ public static class UrlService
 
     public static string GetHomePage() => Resolve(SettingsService.Current.HomePage);
 
-    public static string CleanTrackingParameters(string url)
+    public static string CleanTrackingParameters(string url, bool force = false)
     {
-        if (!SettingsService.Current.StripTrackingParameters ||
+        if ((!force && !SettingsService.Current.StripTrackingParameters) ||
             !Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
             (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
             string.IsNullOrEmpty(uri.Query))

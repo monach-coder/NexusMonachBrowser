@@ -89,6 +89,19 @@ public partial class PrivacyDockControl : UserControl
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
     private void Hide_Click(object sender, RoutedEventArgs e) { Visibility = Visibility.Collapsed; _timer.Stop(); }
 
+    public void SetCurrentTransport(string? url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || UrlService.IsInternal(url))
+        {
+            TransportText.Text = "Транспорт сайта: локальная страница";
+            TransportText.Foreground = (Brush)FindResource("MutedTextBrush");
+            return;
+        }
+        var secure = uri.Scheme == Uri.UriSchemeHttps;
+        TransportText.Text = secure ? "Транспорт сайта: HTTPS / TLS" : "⚠ Транспорт сайта: HTTP без TLS";
+        TransportText.Foreground = secure ? (Brush)FindResource("AccentBrush") : Brushes.OrangeRed;
+    }
+
     private async Task RefreshAsync()
     {
         if (!_started || NetworkProbe.CoreWebView2 is null || _refreshing) return;
@@ -132,10 +145,11 @@ public partial class PrivacyDockControl : UserControl
             WebRtcText.Foreground = (Brush)FindResource("MutedTextBrush");
         }
 
-        MatchText.Text = $"Язык {Dash(browser.Language)} · зона {Dash(browser.Timezone)} · регион только локально";
+        MatchText.Text = $"Язык {Dash(browser.Language)} · зона {Dash(browser.Timezone)} · " +
+                         $"отпечаток {Dash(browser.Fingerprint)}";
         MatchText.Foreground = (Brush)FindResource("AccentBrush");
-        DnsText.Text = "DNS Windows: " + Dash(string.Join(", ", network.Dns.Take(6)));
-        FingerprintText.Text = "Локальный отпечаток: " + Dash(browser.Fingerprint);
+        DnsText.Text = SecureNetworkConfigurationService.Describe(SettingsService.Current) +
+                       " · Windows: " + Dash(string.Join(", ", network.Dns.Take(3)));
 
         if (publicCandidates.Length > 0)
         {

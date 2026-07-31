@@ -18,7 +18,8 @@ $required = @(
     'src/Nexus.Intelligence.Fabric/NexusIntelligenceFabric.cs',
     'src/Nexus.Guardian/Nexus.Guardian.csproj',
     'src/Nexus.Guardian.Relay/Nexus.Guardian.Relay.csproj',
-    'docs/Nexus-Guardian.md'
+    'docs/Nexus-Guardian.md',
+    'security/crash-report-public-key.pem'
 )
 foreach ($relative in $required) {
     if (-not (Test-Path (Join-Path $Root $relative))) { $errors.Add("Missing required project file: $relative") }
@@ -37,6 +38,7 @@ if (Test-Path (Join-Path $Root '.git')) {
 $forbiddenPaths = @(
     '(^|/)(bin|obj|dist)/',
     '\.(pfx|p12|snk|key)$',
+    '(^|/)crash-report-private-key\.pem$',
     '^src/NexusMonach/AI/.*\.(gguf|bin|onnx|exe|dll)$'
 )
 foreach ($file in $tracked) {

@@ -8,7 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>NexusMonach</AssemblyName>
     <RootNamespace>Nexus.Guardian</RootNamespace>
-    <Version>2.7.2</Version>
+    <Version>$(NexusProductVersion)</Version>
     <Product>Nexus Guardian</Product>
     <Description>Проверка целостности и безопасный запуск Nexus Monach.</Description>
     <ApplicationIcon>..\NexusMonach\Assets\nexus-monach.ico</ApplicationIcon>

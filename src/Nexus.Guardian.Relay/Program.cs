@@ -2,12 +2,14 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
+var productVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "0.0.0";
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 128 * 1024);
 builder.Logging.ClearProviders();
 builder.Logging.AddSimpleConsole(options =>
@@ -62,7 +64,7 @@ app.MapPost("/api/v1/crash-reports", async (
 
     var client = clients.CreateClient("matrix");
     client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", matrix.AccessToken);
-    client.DefaultRequestHeaders.UserAgent.ParseAdd("NexusGuardianRelay/2.7.2");
+    client.DefaultRequestHeaders.UserAgent.ParseAdd($"NexusGuardianRelay/{productVersion}");
 
     if (!await MatrixRoomIsPlaintextAsync(client, matrix, cancellationToken))
         return Results.Problem("Matrix room is encrypted or inaccessible; plaintext forwarding was blocked.", statusCode: 503);
