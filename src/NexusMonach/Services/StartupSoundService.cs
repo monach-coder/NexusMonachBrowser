@@ -107,10 +107,17 @@ public static class StartupSoundService
         if (voices.Length == 0)
             throw new InvalidOperationException("В Windows не найдено ни одного установленного голоса.");
 
-        var selected = voices.FirstOrDefault(voice => IsRussian(voice) && voice.Gender == VoiceGender.Male)
-                       ?? voices.FirstOrDefault(voice => voice.Gender == VoiceGender.Male)
-                       ?? voices.FirstOrDefault(IsRussian)
-                       ?? voices[0];
+        var candidates = voices.Select(voice => new NexusVoiceCandidate(
+            voice.Name,
+            voice.Culture.Name,
+            voice.Gender switch
+            {
+                VoiceGender.Female => NexusVoiceGender.Female,
+                VoiceGender.Male => NexusVoiceGender.Male,
+                _ => NexusVoiceGender.Unknown
+            })).ToArray();
+        var selectedIndex = VoiceProfileSelector.SelectPreferredIndex(candidates);
+        var selected = voices[selectedIndex < 0 ? 0 : selectedIndex];
 
         synthesizer.SelectVoice(selected.Name);
         synthesizer.SetOutputToDefaultAudioDevice();
@@ -138,17 +145,17 @@ public static class StartupSoundService
                           ?? throw new InvalidOperationException("Windows не создал SAPI.SpVoice.");
             dynamic voice = voiceObject;
 
-            dynamic russianMaleVoices = voice.GetVoices("Language=419;Gender=Male", "");
+            dynamic russianFemaleVoices = voice.GetVoices("Language=419;Gender=Female", "");
             dynamic russianVoices = voice.GetVoices("Language=419", "");
-            dynamic maleVoices = voice.GetVoices("Gender=Male", "");
+            dynamic femaleVoices = voice.GetVoices("Gender=Female", "");
             dynamic allVoices = voice.GetVoices("", "");
 
             var phrase = "Нексус Монах";
-            if (russianMaleVoices.Count > 0)
-                voice.Voice = russianMaleVoices.Item(0);
-            else if (maleVoices.Count > 0)
+            if (russianFemaleVoices.Count > 0)
+                voice.Voice = russianFemaleVoices.Item(0);
+            else if (femaleVoices.Count > 0)
             {
-                voice.Voice = maleVoices.Item(0);
+                voice.Voice = femaleVoices.Item(0);
                 phrase = "Nexus Monach";
             }
             else if (russianVoices.Count > 0)

@@ -2,5 +2,7 @@
   <PropertyGroup>
     <!-- Single source of truth for the browser, Guardian and Guardian Relay. -->
     <NexusProductVersion>2.9.0</NexusProductVersion>
+    <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
+    <Copyright>Copyright © 2026 CoderMonach and Nexus Monach contributors</Copyright>
   </PropertyGroup>
 </Project>

@@ -85,6 +85,12 @@ public partial class SettingsWindow : Window
             new Choice<CrashReportDestination>("HTTPS-приёмник", CrashReportDestination.HttpsCollector),
             new Choice<CrashReportDestination>("Напрямую в Matrix", CrashReportDestination.MatrixDirect)
         };
+        var voiceChoices = new[]
+        {
+            new Choice<VoiceAssistantMode>("Выключен", VoiceAssistantMode.Off),
+            new Choice<VoiceAssistantMode>("Только важное — рекомендуется", VoiceAssistantMode.ImportantOnly),
+            new Choice<VoiceAssistantMode>("Помощник — важное и ход операций", VoiceAssistantMode.Assistant)
+        };
         SearchEngineCombo.ItemsSource = searchChoices;
         PrivacyLevelCombo.ItemsSource = privacyChoices;
         ThemeCombo.ItemsSource = themeChoices;
@@ -93,6 +99,7 @@ public partial class SettingsWindow : Window
         SecureDnsProviderCombo.ItemsSource = secureDnsProviderChoices;
         CrashReportModeCombo.ItemsSource = crashChoices;
         CrashReportDestinationCombo.ItemsSource = crashDestinationChoices;
+        VoiceModeCombo.ItemsSource = voiceChoices;
         SearchEngineCombo.SelectedItem = searchChoices.FirstOrDefault(x => x.Value == settings.SearchEngine) ?? searchChoices[0];
         PrivacyLevelCombo.SelectedItem = privacyChoices.First(x => x.Value == settings.PrivacyLevel);
         ThemeCombo.SelectedItem = themeChoices.First(x => x.Value == settings.Theme);
@@ -101,6 +108,7 @@ public partial class SettingsWindow : Window
         SecureDnsProviderCombo.SelectedItem = secureDnsProviderChoices.First(x => x.Value == settings.SecureDnsProvider);
         CrashReportModeCombo.SelectedItem = crashChoices.First(x => x.Value == settings.CrashReportMode);
         CrashReportDestinationCombo.SelectedItem = crashDestinationChoices.First(x => x.Value == settings.CrashReportDestination);
+        VoiceModeCombo.SelectedItem = voiceChoices.First(x => x.Value == settings.VoiceAssistantMode);
         HomePageBox.Text = settings.HomePage;
         DntCheck.IsChecked = settings.SendDoNotTrack;
         GpcCheck.IsChecked = settings.SendGlobalPrivacyControl;
@@ -111,6 +119,8 @@ public partial class SettingsWindow : Window
         ExtensionsCheck.IsChecked = settings.EnableExtensions;
         PasswordCheck.IsChecked = settings.EnablePasswordAutosave;
         AutofillCheck.IsChecked = settings.EnableGeneralAutofill;
+        VoiceStartupCheck.IsChecked = settings.VoiceSpeakAtStartup;
+        VoiceHandsFreeCheck.IsChecked = settings.VoiceHandsFreeEnabled;
         CustomProxyCheck.IsChecked = settings.EnableCustomProxy;
         ProxyHostBox.Text = settings.ProxyHost;
         ProxyPortBox.Text = settings.ProxyPort.ToString();
@@ -230,6 +240,11 @@ public partial class SettingsWindow : Window
         _settings.EnablePasswordAutosave = PasswordCheck.IsChecked == true;
         _settings.EnableGeneralAutofill = AutofillCheck.IsChecked == true;
         _settings.EnableDevTools = false;
+        _settings.VoiceAssistantMode = VoiceModeCombo.SelectedItem is Choice<VoiceAssistantMode> voiceMode
+            ? voiceMode.Value : VoiceAssistantMode.ImportantOnly;
+        _settings.VoiceSpeakAtStartup = VoiceStartupCheck.IsChecked == true;
+        _settings.VoiceHandsFreeEnabled = VoiceHandsFreeCheck.IsChecked == true &&
+                                          _settings.VoiceAssistantMode != VoiceAssistantMode.Off;
         _settings.EnableCustomProxy = proxyEnabled;
         _settings.ProxyKind = ProxyTypeCombo.SelectedItem is Choice<ProxyKind> proxy
             ? proxy.Value : ProxyKind.Socks5;
@@ -280,6 +295,14 @@ public partial class SettingsWindow : Window
         }
         ResultSettings = _settings;
         DialogResult = true;
+    }
+
+    private void TestVoice_Click(object sender, RoutedEventArgs e)
+    {
+        var previousMode = SettingsService.Current.VoiceAssistantMode;
+        SettingsService.Current.VoiceAssistantMode = VoiceAssistantMode.Assistant;
+        try { VoiceAssistantService.SpeakTestPhrase(); }
+        finally { SettingsService.Current.VoiceAssistantMode = previousMode; }
     }
 
     private async void TestMatrix_Click(object sender, RoutedEventArgs e)

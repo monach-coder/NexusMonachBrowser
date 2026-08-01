@@ -5,6 +5,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Text.Json;
 using System.Diagnostics;
+using System.Threading.Channels;
 using Microsoft.Win32;
 using NexusMonach.Intelligence;
 using NexusMonach.Models;
@@ -58,6 +59,8 @@ public partial class LocalAiDockControl : UserControl
 
     public async Task TranslateCurrentPageAsync(BrowserTab tab)
     {
+        VoiceAssistantService.Announce("Перевожу интерфейс и готовлю озвучивание статьи.",
+            VoiceAnnouncementPriority.Important, tab.IsPrivate);
         Visibility = Visibility.Collapsed;
         _tab = tab;
         _pageUrl = tab.CurrentUrl;
@@ -71,33 +74,86 @@ public partial class LocalAiDockControl : UserControl
         _cancellation = new CancellationTokenSource();
         _cancellation.CancelAfter(TimeSpan.FromMinutes(3));
         var completed = 0;
-        IReadOnlyList<TranslationSegment> segments = [];
+        var spokenFragments = 0;
+        var translatedControls = 0;
+        IReadOnlyList<TranslationSegment> articleSegments = [];
+        IReadOnlyList<TranslationSegment> interactiveSegments = [];
         try
         {
-            segments = await tab.CaptureTranslationSegmentsAsync();
-            if (segments.Count == 0) throw new InvalidOperationException("На странице нет видимого текста для перевода.");
-            await tab.BeginInPageTranslationAsync(segments.Count);
-            // Tier 0 is visible immediately and never starts a model. Only the
-            // unknown text goes to the generative correction pass.
-            var immediate = LocalTranslationDictionary.TranslateKnown(segments);
-            completed += await tab.ApplyTranslationSegmentsAsync(immediate, completed, segments.Count);
-            var knownIds = immediate.Select(x => x.Id).ToHashSet(StringComparer.Ordinal);
-            var pending = segments.Where(x => !knownIds.Contains(x.Id)).ToArray();
-            await LocalIntelligenceService.TranslateSegmentsAsync(pending, _cancellation.Token,
-                async translatedBatch =>
+            articleSegments = await tab.CaptureTranslationSegmentsAsync();
+            interactiveSegments = await tab.CaptureInteractiveTranslationSegmentsAsync();
+            if (articleSegments.Count == 0 && interactiveSegments.Count == 0)
+                throw new InvalidOperationException(
+                    "На странице не найдено основное содержание или элементы интерфейса для перевода.");
+            await tab.BeginInPageTranslationAsync(articleSegments.Count + interactiveSegments.Count);
+
+            // В DOM попадают только подписи полей, кнопки, меню и подсказки.
+            // Значения input/textarea и содержимое статьи этот путь не меняет.
+            foreach (var group in interactiveSegments.Chunk(12))
+            {
+                _cancellation.Token.ThrowIfCancellationRequested();
+                var translated = await LocalIntelligenceService.TranslateSegmentsAsync(
+                    group, _cancellation.Token);
+                translatedControls += await tab.ApplyInteractiveTranslationSegmentsAsync(
+                    translated, translatedControls, interactiveSegments.Count);
+            }
+
+            // Основная статья переводится в памяти и отдаётся только женскому
+            // голосу. Меню, реклама, боковые панели и формы были исключены ещё
+            // при DOM-захвате в BrowserTab.
+            foreach (var group in articleSegments.Chunk(8))
+            {
+                _cancellation.Token.ThrowIfCancellationRequested();
+                var translated = await LocalIntelligenceService.TranslateSegmentsAsync(
+                    group, _cancellation.Token);
+                var translatedById = translated.ToDictionary(item => item.Id, StringComparer.Ordinal);
+                var narration = group.Select(item => translatedById.TryGetValue(item.Id, out var ready)
+                        ? ready.Text
+                        : ContainsCyrillic(item.Text) ? item.Text : string.Empty)
+                    .Where(text => !string.IsNullOrWhiteSpace(text))
+                    .ToArray();
+                foreach (var speechChunk in PageNarrationPolicy.CreateSpeechChunks(narration))
                 {
-                    completed += await tab.ApplyTranslationSegmentsAsync(
-                        translatedBatch, completed, segments.Count);
-                });
+                    var spoken = await VoiceAssistantService.SpeakAndWaitAsync(
+                        speechChunk, VoiceAnnouncementPriority.Important, tab.IsPrivate,
+                        userInitiated: true, rateOverride: 0,
+                        cancellationToken: _cancellation.Token);
+                    if (!spoken) throw new InvalidOperationException(
+                        "Женский голос Nexus не смог озвучить статью.");
+                }
+                spokenFragments += narration.Length;
+                completed = spokenFragments + translatedControls;
+                await tab.UpdateSpokenPageTranslationStatusAsync(
+                    spokenFragments, articleSegments.Count, translatedControls);
+            }
+
+            completed = spokenFragments + translatedControls;
             if (completed == 0)
                 throw new InvalidOperationException(
-                    "Локальная модель не вернула ни одного проверенного русского фрагмента. Оригинал страницы сохранён.");
-            await tab.CompleteInPageTranslationAsync(completed, segments.Count);
+                    "Локальная модель не вернула проверенный русский текст. Страница сохранена без изменений.");
+            await tab.CompleteSpokenPageTranslationAsync(
+                spokenFragments, articleSegments.Count, translatedControls);
+            VoiceAssistantService.Announce(
+                "Озвучивание статьи завершено. Элементы интерфейса переведены.",
+                VoiceAnnouncementPriority.Important, tab.IsPrivate);
         }
         catch (OperationCanceledException)
-        { await tab.CompleteInPageTranslationAsync(completed, segments.Count, "остановлен пользователем"); }
+        {
+            VoiceAssistantService.StopSpeaking();
+            await tab.CompleteSpokenPageTranslationAsync(
+                spokenFragments, articleSegments.Count, translatedControls,
+                "остановлено пользователем");
+            VoiceAssistantService.Announce("Озвучивание страницы остановлено.",
+                VoiceAnnouncementPriority.Critical, tab.IsPrivate);
+        }
         catch (Exception ex)
-        { await tab.CompleteInPageTranslationAsync(completed, segments.Count, ex.Message); }
+        {
+            VoiceAssistantService.StopSpeaking();
+            await tab.CompleteSpokenPageTranslationAsync(
+                spokenFragments, articleSegments.Count, translatedControls, ex.Message);
+            VoiceAssistantService.Announce("Озвучивание страницы не выполнено.",
+                VoiceAnnouncementPriority.Critical, tab.IsPrivate);
+        }
     }
 
     public async Task TranslateVideoAudioAsync(BrowserTab tab)
@@ -113,41 +169,54 @@ public partial class LocalAiDockControl : UserControl
         StopVideoTranslation();
         var session = new CancellationTokenSource();
         _videoCancellation = session;
+        VoiceAssistantService.Announce("Локальный перевод видео запускается.",
+            VoiceAnnouncementPriority.Important, tab.IsPrivate);
+        await WaitForVoiceSilenceAsync(session.Token);
         await tab.BeginLiveAudioTranslationAsync();
         var finalStatus = "Перевод звука остановлен.";
         try
         {
             await tab.UpdateLiveAudioTranslationStatusAsync("Один раз загружаю Whisper и Nexus OPUS…");
             await WhisperService.WarmUpAsync(session.Token);
+            await tab.EnableVideoDubbingMixAsync();
             await tab.UpdateLiveAudioTranslationStatusAsync(
-                "Слушаю системный звук непрерывно · русские субтитры включены");
+                "Слушаю видео · русский перевод озвучивает Nexus Voice");
 
-            var lastSubtitle = string.Empty;
+            var lastSpokenTranslation = string.Empty;
             var lastTranscript = string.Empty;
             var consecutiveErrors = 0;
-            await using var audio = SystemAudioCaptureService.StartContinuousCapture(
-                segmentMilliseconds: 5_500, overlapMilliseconds: 750);
-            await foreach (var segment in audio.ReadSegmentsAsync(session.Token))
+
+            async Task TranslateAndSpeakAsync(byte[] wav)
             {
-                if (session.IsCancellationRequested || await tab.ShouldStopLiveAudioTranslationAsync()) break;
+                var speech = await NexusFabricRuntime.TranscribeSpeechDetailedAsync(wav, session.Token);
+                var transcript = RemoveTranscriptOverlap(lastTranscript, speech.Text);
+                if (string.IsNullOrWhiteSpace(transcript)) return;
+                lastTranscript = speech.Text;
+
+                // Whisper только распознаёт исходный язык. В отличие от -tr,
+                // который умеет переводить лишь на английский, Nexus OPUS
+                // выполняет отдельный маршрут исходный язык -> русский.
+                var text = await LocalIntelligenceService.TranslateToRussianAsync(
+                    transcript, session.Token, speech.Language);
+                if (string.IsNullOrWhiteSpace(text) ||
+                    text.Equals(lastSpokenTranslation, StringComparison.OrdinalIgnoreCase)) return;
+
+                lastSpokenTranslation = text;
+                await WaitForVoiceSilenceAsync(session.Token);
+                var spoken = await VoiceAssistantService.SpeakAndWaitAsync(
+                    text, VoiceAnnouncementPriority.Important, tab.IsPrivate,
+                    userInitiated: true, rateOverride: VideoDubbingPolicy.SpeechRate,
+                    cancellationToken: session.Token);
+                if (!spoken)
+                    throw new InvalidOperationException(
+                        "Женский голос Nexus не смог озвучить перевод.");
+            }
+
+            async Task ProcessSegmentSafelyAsync(byte[] wav)
+            {
                 try
                 {
-                    var speech = await NexusFabricRuntime.TranscribeSpeechDetailedAsync(segment.Wav, session.Token);
-                    var transcript = RemoveTranscriptOverlap(lastTranscript, speech.Text);
-                    if (string.IsNullOrWhiteSpace(transcript)) continue;
-                    lastTranscript = speech.Text;
-
-                    // Whisper только распознаёт исходный язык. В отличие от -tr,
-                    // который умеет переводить лишь на английский, Nexus OPUS
-                    // выполняет отдельный маршрут исходный язык -> русский.
-                    var text = await LocalIntelligenceService.TranslateToRussianAsync(
-                        transcript, session.Token, speech.Language);
-                    if (!string.IsNullOrWhiteSpace(text) &&
-                        !text.Equals(lastSubtitle, StringComparison.OrdinalIgnoreCase))
-                    {
-                        lastSubtitle = text;
-                        await tab.ShowLiveVideoSubtitleAsync(text);
-                    }
+                    await TranslateAndSpeakAsync(wav);
                     consecutiveErrors = 0;
                 }
                 catch (OperationCanceledException) { throw; }
@@ -160,6 +229,90 @@ public partial class LocalAiDockControl : UserControl
                             ex.Message[..Math.Min(ex.Message.Length, 140)]);
                 }
             }
+
+            var firstDirect = await tab.CaptureActiveVideoAudioAsync(3, session.Token);
+            if (firstDirect.Success)
+            {
+                await tab.UpdateLiveAudioTranslationStatusAsync(
+                    "Закадровый перевод · оригинал приглушён · без пауз");
+                var directSegments = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(
+                    VideoDubbingPolicy.MaxBufferedSegments)
+                {
+                    FullMode = BoundedChannelFullMode.DropOldest,
+                    SingleReader = true,
+                    SingleWriter = true
+                });
+                if (!string.IsNullOrWhiteSpace(firstDirect.WavBase64))
+                    directSegments.Writer.TryWrite(Convert.FromBase64String(firstDirect.WavBase64));
+                using var producerCancellation =
+                    CancellationTokenSource.CreateLinkedTokenSource(session.Token);
+
+                async Task ProduceDirectSegmentsAsync()
+                {
+                    var failures = 0;
+                    try
+                    {
+                        while (!producerCancellation.IsCancellationRequested)
+                        {
+                            var captured = await tab.CaptureActiveVideoAudioAsync(
+                                VideoDubbingPolicy.DirectSegmentSeconds, producerCancellation.Token);
+                            if (captured.Success)
+                            {
+                                failures = 0;
+                                if (!string.IsNullOrWhiteSpace(captured.WavBase64))
+                                    directSegments.Writer.TryWrite(
+                                        Convert.FromBase64String(captured.WavBase64));
+                                continue;
+                            }
+                            if (++failures >= 3)
+                                throw new InvalidOperationException(
+                                    captured.Error.Length == 0
+                                        ? "Плеер прекратил прямой захват звука."
+                                        : captured.Error);
+                        }
+                    }
+                    catch (OperationCanceledException) { }
+                    catch (Exception ex) { directSegments.Writer.TryComplete(ex); return; }
+                    directSegments.Writer.TryComplete();
+                }
+
+                var producer = ProduceDirectSegmentsAsync();
+                try
+                {
+                    await foreach (var wav in directSegments.Reader.ReadAllAsync(session.Token))
+                    {
+                        if (await tab.ShouldStopLiveAudioTranslationAsync()) break;
+                        await ProcessSegmentSafelyAsync(wav);
+                    }
+                }
+                finally
+                {
+                    producerCancellation.Cancel();
+                    try { await producer; } catch { }
+                }
+            }
+            else
+            {
+                // DRM и некоторые нестандартные плееры запрещают captureStream.
+                // В резерве остаётся системный loopback. На этом пути кадр
+                // ненадолго удерживается, иначе SAPI попал бы в собственный вход.
+                await tab.UpdateLiveAudioTranslationStatusAsync(
+                    "Совместимый режим · короткая пауза только во время озвучки");
+                await using var audio = SystemAudioCaptureService.StartContinuousCapture(
+                    segmentMilliseconds: 2_800, overlapMilliseconds: 300);
+                await foreach (var segment in audio.ReadSegmentsAsync(session.Token))
+                {
+                    if (await tab.ShouldStopLiveAudioTranslationAsync()) break;
+                    audio.SuspendAndFlush();
+                    await tab.PrepareVideoForSpokenTranslationAsync(pausePlayback: true);
+                    try { await ProcessSegmentSafelyAsync(segment.Wav); }
+                    finally
+                    {
+                        audio.Resume();
+                        await tab.ResumeVideoAfterSpokenTranslationAsync();
+                    }
+                }
+            }
         }
         catch (OperationCanceledException) { finalStatus = "Перевод звука остановлен."; }
         catch (Exception ex)
@@ -169,9 +322,19 @@ public partial class LocalAiDockControl : UserControl
         }
         finally
         {
+            VoiceAssistantService.StopSpeaking();
             Interlocked.CompareExchange(ref _videoCancellation, null, session);
             session.Dispose();
+            try { await tab.ResumeVideoAfterSpokenTranslationAsync(); } catch { }
             try { await tab.EndLiveAudioTranslationAsync(finalStatus); } catch { }
+            VoiceAssistantService.Announce(
+                finalStatus.StartsWith("Ошибка", StringComparison.OrdinalIgnoreCase)
+                    ? "Перевод видео завершился с ошибкой."
+                    : "Перевод видео остановлен.",
+                finalStatus.StartsWith("Ошибка", StringComparison.OrdinalIgnoreCase)
+                    ? VoiceAnnouncementPriority.Critical
+                    : VoiceAnnouncementPriority.Important,
+                tab.IsPrivate);
         }
     }
 
@@ -202,6 +365,10 @@ public partial class LocalAiDockControl : UserControl
         }
         return current;
     }
+
+    private static bool ContainsCyrillic(string? text) =>
+        !string.IsNullOrWhiteSpace(text) &&
+        text.Any(character => character is >= '\u0400' and <= '\u04FF');
 
     public async Task PrepareShoppingAgentAsync(BrowserTab tab)
     {
@@ -456,6 +623,8 @@ public partial class LocalAiDockControl : UserControl
         var pagesViewed = 0;
         SledopytDiagnosticsService.Record("shopping", "started", "success");
         CrashReportService.AddBreadcrumb("sledopyt", "shopping-started");
+        VoiceAssistantService.Announce("Следопыт начал анализ каталога.",
+            VoiceAnnouncementPriority.Important, _tab.IsPrivate);
         try
         {
             if (!string.IsNullOrWhiteSpace(_shoppingImagePath))
@@ -581,6 +750,11 @@ public partial class LocalAiDockControl : UserControl
             SledopytDiagnosticsService.Record("shopping", "completed", "success",
                 stopwatch.ElapsedMilliseconds, rawCount, report.Items.Count, $"pages-{pagesViewed}");
             CrashReportService.AddBreadcrumb("sledopyt", "shopping-completed");
+            var top = report.Items.FirstOrDefault();
+            VoiceAssistantService.Announce(
+                $"Анализ каталога завершён. Найдено вариантов: {report.Items.Count}. " +
+                (top is null ? string.Empty : $"Первый вариант: {top.Name}. Цена: {top.Price}."),
+                VoiceAnnouncementPriority.Important, _tab.IsPrivate);
         }
         catch (OperationCanceledException)
         {
@@ -595,6 +769,8 @@ public partial class LocalAiDockControl : UserControl
             CrashReportService.AddBreadcrumb("sledopyt", "shopping-failed");
             ResultBox.Text = ex.Message;
             StatusText.Text = "Nexus Следопыт не собрал сравнение.";
+            VoiceAssistantService.Announce("Следопыт не смог собрать сравнение товаров.",
+                VoiceAnnouncementPriority.Critical, _tab.IsPrivate);
         }
         finally { CancelButton.IsEnabled = false; }
     }
@@ -606,6 +782,13 @@ public partial class LocalAiDockControl : UserControl
         InvalidOperationException => "catalog-unavailable",
         _ => "operation-error"
     };
+
+    private static async Task WaitForVoiceSilenceAsync(CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 30 && VoiceAssistantService.IsBusy; attempt++)
+            await Task.Delay(100, cancellationToken);
+        await Task.Delay(120, cancellationToken);
+    }
 
     private void ShowTextResult(string text)
     {

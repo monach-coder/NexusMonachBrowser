@@ -145,6 +145,7 @@
                 <ColumnDefinition Width="44" />
                 <ColumnDefinition Width="44" />
                 <ColumnDefinition Width="44" />
+                <ColumnDefinition Width="44" />
             </Grid.ColumnDefinitions>
 
             <Button x:Name="BackButton" Grid.Column="0" Content="&#xE72B;"
@@ -182,11 +183,11 @@
 
             <Button Grid.Column="6" Content="RU" Style="{StaticResource IconButton}" FontFamily="Segoe UI"
                     FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource GoldBrush}"
-                    ToolTip="Локальный перевод страницы или звука видео" Click="TranslateMenu_Click">
+                    ToolTip="Озвучить статью, перевести интерфейс или звук видео" Click="TranslateMenu_Click">
                 <Button.ContextMenu>
                     <ContextMenu>
-                        <MenuItem Header="Перевести страницу" Click="TranslateTop_Click" />
-                        <MenuItem Header="Переводить звук видео в RU-субтитры" Click="TranslateVideoAudio_Click" />
+                        <MenuItem Header="Озвучить статью и перевести интерфейс" Click="TranslateTop_Click" />
+                        <MenuItem Header="Закадровый перевод видео на русский" Click="TranslateVideoAudio_Click" />
                     </ContextMenu>
                 </Button.ContextMenu>
             </Button>
@@ -199,7 +200,21 @@
                     Foreground="{StaticResource AccentBrush}" ToolTip="SSH-терминал Linux"
                     Click="SshTerminal_Click" />
 
-            <Button x:Name="MenuButton" Grid.Column="9" Content="&#xE712;"
+            <Button x:Name="VoiceButton" Grid.Column="9" Content="&#xE720;"
+                    Style="{StaticResource IconButton}" Foreground="{StaticResource AccentBrush}"
+                    ToolTip="Nexus Voice: нажмите и говорите" Click="VoiceButton_Click">
+                <Button.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="Сказать команду" Click="VoiceListenMenu_Click" />
+                        <MenuItem Header="Остановить голос" Click="VoiceStopMenu_Click" />
+                        <Separator />
+                        <MenuItem x:Name="HandsFreeMenuItem" Header="Свободные руки · слово «Нексус»"
+                                  IsCheckable="True" Click="HandsFreeMenuItem_Click" />
+                    </ContextMenu>
+                </Button.ContextMenu>
+            </Button>
+
+            <Button x:Name="MenuButton" Grid.Column="10" Content="&#xE712;"
                     Style="{StaticResource IconButton}" ToolTip="Меню" Click="MenuButton_Click">
                 <Button.ContextMenu>
                     <ContextMenu>
@@ -248,6 +263,16 @@
             <views:SshTerminalDockControl x:Name="SshTerminalDock" Grid.Column="1" Visibility="Collapsed"
                                           HorizontalAlignment="Right" VerticalAlignment="Stretch"
                                           CloseRequested="SshTerminal_CloseRequested" />
+            <Border x:Name="VoiceStatusBadge" Grid.Column="0" Visibility="Collapsed"
+                    HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,14,0,0"
+                    Padding="16,8" CornerRadius="18" Background="#E6121B27"
+                    BorderBrush="#36D7C4" BorderThickness="1" Panel.ZIndex="20">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="&#xE720;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                               Foreground="{StaticResource AccentBrush}" Margin="0,0,8,0" />
+                    <TextBlock x:Name="VoiceStatusText" Text="Слушаю…" FontWeight="SemiBold" />
+                </StackPanel>
+            </Border>
         </Grid>
 
         <Border Grid.Row="4" Background="#09111A" BorderBrush="#203747" BorderThickness="0,1,0,0"

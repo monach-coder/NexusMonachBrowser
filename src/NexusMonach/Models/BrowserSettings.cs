@@ -60,6 +60,13 @@ public enum BrowserTheme
     Amethyst
 }
 
+public enum VoiceAssistantMode
+{
+    Off,
+    ImportantOnly,
+    Assistant
+}
+
 public sealed class BrowserSettings
 {
     public SearchEngineKind SearchEngine { get; set; } = SearchEngineKind.DuckDuckGo;
@@ -99,6 +106,10 @@ public sealed class BrowserSettings
     public bool InitialProtectionSetupShown { get; set; }
     public BrowserTheme Theme { get; set; } = BrowserTheme.MonachAqua;
     public bool ThemeSelectionCompleted { get; set; }
+    public VoiceAssistantMode VoiceAssistantMode { get; set; } = VoiceAssistantMode.ImportantOnly;
+    public bool VoiceSpeakAtStartup { get; set; } = true;
+    public bool VoiceHandsFreeEnabled { get; set; }
+    public int VoiceRate { get; set; } = -1;
 
     public BrowserSettings Clone() => new()
     {
@@ -134,6 +145,10 @@ public sealed class BrowserSettings
         MatrixRoomId = MatrixRoomId,
         InitialProtectionSetupShown = InitialProtectionSetupShown,
         Theme = Theme,
-        ThemeSelectionCompleted = ThemeSelectionCompleted
+        ThemeSelectionCompleted = ThemeSelectionCompleted,
+        VoiceAssistantMode = VoiceAssistantMode,
+        VoiceSpeakAtStartup = VoiceSpeakAtStartup,
+        VoiceHandsFreeEnabled = VoiceHandsFreeEnabled,
+        VoiceRate = VoiceRate
     };
 }

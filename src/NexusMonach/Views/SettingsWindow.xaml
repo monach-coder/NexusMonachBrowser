@@ -169,20 +169,39 @@
 
                 <ScrollViewer x:Name="CompatibilitySection" Margin="0,46,0,0" Visibility="Collapsed"
                               VerticalScrollBarVisibility="Auto">
-                    <Border Style="{StaticResource SettingsCard}">
-                        <StackPanel>
-                            <TextBlock Text="Функции WebView2" FontSize="15" FontWeight="SemiBold" />
-                            <CheckBox x:Name="ExtensionsCheck" Margin="0,12,0,0"
-                                      Content="Разрешить распакованные расширения (требуется перезапуск)" />
-                            <CheckBox x:Name="PasswordCheck"
-                                      Content="Разрешить WebView2 сохранять и подставлять пароли" />
-                            <CheckBox x:Name="AutofillCheck"
-                                      Content="Разрешить автозаполнение обычных форм" />
-                            <TextBlock Text="F12 открывает стандартные Chromium DevTools: Elements, Console, Sources, Network и Performance."
-                                       TextWrapping="Wrap" Margin="0,9,0,0" FontSize="11"
-                                       Foreground="{StaticResource MutedTextBrush}" />
-                        </StackPanel>
-                    </Border>
+                    <StackPanel>
+                        <Border Style="{StaticResource SettingsCard}">
+                            <StackPanel>
+                                <TextBlock Text="Функции WebView2" FontSize="15" FontWeight="SemiBold" />
+                                <CheckBox x:Name="ExtensionsCheck" Margin="0,12,0,0"
+                                          Content="Разрешить распакованные расширения (требуется перезапуск)" />
+                                <CheckBox x:Name="PasswordCheck"
+                                          Content="Разрешить WebView2 сохранять и подставлять пароли" />
+                                <CheckBox x:Name="AutofillCheck"
+                                          Content="Разрешить автозаполнение обычных форм" />
+                                <TextBlock Text="F12 открывает стандартные Chromium DevTools: Elements, Console, Sources, Network и Performance."
+                                           TextWrapping="Wrap" Margin="0,9,0,0" FontSize="11"
+                                           Foreground="{StaticResource MutedTextBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource SettingsCard}">
+                            <StackPanel>
+                                <TextBlock Text="Nexus Voice · женский локальный голос"
+                                           FontSize="15" FontWeight="SemiBold" />
+                                <ComboBox x:Name="VoiceModeCombo" Margin="0,12,0,0" />
+                                <CheckBox x:Name="VoiceStartupCheck" Margin="0,10,0,0"
+                                          Content="Озвучивать запуск браузера" />
+                                <CheckBox x:Name="VoiceHandsFreeCheck"
+                                          Content="Свободные руки: слушать команды после слова «Нексус»" />
+                                <TextBlock TextWrapping="Wrap" Margin="0,7,0,0" FontSize="11"
+                                           Foreground="{StaticResource MutedTextBrush}"
+                                           Text="Распознавание выполняет локальный Whisper, озвучивание — женский голос Windows. Микрофон не используется в приватных окнах. Режим «свободные руки» увеличивает нагрузку и включается только вручную." />
+                                <Button Content="Проверить женский голос" Style="{StaticResource ActionButton}"
+                                        HorizontalAlignment="Left" Margin="0,12,0,0"
+                                        Click="TestVoice_Click" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
                 </ScrollViewer>
 
                 <ScrollViewer x:Name="GuardianSection" Margin="0,46,0,0" Visibility="Collapsed"

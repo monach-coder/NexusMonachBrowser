@@ -51,6 +51,9 @@ public partial class MainWindow : Window
     private readonly Dictionary<BrowserTab, string> _pendingSearchFollowUp = [];
     private readonly Dictionary<BrowserTab, SiteResearchContext> _siteResearchContexts = [];
     private readonly Dictionary<BrowserTab, CancellationTokenSource> _siteResearchOperations = [];
+    private readonly SemaphoreSlim _voiceListenGate = new(1, 1);
+    private CancellationTokenSource? _voiceListenCancellation;
+    private CancellationTokenSource? _handsFreeCancellation;
     private static readonly JsonSerializerOptions WebJson = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -136,6 +139,9 @@ public partial class MainWindow : Window
             SecureRestartSessionService.Delete();
         if (!_isPrivate)
             HandleCoreUpdateSnapshot(WebView2RuntimeMonitor.Check());
+        VoiceButton.IsEnabled = !_isPrivate;
+        HandsFreeMenuItem.IsChecked = !_isPrivate && SettingsService.Current.VoiceHandsFreeEnabled;
+        StartHandsFreeIfEnabled();
     }
 
     private BrowserTab AddTab(string url, bool navigateOnInitialize = true, bool insertAfterActive = false)
@@ -309,6 +315,9 @@ public partial class MainWindow : Window
             {
                 LocalAiDock.StoreBackgroundResearch(tab, sourceUrl, report);
             });
+            VoiceAssistantService.Announce(
+                $"Следопыт закончил анализ сайта. Подходящих источников: {report.Items.Count}. " +
+                BriefVoiceSummary(report.DirectAnswer), VoiceAnnouncementPriority.Important, _isPrivate);
         }
         catch (OperationCanceledException)
         {
@@ -383,6 +392,9 @@ public partial class MainWindow : Window
             if (tab.Core is null || !tab.CurrentUrl.StartsWith("https://nexus.local/search.html", StringComparison.OrdinalIgnoreCase)) return;
             var json = JsonSerializer.Serialize(report, WebJson);
             await tab.Core.ExecuteScriptAsync("window.nexusRender?.(" + json + ")");
+            VoiceAssistantService.Announce(
+                $"Поиск завершён. Проверено источников: {report.Items.Count}. " +
+                BriefVoiceSummary(report.DirectAnswer), VoiceAnnouncementPriority.Important, _isPrivate);
         }
         catch (OperationCanceledException)
         {
@@ -754,8 +766,9 @@ public partial class MainWindow : Window
 
     private async void TranslateTop_Click(object sender, RoutedEventArgs e)
     {
-        if (ActiveTab?.Core is null) return;
-        await LocalAiDock.TranslateCurrentPageAsync(ActiveTab);
+        var tab = ActiveTab;
+        if (tab?.Core is null) return;
+        await RunWithHandsFreePausedAsync(() => LocalAiDock.TranslateCurrentPageAsync(tab));
     }
 
     private void TranslateMenu_Click(object sender, RoutedEventArgs e)
@@ -768,20 +781,250 @@ public partial class MainWindow : Window
 
     private async void TranslateVideoAudio_Click(object sender, RoutedEventArgs e)
     {
-        if (ActiveTab?.Core is null) return;
-        await LocalAiDock.TranslateVideoAudioAsync(ActiveTab);
+        var tab = ActiveTab;
+        if (tab?.Core is null) return;
+        await RunWithHandsFreePausedAsync(() => LocalAiDock.TranslateVideoAudioAsync(tab));
     }
 
     private async void ShoppingAgentTop_Click(object sender, RoutedEventArgs e)
     {
-        if (ActiveTab?.Core is null) return;
-        if (ActiveTab.CurrentUrl.Equals(UrlService.NewTabUrl, StringComparison.OrdinalIgnoreCase))
+        var tab = ActiveTab;
+        if (tab?.Core is null) return;
+        if (tab.CurrentUrl.Equals(UrlService.NewTabUrl, StringComparison.OrdinalIgnoreCase))
         {
-            await ActiveTab.Core.ExecuteScriptAsync("window.nexusFocusSearch?.()");
+            await tab.Core.ExecuteScriptAsync("window.nexusFocusSearch?.()");
             return;
         }
         SshTerminalDock.Visibility = Visibility.Collapsed;
-        await LocalAiDock.PrepareShoppingAgentAsync(ActiveTab);
+        await LocalAiDock.PrepareShoppingAgentAsync(tab);
+    }
+
+    private async void VoiceButton_Click(object sender, RoutedEventArgs e) =>
+        await StartPushToTalkAsync();
+
+    private async void VoiceListenMenu_Click(object sender, RoutedEventArgs e) =>
+        await StartPushToTalkAsync();
+
+    private void VoiceStopMenu_Click(object sender, RoutedEventArgs e)
+    {
+        _voiceListenCancellation?.Cancel();
+        VoiceAssistantService.StopSpeaking();
+        SetVoiceStatus("Голос остановлен", visible: true);
+        _ = HideVoiceStatusLaterAsync();
+    }
+
+    private async void HandsFreeMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (_isPrivate)
+        {
+            HandsFreeMenuItem.IsChecked = false;
+            return;
+        }
+        var settings = SettingsService.Current.Clone();
+        settings.VoiceHandsFreeEnabled = HandsFreeMenuItem.IsChecked == true;
+        if (settings.VoiceHandsFreeEnabled && settings.VoiceAssistantMode == VoiceAssistantMode.Off)
+            settings.VoiceAssistantMode = VoiceAssistantMode.Assistant;
+        await SettingsService.SaveAsync(settings);
+        if (settings.VoiceHandsFreeEnabled)
+        {
+            StartHandsFreeIfEnabled();
+            VoiceAssistantService.Announce("Режим свободные руки включён. Обращайтесь ко мне: Нексус.");
+        }
+        else
+        {
+            StopHandsFree();
+            VoiceAssistantService.Announce("Режим свободные руки выключен.");
+        }
+    }
+
+    private async Task StartPushToTalkAsync()
+    {
+        if (_isPrivate) return;
+        if (SettingsService.Current.VoiceAssistantMode == VoiceAssistantMode.Off)
+        {
+            SetVoiceStatus("Nexus Voice выключен в настройках", visible: true);
+            await HideVoiceStatusLaterAsync();
+            return;
+        }
+        if (!WhisperService.IsReady)
+        {
+            SetVoiceStatus("Локальный Whisper отсутствует", visible: true);
+            VoiceAssistantService.Announce("Локальный модуль распознавания речи не найден.",
+                VoiceAnnouncementPriority.Critical);
+            await HideVoiceStatusLaterAsync();
+            return;
+        }
+        _voiceListenCancellation?.Cancel();
+        var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        _voiceListenCancellation = cancellation;
+        try
+        {
+            await ListenAndExecuteVoiceCommandAsync(requireWakeWord: false, TimeSpan.FromSeconds(6.5), cancellation.Token);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("voice", "push-to-talk", ex);
+            SetVoiceStatus("Голосовая команда не распознана", visible: true);
+            VoiceAssistantService.Announce("Не удалось распознать команду.", VoiceAnnouncementPriority.Critical);
+        }
+        finally
+        {
+            if (ReferenceEquals(_voiceListenCancellation, cancellation)) _voiceListenCancellation = null;
+            cancellation.Dispose();
+            await HideVoiceStatusLaterAsync();
+        }
+    }
+
+    private void StartHandsFreeIfEnabled()
+    {
+        if (_isPrivate || !SettingsService.Current.VoiceHandsFreeEnabled ||
+            SettingsService.Current.VoiceAssistantMode == VoiceAssistantMode.Off ||
+            _handsFreeCancellation is { IsCancellationRequested: false }) return;
+        var cancellation = new CancellationTokenSource();
+        _handsFreeCancellation = cancellation;
+        HandsFreeMenuItem.IsChecked = true;
+        _ = RunHandsFreeLoopAsync(cancellation);
+    }
+
+    private void StopHandsFree()
+    {
+        var cancellation = Interlocked.Exchange(ref _handsFreeCancellation, null);
+        cancellation?.Cancel();
+        HandsFreeMenuItem.IsChecked = false;
+        if (_voiceListenCancellation is null) VoiceStatusBadge.Visibility = Visibility.Collapsed;
+    }
+
+    private async Task RunHandsFreeLoopAsync(CancellationTokenSource session)
+    {
+        try
+        {
+            while (!session.IsCancellationRequested && !_closing)
+            {
+                if (!WhisperService.IsReady)
+                {
+                    SetVoiceStatus("Свободные руки · Whisper недоступен", visible: true);
+                    await Task.Delay(TimeSpan.FromSeconds(10), session.Token);
+                    continue;
+                }
+                if (VoiceAssistantService.IsBusy)
+                {
+                    await Task.Delay(350, session.Token);
+                    continue;
+                }
+                SetVoiceStatus("Свободные руки · жду «Нексус»", visible: true);
+                await ListenAndExecuteVoiceCommandAsync(requireWakeWord: true, TimeSpan.FromSeconds(4.5), session.Token);
+                await Task.Delay(300, session.Token);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("voice", "hands-free", ex);
+            SetVoiceStatus("Свободные руки остановлены", visible: true);
+        }
+        finally
+        {
+            if (ReferenceEquals(_handsFreeCancellation, session)) _handsFreeCancellation = null;
+            session.Dispose();
+        }
+    }
+
+    private async Task ListenAndExecuteVoiceCommandAsync(bool requireWakeWord, TimeSpan duration,
+        CancellationToken cancellationToken)
+    {
+        await _voiceListenGate.WaitAsync(cancellationToken);
+        try
+        {
+            SetVoiceStatus(requireWakeWord ? "Жду «Нексус»…" : "Слушаю команду…", visible: true);
+            var wav = await MicrophoneCaptureService.CaptureWavAsync(duration, cancellationToken);
+            SetVoiceStatus("Распознаю локально…", visible: true);
+            var transcript = await WhisperService.TranscribeDetailedAsync(wav, cancellationToken);
+            var command = VoiceCommandRouter.Parse(transcript.Text, requireWakeWord);
+            if (command.Kind == VoiceCommandKind.None)
+            {
+                if (!requireWakeWord)
+                    VoiceAssistantService.Announce("Команда не распознана.", VoiceAnnouncementPriority.Critical);
+                return;
+            }
+            SetVoiceStatus("Команда: " + command.Kind, visible: true);
+            await ExecuteVoiceCommandAsync(command);
+        }
+        finally { _voiceListenGate.Release(); }
+    }
+
+    private async Task ExecuteVoiceCommandAsync(VoiceCommand command)
+    {
+        var activeTab = ActiveTab;
+        switch (command.Kind)
+        {
+            case VoiceCommandKind.StopVoice:
+                VoiceAssistantService.StopSpeaking();
+                break;
+            case VoiceCommandKind.DisableHandsFree:
+            {
+                var settings = SettingsService.Current.Clone();
+                settings.VoiceHandsFreeEnabled = false;
+                await SettingsService.SaveAsync(settings);
+                StopHandsFree();
+                VoiceAssistantService.Announce("Свободные руки выключены.");
+                break;
+            }
+            case VoiceCommandKind.Back: activeTab?.GoBack(); break;
+            case VoiceCommandKind.Forward: activeTab?.GoForward(); break;
+            case VoiceCommandKind.Reload: activeTab?.ReloadOrStop(); break;
+            case VoiceCommandKind.Home: activeTab?.Navigate(UrlService.GetHomePage()); break;
+            case VoiceCommandKind.NewTab: await OpenTabAsync(); break;
+            case VoiceCommandKind.CloseTab when activeTab is not null: CloseTab(activeTab); break;
+            case VoiceCommandKind.OpenSettings: ShowSettings(); break;
+            case VoiceCommandKind.OpenGuardian: new GuardianCenterWindow { Owner = this }.ShowDialog(); break;
+            case VoiceCommandKind.TranslatePage when activeTab?.Core is not null:
+            {
+                await RunWithHandsFreePausedAsync(() => LocalAiDock.TranslateCurrentPageAsync(activeTab));
+                break;
+            }
+            case VoiceCommandKind.TranslateVideo when activeTab?.Core is not null:
+            {
+                await RunWithHandsFreePausedAsync(() => LocalAiDock.TranslateVideoAudioAsync(activeTab));
+                break;
+            }
+            case VoiceCommandKind.OpenSledopyt when activeTab?.Core is not null:
+                SshTerminalDock.Visibility = Visibility.Collapsed;
+                await LocalAiDock.ShowForTabAsync(activeTab); break;
+            case VoiceCommandKind.Search:
+                AddressBox.Text = command.Argument;
+                await NavigateOrSearchAsync(command.Argument);
+                break;
+        }
+    }
+
+    private void SetVoiceStatus(string text, bool visible)
+    {
+        VoiceStatusText.Text = text;
+        VoiceStatusBadge.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private async Task HideVoiceStatusLaterAsync()
+    {
+        await Task.Delay(1_500);
+        if (_handsFreeCancellation is null) VoiceStatusBadge.Visibility = Visibility.Collapsed;
+    }
+
+    private static string BriefVoiceSummary(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        var text = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        var end = text.IndexOfAny(['.', '!', '?']);
+        if (end >= 40) text = text[..(end + 1)];
+        return text[..Math.Min(text.Length, 220)];
+    }
+
+    private async Task RunWithHandsFreePausedAsync(Func<Task> operation)
+    {
+        var resume = !_isPrivate && SettingsService.Current.VoiceHandsFreeEnabled;
+        StopHandsFree();
+        try { await operation(); }
+        finally { if (resume && !_closing) StartHandsFreeIfEnabled(); }
     }
 
     private void SshTerminal_Click(object sender, RoutedEventArgs e)
@@ -839,6 +1082,12 @@ public partial class MainWindow : Window
         if (!_isPrivate)
             await PrivacyDock.SetEnabledAsync(SettingsService.Current.ShowPrivacyMonitor);
         ExtensionsMenuItem.IsEnabled = !_isPrivate && BrowserEnvironment.ExtensionsEnabledAtStartup;
+        if (!_isPrivate)
+        {
+            HandsFreeMenuItem.IsChecked = SettingsService.Current.VoiceHandsFreeEnabled;
+            if (SettingsService.Current.VoiceHandsFreeEnabled) StartHandsFreeIfEnabled();
+            else StopHandsFree();
+        }
         if (extensionsChanged || proxyChanged || secureNetworkChanged || themeChanged)
         {
             var reasons = new List<string>();
@@ -1045,6 +1294,8 @@ public partial class MainWindow : Window
         _memoryTimer.Stop();
         _networkPerformanceTimer.Stop();
         LocalAiDock.StopVideoTranslation();
+        _voiceListenCancellation?.Cancel();
+        StopHandsFree();
         SshTerminalDock.Disconnect();
         foreach (var search in _searchOperations.Values) search.Cancel();
 

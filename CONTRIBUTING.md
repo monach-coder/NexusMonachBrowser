@@ -1,8 +1,10 @@
 # Участие в разработке
 
-Изменения оболочки, `Nexus.Intelligence.Contracts` и открытого
-`Nexus.Intelligence.Fabric` принимаются через pull request и распространяются
-по MIT, если в файле не указано иное.
+Изменения оболочки, Nexus Guardian, Guardian Relay,
+`Nexus.Intelligence.Contracts` и открытого `Nexus.Intelligence.Fabric`
+принимаются через pull request и распространяются
+по GNU General Public License v3.0 only (`GPL-3.0-only`), если в файле не
+указано иное.
 
 Добавьте к каждому коммиту строку `Signed-off-by`, подтверждая, что вы вправе
 отправить изменение на указанных условиях:

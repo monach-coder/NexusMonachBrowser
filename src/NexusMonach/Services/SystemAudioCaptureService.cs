@@ -31,11 +31,12 @@ public static class SystemAudioCaptureService
         private readonly Task _segmentLoop;
         private long _sequence;
         private bool _disposed;
+        private bool _suspended;
         private Exception? _recordingError;
 
         internal ContinuousCaptureSession(int segmentMilliseconds, int overlapMilliseconds)
         {
-            _segmentMilliseconds = Math.Clamp(segmentMilliseconds, 3_000, 12_000);
+            _segmentMilliseconds = Math.Clamp(segmentMilliseconds, 2_200, 12_000);
             var bytesPerSecond = _capture.WaveFormat.AverageBytesPerSecond;
             _overlapBytes = Align(bytesPerSecond * Math.Clamp(overlapMilliseconds, 0, 1_500) / 1_000,
                 _capture.WaveFormat.BlockAlign);
@@ -54,12 +55,38 @@ public static class SystemAudioCaptureService
         public IAsyncEnumerable<AudioSegment> ReadSegmentsAsync(CancellationToken cancellationToken = default) =>
             _segments.Reader.ReadAllAsync(cancellationToken);
 
+        /// <summary>
+        /// Останавливает накопление loopback-звука и очищает уже захваченный
+        /// хвост. Используется во время распознавания и озвучки, чтобы голос
+        /// Nexus не вернулся в Whisper как новая реплика.
+        /// </summary>
+        public void SuspendAndFlush()
+        {
+            lock (_sync)
+            {
+                if (_disposed) return;
+                _suspended = true;
+                _raw.SetLength(0);
+            }
+            while (_segments.Reader.TryRead(out _)) { }
+        }
+
+        public void Resume()
+        {
+            lock (_sync)
+            {
+                if (_disposed) return;
+                _raw.SetLength(0);
+                _suspended = false;
+            }
+        }
+
         private void CaptureOnDataAvailable(object? sender, WaveInEventArgs e)
         {
             if (e.BytesRecorded <= 0) return;
             lock (_sync)
             {
-                if (_disposed) return;
+                if (_disposed || _suspended) return;
                 _raw.Write(e.Buffer, 0, e.BytesRecorded);
             }
         }
@@ -87,10 +114,10 @@ public static class SystemAudioCaptureService
                         _raw.SetLength(0);
                         if (keep > 0) _raw.Write(snapshot, snapshot.Length - keep, keep);
                     }
-                    if (snapshot.Length < _capture.WaveFormat.AverageBytesPerSecond * 2) continue;
+                    if (snapshot.Length < _capture.WaveFormat.AverageBytesPerSecond * 5 / 4) continue;
                     var converted = ConvertRawToWav(snapshot, _capture.WaveFormat);
                     // Очень тихие окна не отправляются в Whisper. Это уменьшает
-                    // ложные субтитры и лишнюю нагрузку, но не отрезает тихую речь.
+                    // ложное распознавание и лишнюю нагрузку, но не отрезает тихую речь.
                     if (converted.Rms < 0.0025 && converted.Peak < 0.018) continue;
                     _segments.Writer.TryWrite(new AudioSegment(
                         Interlocked.Increment(ref _sequence), converted.Wav,
@@ -124,7 +151,7 @@ public static class SystemAudioCaptureService
     }
 
     public static ContinuousCaptureSession StartContinuousCapture(
-        int segmentMilliseconds = 5_500, int overlapMilliseconds = 750) =>
+        int segmentMilliseconds = 2_800, int overlapMilliseconds = 300) =>
         new(segmentMilliseconds, overlapMilliseconds);
 
     public static async Task<byte[]> CaptureWavAsync(int seconds, CancellationToken cancellationToken = default)
