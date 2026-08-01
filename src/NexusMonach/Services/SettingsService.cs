@@ -11,6 +11,16 @@ public static class SettingsService
     {
         var stored = await JsonStore.ReadAsync<BrowserSettings>(AppPaths.SettingsFile);
         Current = stored ?? new BrowserSettings();
+        Current.RestoreSession = false;
+        try
+        {
+            if (File.Exists(AppPaths.SessionFile))
+                File.Delete(AppPaths.SessionFile);
+        }
+        catch
+        {
+            // Старый session.json не используется и будет удалён при закрытии.
+        }
         if (Current.CrashReportDestination == CrashReportDestination.HttpsCollector &&
             string.IsNullOrWhiteSpace(Current.CrashReportEndpoint) &&
             Uri.TryCreate(GuardianReportingDefaults.Endpoint, UriKind.Absolute, out var endpoint) &&
@@ -31,6 +41,22 @@ public static class SettingsService
         {
             Current = settings.Clone();
             await JsonStore.WriteAsync(AppPaths.SettingsFile, Current);
+        }
+        finally
+        {
+            Gate.Release();
+        }
+    }
+
+    public static async Task<bool> ConsumeInitialProtectionSetupAsync()
+    {
+        await Gate.WaitAsync();
+        try
+        {
+            if (Current.InitialProtectionSetupShown) return false;
+            Current.InitialProtectionSetupShown = true;
+            await JsonStore.WriteAsync(AppPaths.SettingsFile, Current);
+            return true;
         }
         finally
         {

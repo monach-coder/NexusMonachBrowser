@@ -87,4 +87,17 @@ public static class BrowserEnvironment
             catch { /* Профиль мог быть уже закрыт вместе с последней вкладкой. */ }
         }
     }
+
+    public static async Task ClearEphemeralBrowsingDataAsync()
+    {
+        const CoreWebView2BrowsingDataKinds ephemeral =
+            CoreWebView2BrowsingDataKinds.BrowsingHistory |
+            CoreWebView2BrowsingDataKinds.DownloadHistory |
+            CoreWebView2BrowsingDataKinds.DiskCache;
+        foreach (var profile in Profiles.Values.Distinct().ToList())
+        {
+            try { await profile.ClearBrowsingDataAsync(ephemeral); }
+            catch { /* Профиль мог быть уже закрыт вместе с последней вкладкой. */ }
+        }
+    }
 }

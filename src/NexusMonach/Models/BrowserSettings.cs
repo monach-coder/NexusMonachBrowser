@@ -52,6 +52,14 @@ public enum CrashReportDestination
     MatrixDirect
 }
 
+public enum BrowserTheme
+{
+    MonachAqua,
+    Ocean,
+    Forest,
+    Amethyst
+}
+
 public sealed class BrowserSettings
 {
     public SearchEngineKind SearchEngine { get; set; } = SearchEngineKind.DuckDuckGo;
@@ -63,7 +71,9 @@ public sealed class BrowserSettings
     // Старое JSON-имя сохраняется, чтобы обновление не сбрасывало выбор пользователя.
     [JsonPropertyName("SaveHistory")]
     public bool BuildKnowledgeGraph { get; set; } = true;
-    public bool RestoreSession { get; set; } = true;
+    // Оставлено для чтения прежних settings.json. Обычный сеанс больше не
+    // сохраняется; восстановление применяется только к DPAPI-снимку Guardian.
+    public bool RestoreSession { get; set; }
     public bool ClearBrowsingDataOnExit { get; set; }
     public bool EnableExtensions { get; set; } = true;
     public bool EnableDevTools { get; set; }
@@ -86,6 +96,9 @@ public sealed class BrowserSettings
     public string CrashReportEndpoint { get; set; } = string.Empty;
     public string MatrixHomeserver { get; set; } = string.Empty;
     public string MatrixRoomId { get; set; } = string.Empty;
+    public bool InitialProtectionSetupShown { get; set; }
+    public BrowserTheme Theme { get; set; } = BrowserTheme.MonachAqua;
+    public bool ThemeSelectionCompleted { get; set; }
 
     public BrowserSettings Clone() => new()
     {
@@ -118,6 +131,9 @@ public sealed class BrowserSettings
         CrashReportDestination = CrashReportDestination,
         CrashReportEndpoint = CrashReportEndpoint,
         MatrixHomeserver = MatrixHomeserver,
-        MatrixRoomId = MatrixRoomId
+        MatrixRoomId = MatrixRoomId,
+        InitialProtectionSetupShown = InitialProtectionSetupShown,
+        Theme = Theme,
+        ThemeSelectionCompleted = ThemeSelectionCompleted
     };
 }

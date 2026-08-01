@@ -31,6 +31,7 @@ public partial class MainWindow : Window
     private bool _initialized;
     private bool _restartRequested;
     private bool _coreUpdatePromptShown;
+    private TopologyDetailsWindow? _topologyDetailsWindow;
     private readonly DispatcherTimer _memoryTimer;
     private readonly DispatcherTimer _networkPerformanceTimer;
     private readonly Dictionary<string, (long Received, long Sent)> _networkCounters = new(StringComparer.Ordinal);
@@ -96,13 +97,8 @@ public partial class MainWindow : Window
         await DataInitialization.Value;
 
         SecureRestartSession? secureRestartSession = null;
-        BrowserSession? session = null;
         if (!_isPrivate)
-        {
             secureRestartSession = await SecureRestartSessionService.LoadAsync();
-            if (secureRestartSession is null)
-                session = await SessionService.LoadAsync();
-        }
 
         if (secureRestartSession is { Tabs.Count: > 0 })
         {
@@ -112,12 +108,6 @@ public partial class MainWindow : Window
                 tab.SetPendingRestartState(state);
             }
             TabsList.SelectedIndex = secureRestartSession.ActiveIndex;
-        }
-        else if (session is { Urls.Count: > 0 })
-        {
-            foreach (var url in session.Urls)
-                AddTab(url);
-            TabsList.SelectedIndex = session.ActiveIndex;
         }
         else
         {
@@ -195,7 +185,6 @@ public partial class MainWindow : Window
             tab.Navigate(target.AbsoluteUri);
         };
         tab.SettingsRequested += (_, _) => Dispatcher.Invoke(ShowSettings);
-        tab.StatusMessageRequested += message => Dispatcher.Invoke(() => NetworkStatusText.Text = message);
         tab.CreatePopupAsync = CreatePopupAsync;
         var insertIndex = insertAfterActive ? TabsList.SelectedIndex + 1 : Tabs.Count;
         if (insertIndex >= 0 && insertIndex < Tabs.Count)
@@ -260,7 +249,6 @@ public partial class MainWindow : Window
             var query = input.Trim();
             _pendingSearchFollowUp[tab] = query;
             tab.Navigate(UrlService.Resolve(query));
-            NetworkStatusText.Text = "Поиск открыт · Следопыт включится после выбора сайта";
         }
         else
             tab.Navigate(UrlService.Resolve(input));
@@ -301,7 +289,6 @@ public partial class MainWindow : Window
             {
                 SshTerminalDock.Visibility = Visibility.Collapsed;
                 LocalAiDock.BeginBackgroundResearch(tab, query);
-                NetworkStatusText.Text = "Следопыт анализирует выбранный сайт…";
             });
             var pageText = await tab.GetReadablePageTextAsync();
             SledopytDiagnosticsService.Record("site-research", "page-read", "success",
@@ -321,7 +308,6 @@ public partial class MainWindow : Window
             Dispatcher.Invoke(() =>
             {
                 LocalAiDock.StoreBackgroundResearch(tab, sourceUrl, report);
-                NetworkStatusText.Text = $"Следопыт: выжимка готова · источников сайта {report.Items.Count}";
             });
         }
         catch (OperationCanceledException)
@@ -333,7 +319,6 @@ public partial class MainWindow : Window
             Dispatcher.Invoke(() =>
             {
                 LocalAiDock.FailBackgroundResearch("Анализ выбранного сайта остановлен.");
-                NetworkStatusText.Text = "Анализ выбранного сайта остановлен.";
             });
         }
         catch (Exception ex)
@@ -344,7 +329,6 @@ public partial class MainWindow : Window
             Dispatcher.Invoke(() =>
             {
                 LocalAiDock.FailBackgroundResearch(ex.Message);
-                NetworkStatusText.Text = "Следопыт: " + ex.Message;
             });
         }
         finally
@@ -399,7 +383,6 @@ public partial class MainWindow : Window
             if (tab.Core is null || !tab.CurrentUrl.StartsWith("https://nexus.local/search.html", StringComparison.OrdinalIgnoreCase)) return;
             var json = JsonSerializer.Serialize(report, WebJson);
             await tab.Core.ExecuteScriptAsync("window.nexusRender?.(" + json + ")");
-            NetworkStatusText.Text = $"Nexus Search: проанализировано источников {report.Items.Count}";
         }
         catch (OperationCanceledException)
         {
@@ -454,24 +437,11 @@ public partial class MainWindow : Window
         TopologyLocalPortsText.Text = _localPortsAvailable
             ? $"TCP {_localTcpPorts.Length} · UDP {_localUdpPorts.Length}"
             : "Нет доступа";
-        var snapshot = tab.GetNetworkSnapshot();
-        var route = SettingsService.Current.EnableCustomProxy ? "прокси браузера" : "системный маршрут";
-        var identity = NetworkIdentityService.Capture(_isPrivate);
-        NetworkIdentityText.Text = $"{identity.Id} · {identity.Route}";
-        NetworkIdentityText.ToolTip = identity.Details;
-        NetworkIdentityText.Foreground = identity.RouteProtected
-            ? (Brush)FindResource("AccentBrush")
-            : Brushes.DarkOrange;
-        DownloadRateText.Text = $"↓ {FormatRate(_downloadBytesPerSecond)}";
-        DownloadRateText.Foreground = RateBrush(_downloadBytesPerSecond);
-        UploadRateText.Text = $"↑ {FormatRate(_uploadBytesPerSecond)}";
-        UploadRateText.Foreground = RateBrush(_uploadBytesPerSecond);
-        PingText.Text = $"PING LAN {(_pingMilliseconds is null ? "—" : _pingMilliseconds + " мс")}";
-        PingText.Foreground = PingBrush(_pingMilliseconds);
-        NetworkDetailsText.Text = $"  ·  {(tab.IsSecureConnection ? "TLS защищён" : "без TLS")}  ·  {route}  ·  " +
-                                  $"сайт: {(string.IsNullOrWhiteSpace(tab.CurrentHost) ? "—" : tab.CurrentHost)}  ·  " +
-                                  $"запросы: {snapshot.RequestCount}  ·  порты: {FormatInline(snapshot.ObservedPorts)}  ·  " +
-                                  $"сторонние узлы: {snapshot.ThirdPartyHosts.Count}  ·  заблокировано: {tab.BlockedCount}";
+        TopologyRateText.Text =
+            $"↓ {FormatRate(_downloadBytesPerSecond)} · ↑ {FormatRate(_uploadBytesPerSecond)}";
+        TopologyRateText.Foreground = RateBrush(Math.Max(_downloadBytesPerSecond, _uploadBytesPerSecond));
+        TopologyPingText.Text = $"PING {(_pingMilliseconds is null ? "—" : _pingMilliseconds + " мс")}";
+        TopologyPingText.Foreground = PingBrush(_pingMilliseconds);
         PrivacyDock.SetCurrentTransport(tab.CurrentUrl);
         Title = (_isPrivate ? "Nexus Monach — приватно" : "Nexus Monach") +
                 (string.IsNullOrWhiteSpace(tab.Title) ? string.Empty : " · " + tab.Title);
@@ -509,7 +479,16 @@ public partial class MainWindow : Window
 
     private void ShowTopologyDetails(string heading, string summary, string details)
     {
-        new TopologyDetailsWindow(heading, summary, details) { Owner = this }.ShowDialog();
+        if (_topologyDetailsWindow is null || !_topologyDetailsWindow.IsLoaded)
+        {
+            _topologyDetailsWindow = new TopologyDetailsWindow(heading, summary, details) { Owner = this };
+            _topologyDetailsWindow.Closed += (_, _) => _topologyDetailsWindow = null;
+            _topologyDetailsWindow.Show();
+            return;
+        }
+        _topologyDetailsWindow.UpdateContent(heading, summary, details);
+        if (!_topologyDetailsWindow.IsVisible) _topologyDetailsWindow.Show();
+        _topologyDetailsWindow.Activate();
     }
 
     private void BrowserNode_Click(object sender, RoutedEventArgs e)
@@ -796,6 +775,11 @@ public partial class MainWindow : Window
     private async void ShoppingAgentTop_Click(object sender, RoutedEventArgs e)
     {
         if (ActiveTab?.Core is null) return;
+        if (ActiveTab.CurrentUrl.Equals(UrlService.NewTabUrl, StringComparison.OrdinalIgnoreCase))
+        {
+            await ActiveTab.Core.ExecuteScriptAsync("window.nexusFocusSearch?.()");
+            return;
+        }
         SshTerminalDock.Visibility = Visibility.Collapsed;
         await LocalAiDock.PrepareShoppingAgentAsync(ActiveTab);
     }
@@ -838,6 +822,7 @@ public partial class MainWindow : Window
         var window = new SettingsWindow(SettingsService.Current.Clone()) { Owner = this };
         if (window.ShowDialog() != true || window.ResultSettings is null) return;
         var extensionsChanged = SettingsService.Current.EnableExtensions != window.ResultSettings.EnableExtensions;
+        var themeChanged = SettingsService.Current.Theme != window.ResultSettings.Theme;
         var proxyChanged = SettingsService.Current.EnableCustomProxy != window.ResultSettings.EnableCustomProxy ||
                            SettingsService.Current.PreventWebRtcIpLeak != window.ResultSettings.PreventWebRtcIpLeak ||
                            SettingsService.Current.ProxyKind != window.ResultSettings.ProxyKind ||
@@ -854,34 +839,18 @@ public partial class MainWindow : Window
         if (!_isPrivate)
             await PrivacyDock.SetEnabledAsync(SettingsService.Current.ShowPrivacyMonitor);
         ExtensionsMenuItem.IsEnabled = !_isPrivate && BrowserEnvironment.ExtensionsEnabledAtStartup;
-        if (extensionsChanged || proxyChanged || secureNetworkChanged)
+        if (extensionsChanged || proxyChanged || secureNetworkChanged || themeChanged)
         {
             var reasons = new List<string>();
             if (extensionsChanged) reasons.Add("поддержка расширений");
             if (proxyChanged) reasons.Add("сетевой прокси");
             if (secureNetworkChanged) reasons.Add("защищённый DNS");
+            if (themeChanged) reasons.Add("цветовая тема");
             var reason = "Изменены: " + string.Join(", ", reasons) + ".";
             GlassDialogWindow.Show(this,
                 reason + " Изменения вступят в силу после полного перезапуска Nexus Monach.",
                 "Требуется перезапуск", MessageBoxButton.OK, MessageBoxImage.Information);
         }
-    }
-
-    private async void ClearData_Click(object sender, RoutedEventArgs e)
-    {
-        if (GlassDialogWindow.Show(this,
-                "Удалить cookies, кэш, разрешения сайтов, сохранённые формы и локальный граф знаний?\n\nПосле очистки сайты могут выйти из учётных записей.",
-                "Очистка данных", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
-            return;
-        if (ActiveTab?.Core is not null)
-            await ActiveTab.Core.Profile.ClearBrowsingDataAsync();
-        if (!_isPrivate)
-        {
-            await KnowledgeGraphService.ClearAsync();
-            try { if (File.Exists(AppPaths.HistoryFile)) File.Delete(AppPaths.HistoryFile); } catch { }
-        }
-        GlassDialogWindow.Show(this, "Данные просмотра очищены.", "Nexus Monach",
-            MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private void About_Click(object sender, RoutedEventArgs e) => new AboutWindow { Owner = this }.ShowDialog();
@@ -896,7 +865,6 @@ public partial class MainWindow : Window
         else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.G) { ShowKnowledgeGraph_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.D) { Bookmark_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.J) { ShowDownloads_Click(sender, e); e.Handled = true; }
-        else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.Delete) { ClearData_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == ModifierKeys.Alt && e.Key == Key.Left) { ActiveTab?.GoBack(); e.Handled = true; }
         else if (Keyboard.Modifiers == ModifierKeys.Alt && e.Key == Key.Right) { ActiveTab?.GoForward(); e.Handled = true; }
         else if (e.Key == Key.F12 ||
@@ -1116,20 +1084,17 @@ public partial class MainWindow : Window
                 return;
             }
         }
-        else if (!_isPrivate && SettingsService.Current.ClearBrowsingDataOnExit && ActiveTab?.Core is not null)
+        var lastBrowserWindow = !Application.Current.Windows.OfType<MainWindow>()
+            .Any(window => !ReferenceEquals(window, this) && window.IsVisible);
+        if (!_restartRequested && lastBrowserWindow)
         {
-            try { await ActiveTab.Core.Profile.ClearBrowsingDataAsync(); }
-            catch { /* Закрытие продолжится даже при повреждённом профиле. */ }
-            await KnowledgeGraphService.ClearAsync();
-            try { if (File.Exists(AppPaths.HistoryFile)) File.Delete(AppPaths.HistoryFile); } catch { }
-            if (File.Exists(AppPaths.SessionFile))
-                File.Delete(AppPaths.SessionFile);
-            SecureRestartSessionService.Delete();
-        }
-        else if (!_isPrivate && SettingsService.Current.RestoreSession)
-        {
-            var urls = Tabs.Select(x => x.CurrentUrl).ToList();
-            await SessionService.SaveAsync(urls, Math.Max(0, TabsList.SelectedIndex));
+            // Граф знаний, cookies, авторизация, пароли и DOM-хранилища остаются.
+            // Удаляются только следы навигации/поисковых переходов и временный кэш.
+            await BrowserEnvironment.ClearEphemeralBrowsingDataAsync();
+            try { if (File.Exists(AppPaths.HistoryFile)) File.Delete(AppPaths.HistoryFile); }
+            catch { /* Устаревший файл истории мог отсутствовать или быть занят. */ }
+            try { if (File.Exists(AppPaths.SessionFile)) File.Delete(AppPaths.SessionFile); }
+            catch { /* Обычный сеанс не должен переживать закрытие браузера. */ }
         }
 
         BrowserHost.Content = null;

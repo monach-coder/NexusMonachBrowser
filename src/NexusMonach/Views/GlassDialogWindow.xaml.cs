@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 
 namespace NexusMonach.Views;
@@ -19,6 +20,12 @@ public partial class GlassDialogWindow : Window
         NoButton.Visibility = buttons is MessageBoxButton.YesNo or MessageBoxButton.YesNoCancel ? Visibility.Visible : Visibility.Collapsed;
         CancelDialogButton.Visibility = buttons is MessageBoxButton.OKCancel or MessageBoxButton.YesNoCancel ? Visibility.Visible : Visibility.Collapsed;
         if (buttons == MessageBoxButton.OKCancel) OkButton.Visibility = Visibility.Visible;
+        if (buttons is MessageBoxButton.YesNo or MessageBoxButton.YesNoCancel)
+        {
+            ApplyTemplate();
+            if (Template.FindName("GlassCloseButton", this) is Button closeButton)
+                closeButton.Visibility = Visibility.Collapsed;
+        }
         var icon = image switch
         {
             MessageBoxImage.Warning => (Text: "⚠", Brush: (Brush)Brushes.DarkOrange),

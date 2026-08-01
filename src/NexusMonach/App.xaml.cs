@@ -50,6 +50,18 @@ public partial class App : Application
         try
         {
             await SettingsService.InitializeAsync();
+            if (!SettingsService.Current.ThemeSelectionCompleted)
+            {
+                splash.Hide();
+                var themePicker = new ThemeSelectionWindow(SettingsService.Current.Theme);
+                themePicker.ShowDialog();
+                var firstRunSettings = SettingsService.Current.Clone();
+                firstRunSettings.Theme = themePicker.ResultTheme;
+                firstRunSettings.ThemeSelectionCompleted = true;
+                await SettingsService.SaveAsync(firstRunSettings);
+                splash.Show();
+            }
+            ThemeService.Apply(SettingsService.Current.Theme);
             CrashReportService.AddBreadcrumb("startup", "settings-ready");
             if (e.Args.Any(x => x.Equals("--guardian-test-crash", StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidOperationException("Intentional Nexus Guardian crash-pipeline test.");

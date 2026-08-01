@@ -31,8 +31,7 @@
                  FontFamily="Cascadia Mono, Consolas" FontSize="12" Padding="12" />
 
         <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
-            <Button Content="Копировать" Padding="16,7" Margin="0,0,8,0" Click="Copy_Click" />
-            <Button Content="Закрыть" Padding="18,7" Click="Close_Click" />
+            <Button Content="Копировать" Padding="16,7" Click="Copy_Click" />
         </StackPanel>
     </Grid>
 </Window>

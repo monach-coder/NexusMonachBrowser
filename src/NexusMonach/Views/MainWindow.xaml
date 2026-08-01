@@ -28,9 +28,8 @@
             <RowDefinition Height="54" />
             <RowDefinition Height="2" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="44" />
+            <RowDefinition Height="54" />
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="40" />
         </Grid.RowDefinitions>
 
         <!-- Собственная верхняя панель без системных чёрных полос. -->
@@ -218,7 +217,6 @@
                         <MenuItem Header="SSH-терминал Linux" Click="SshTerminal_Click" />
                         <MenuItem Header="Nexus Guardian · локальные рапорты" Click="ShowGuardianCenter_Click" />
                         <MenuItem Header="Настройки" Click="ShowSettings_Click" />
-                        <MenuItem Header="Очистить данные просмотра" InputGestureText="Ctrl+Shift+Del" Click="ClearData_Click" />
                         <Separator />
                         <MenuItem Header="О браузере" Click="About_Click" />
                     </ContextMenu>
@@ -271,7 +269,7 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
@@ -310,7 +308,19 @@
                         <TextBlock x:Name="TopologyProxyText" Text="Прямое подключение" FontSize="9.5" HorizontalAlignment="Center" />
                     </StackPanel>
                 </Button>
-                <Border Grid.Column="7" Height="2" Margin="6,0" Background="#2B6463" VerticalAlignment="Center" />
+                <Border Grid.Column="7" Margin="8,4" Padding="8,3" Background="#101D29"
+                        BorderBrush="#2B6463" BorderThickness="1" CornerRadius="7"
+                        VerticalAlignment="Center"
+                        ToolTip="Текущая скорость активного сетевого адаптера и локальная проверка шлюза Windows">
+                    <StackPanel>
+                        <TextBlock x:Name="TopologyRateText" Text="↓ — · ↑ —"
+                                   FontSize="8.5" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" />
+                        <TextBlock x:Name="TopologyPingText" Text="PING —" Margin="0,2,0,0"
+                                   FontSize="8" HorizontalAlignment="Center"
+                                   Foreground="{StaticResource MutedTextBrush}" />
+                    </StackPanel>
+                </Border>
 
                 <Button Grid.Column="8" Style="{StaticResource TopologyNodeButton}" Click="InternetNode_Click">
                     <StackPanel>
@@ -334,22 +344,5 @@
 
         <views:PrivacyDockControl x:Name="PrivacyDock" Grid.Row="5" />
 
-        <Border Grid.Row="6" Background="#122832" BorderBrush="#36D7C4" BorderThickness="0,2,0,0"
-                Padding="14,7">
-            <TextBlock x:Name="NetworkStatusText" FontSize="12"
-                       FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}"
-                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
-                       ToolTip="↓/↑ — текущая скорость наиболее активного сетевого адаптера; PING LAN — локальная проверка шлюза Windows без внешнего запроса">
-                <Run Text="СЕТЕВОЙ СТАТУС  ·  " />
-                <Run x:Name="NetworkIdentityText" Text="ЛИЧНОСТЬ —" Foreground="{StaticResource GoldBrush}" />
-                <Run Text="  ·  " />
-                <Run x:Name="DownloadRateText" Text="↓ —" />
-                <Run Text="  ·  " />
-                <Run x:Name="UploadRateText" Text="↑ —" />
-                <Run Text="  ·  " />
-                <Run x:Name="PingText" Text="PING LAN —" />
-                <Run x:Name="NetworkDetailsText" Text="  ·  подготовка…" />
-            </TextBlock>
-        </Border>
     </Grid>
 </Window>

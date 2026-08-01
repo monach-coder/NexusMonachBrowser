@@ -1,10 +1,16 @@
 <Window x:Class="NexusMonach.Views.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Настройки Nexus Monach" Width="640" Height="820" MinWidth="560" MinHeight="580"
+        Title="Настройки Nexus Monach" Width="960" Height="720" MinWidth="820" MinHeight="600"
         Background="{StaticResource BackgroundBrush}" Foreground="{StaticResource TextBrush}"
-        Icon="/Assets/nexus-monach.ico" WindowStartupLocation="CenterOwner" Style="{StaticResource GlassPopupWindow}">
+        Icon="/Assets/nexus-monach.ico" WindowStartupLocation="CenterOwner"
+        Style="{StaticResource GlassPopupWindow}">
     <Window.Resources>
+        <SolidColorBrush x:Key="{x:Static SystemColors.ControlTextBrushKey}" Color="#EEF4F8" />
+        <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="#FFFFFF" />
+        <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#285F67" />
+        <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="#203C49" />
+        <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="#EEF4F8" />
         <Style x:Key="ActionButton" TargetType="Button">
             <Setter Property="Padding" Value="18,8" />
             <Setter Property="Margin" Value="6,0,0,0" />
@@ -13,165 +19,317 @@
             <Setter Property="BorderBrush" Value="#3F8990" />
             <Setter Property="Cursor" Value="Hand" />
         </Style>
+        <Style x:Key="SettingsCard" TargetType="Border">
+            <Setter Property="Margin" Value="0,0,12,14" />
+            <Setter Property="Padding" Value="18" />
+            <Setter Property="Background" Value="#111E2B" />
+            <Setter Property="BorderBrush" Value="#2A465A" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="10" />
+        </Style>
+        <Style TargetType="TreeViewItem">
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Padding" Value="7,5" />
+            <Setter Property="Margin" Value="0,1" />
+            <Setter Property="IsExpanded" Value="True" />
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Foreground" Value="White" />
+                    <Setter Property="Background" Value="#285F67" />
+                    <Setter Property="FontWeight" Value="SemiBold" />
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
-    <Grid Margin="24">
+
+    <Grid Margin="22">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <ScrollViewer VerticalScrollBarVisibility="Auto">
-            <StackPanel Margin="0,0,12,0">
-                <TextBlock Text="Настройки" FontSize="26" FontWeight="SemiBold" />
-                <TextBlock Text="Изменения защиты применяются ко всем открытым вкладкам."
-                           Margin="0,4,0,22" Foreground="{StaticResource MutedTextBrush}" />
+        <StackPanel Margin="0,0,0,18">
+            <TextBlock Text="Настройки" FontSize="26" FontWeight="SemiBold" />
+            <TextBlock Text="Выберите раздел слева. Изменения применяются ко всем открытым вкладкам."
+                       Margin="0,4,0,0" Foreground="{StaticResource MutedTextBrush}" />
+        </StackPanel>
 
-                <TextBlock Text="Поиск" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
-                <TextBlock Text="Поисковая система по умолчанию" Margin="0,12,0,5" />
-                <ComboBox x:Name="SearchEngineCombo" SelectionChanged="SearchEngineCombo_SelectionChanged" />
-                <TextBlock x:Name="SearchEngineDescriptionText" TextWrapping="Wrap" Margin="0,6,0,0"
-                           FontSize="11" Foreground="{StaticResource MutedTextBrush}" />
-                <TextBlock Text="Домашняя страница" Margin="0,14,0,5" />
-                <TextBox x:Name="HomePageBox" Padding="9,7" />
-                <TextBlock Text="Оставьте app://newtab для встроенной стартовой страницы."
-                           Margin="0,4,0,18" FontSize="11" Foreground="{StaticResource MutedTextBrush}" />
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="245" />
+                <ColumnDefinition Width="18" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
 
-                <Separator Margin="0,4,0,18" Background="#2D4053" />
-                <TextBlock Text="Приватность" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
-                <TextBlock Text="Уровень защиты от отслеживания" Margin="0,12,0,5" />
-                <ComboBox x:Name="PrivacyLevelCombo" />
-                <TextBlock Text="Сбалансированный режим рекомендуется для обычной работы. Строгий режим блокирует больше сторонних трекеров, но способен нарушить отдельные функции сайтов."
-                           TextWrapping="Wrap" Margin="0,5,0,7" FontSize="11" Foreground="{StaticResource MutedTextBrush}" />
-                <CheckBox x:Name="DntCheck" Content="Отправлять сигнал Do Not Track" />
-                <CheckBox x:Name="GpcCheck" Content="Отправлять Global Privacy Control" />
-                <CheckBox x:Name="StripParametersCheck" Content="Удалять рекламные метки из ссылок (utm, fbclid, gclid и другие)" />
-                <CheckBox x:Name="BlockNotificationsCheck" Content="Блокировать запросы на уведомления" />
-                <CheckBox x:Name="KnowledgeGraphCheck" Content="Строить локальный граф знаний из посещённых страниц" />
-                <CheckBox x:Name="RestoreSessionCheck" Content="Восстанавливать вкладки после перезапуска" />
-                <CheckBox x:Name="ClearOnExitCheck" Content="Очищать данные сайтов при выходе" />
-                <CheckBox x:Name="MemorySaverCheck" Content="Экономить память, приостанавливая неактивные вкладки" />
+            <Border Grid.Column="0" Padding="10" Background="#0E1924" BorderBrush="#2A465A"
+                    BorderThickness="1" CornerRadius="10">
+                <TreeView x:Name="SettingsTree" Background="Transparent"
+                          Foreground="{StaticResource TextBrush}" BorderThickness="0"
+                          SelectedItemChanged="SettingsTree_SelectedItemChanged">
+                    <TreeViewItem Header="Основные">
+                        <TreeViewItem x:Name="SearchTreeItem" Header="Поиск и стартовая страница"
+                                      Tag="Search" IsSelected="True" />
+                        <TreeViewItem Header="Внешний вид" Tag="Appearance" />
+                        <TreeViewItem Header="Совместимость и функции" Tag="Compatibility" />
+                    </TreeViewItem>
+                    <TreeViewItem Header="Защита">
+                        <TreeViewItem Header="Приватность" Tag="Privacy" />
+                        <TreeViewItem Header="Сеть, прокси и DNS" Tag="Network" />
+                        <TreeViewItem Header="Privacy Dock" Tag="Monitor" />
+                    </TreeViewItem>
+                    <TreeViewItem Header="Данные и доступ">
+                        <TreeViewItem Header="Nexus Guardian" Tag="Guardian" />
+                        <TreeViewItem Header="Passkeys и Windows Hello" Tag="Passkeys" />
+                    </TreeViewItem>
+                </TreeView>
+            </Border>
 
-                <Separator Margin="0,14,0,18" Background="#2D4053" />
-                <TextBlock Text="Совместимость и функции" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
-                <CheckBox x:Name="ExtensionsCheck" Content="Разрешить распакованные расширения (требуется перезапуск)" />
-                <CheckBox x:Name="PasswordCheck" Content="Разрешить WebView2 сохранять и подставлять пароли" />
-                <CheckBox x:Name="AutofillCheck" Content="Разрешить автозаполнение обычных форм" />
-                <TextBlock Text="F12 открывает стандартные Chromium DevTools: Elements, Console, Sources, Network, Performance и другие инструменты."
-                           TextWrapping="Wrap" Margin="0,7,0,0" FontSize="11" Foreground="{StaticResource MutedTextBrush}" />
+            <Grid Grid.Column="2">
+                <TextBlock x:Name="SettingsSectionTitle" Text="Поиск и стартовая страница"
+                           FontSize="20" FontWeight="SemiBold" Margin="0,0,0,14"
+                           VerticalAlignment="Top" />
 
-                <Separator Margin="0,18,0,18" Background="#2D4053" />
-                <TextBlock Text="Nexus Guardian" FontSize="16" FontWeight="SemiBold"
-                           Foreground="{StaticResource AccentBrush}" />
-                <TextBlock Text="Отчёты о сбоях" Margin="0,12,0,5" />
-                <ComboBox x:Name="CrashReportModeCombo"
-                          SelectionChanged="CrashReportModeCombo_SelectionChanged" />
-                <Button Content="Открыть локальный Центр Guardian" Style="{StaticResource ActionButton}"
-                        HorizontalAlignment="Left" Margin="0,10,0,2" Click="OpenGuardianCenter_Click" />
-                <TextBlock x:Name="CrashDestinationLabel" Text="Куда отправлять" Margin="0,12,0,5" />
-                <ComboBox x:Name="CrashReportDestinationCombo"
-                          SelectionChanged="CrashReportDestinationCombo_SelectionChanged" />
-
-                <StackPanel x:Name="CollectorSettingsPanel">
-                    <TextBlock Text="HTTPS-адрес приёмника отчётов (необязательно)" Margin="0,12,0,5" />
-                    <TextBox x:Name="CrashReportEndpointBox" Padding="9,7" />
-                </StackPanel>
-
-                <StackPanel x:Name="MatrixSettingsPanel" Visibility="Collapsed">
-                    <TextBlock Text="Matrix homeserver" Margin="0,12,0,5" />
-                    <TextBox x:Name="MatrixHomeserverBox" Padding="9,7"
-                             ToolTip="Например: https://matrix.example.org" />
-                    <TextBlock Text="Room ID" Margin="0,12,0,5" />
-                    <TextBox x:Name="MatrixRoomIdBox" Padding="9,7"
-                             ToolTip="Внутренний ID вида !room:example.org, не отображаемое имя комнаты" />
-                    <TextBlock Text="Access token бота" Margin="0,12,0,5" />
-                    <PasswordBox x:Name="MatrixAccessTokenBox" Padding="9,7" />
-                    <TextBlock x:Name="MatrixTokenStatusText" Margin="0,5,0,0" FontSize="11"
-                               Foreground="{StaticResource MutedTextBrush}" />
-                    <CheckBox x:Name="DeleteMatrixTokenCheck"
-                              Content="Удалить ранее сохранённый Matrix token" />
-                    <Button Content="Проверить Matrix" Style="{StaticResource ActionButton}"
-                            HorizontalAlignment="Left" Margin="0,8,0,0"
-                            Click="TestMatrix_Click" />
-                </StackPanel>
-                <TextBlock Margin="0,5,0,0" TextWrapping="Wrap" FontSize="11"
-                           Foreground="{StaticResource MutedTextBrush}"
-                           Text="Сейчас рекомендуется локальный режим: рапорты остаются только на этом компьютере и доступны в Центре Guardian. Guardian удаляет URL, историю, DOM, cookies, токены, введённые данные, IP/DNS и содержимое аудио. Сетевую доставку можно будет подключить позже без изменения формата рапорта." />
-
-                <Separator Margin="0,18,0,18" Background="#2D4053" />
-                <TextBlock Text="Сеть и прокси" FontSize="16" FontWeight="SemiBold"
-                           Foreground="{StaticResource AccentBrush}" />
-                <CheckBox x:Name="CustomProxyCheck" Content="Использовать собственный прокси для браузера" />
-                <TextBlock Text="Тип прокси" Margin="0,8,0,5" />
-                <ComboBox x:Name="ProxyTypeCombo" />
-                <Grid Margin="0,12,0,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="120" />
-                    </Grid.ColumnDefinitions>
+                <ScrollViewer x:Name="SearchSection" Margin="0,46,0,0"
+                              VerticalScrollBarVisibility="Auto">
                     <StackPanel>
-                        <TextBlock Text="IP-адрес или имя сервера" Margin="0,0,0,5" />
-                        <TextBox x:Name="ProxyHostBox" Padding="9,7" />
+                        <Border Style="{StaticResource SettingsCard}">
+                            <StackPanel>
+                                <TextBlock Text="Поисковая система по умолчанию"
+                                           FontSize="15" FontWeight="SemiBold" />
+                                <ComboBox x:Name="SearchEngineCombo" Margin="0,12,0,0"
+                                          SelectionChanged="SearchEngineCombo_SelectionChanged" />
+                                <TextBlock x:Name="SearchEngineDescriptionText" TextWrapping="Wrap"
+                                           Margin="0,8,0,0" FontSize="11"
+                                           Foreground="{StaticResource MutedTextBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource SettingsCard}">
+                            <StackPanel>
+                                <TextBlock Text="Домашняя страница" FontSize="15" FontWeight="SemiBold" />
+                                <TextBox x:Name="HomePageBox" Padding="9,7" Margin="0,12,0,0" />
+                                <TextBlock Text="app://newtab открывает встроенную локальную стартовую страницу."
+                                           Margin="0,6,0,0" FontSize="11"
+                                           Foreground="{StaticResource MutedTextBrush}" />
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
-                    <StackPanel Grid.Column="1" Margin="12,0,0,0">
-                        <TextBlock Text="Порт" Margin="0,0,0,5" />
-                        <TextBox x:Name="ProxyPortBox" Padding="9,7" />
+                </ScrollViewer>
+
+                <ScrollViewer x:Name="AppearanceSection" Margin="0,46,0,0" Visibility="Collapsed"
+                              VerticalScrollBarVisibility="Auto">
+                    <Border Style="{StaticResource SettingsCard}">
+                        <StackPanel>
+                            <TextBlock Text="Цветовая тема" FontSize="15" FontWeight="SemiBold" />
+                            <ComboBox x:Name="ThemeCombo" Margin="0,12,0,0" />
+                            <TextBlock Text="Monach Aqua — фирменная бирюза; Ocean — синий; Forest — зелёный; Amethyst — фиолетовый. Новая тема полностью применяется после перезапуска."
+                                       TextWrapping="Wrap" Margin="0,8,0,0" FontSize="11"
+                                       Foreground="{StaticResource MutedTextBrush}" />
+                        </StackPanel>
+                    </Border>
+                </ScrollViewer>
+
+                <ScrollViewer x:Name="PrivacySection" Margin="0,46,0,0" Visibility="Collapsed"
+                              VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <Border Style="{StaticResource SettingsCard}">
+                            <StackPanel>
+                                <TextBlock Text="Защита от отслеживания" FontSize="15" FontWeight="SemiBold" />
+                                <ComboBox x:Name="PrivacyLevelCombo" Margin="0,12,0,0" />
+                                <TextBlock Text="Строгий режим блокирует больше сторонних трекеров, но может нарушить отдельные функции сайтов."
+                                           TextWrapping="Wrap" Margin="0,7,0,12" FontSize="11"
+                                           Foreground="{StaticResource MutedTextBrush}" />
+                                <CheckBox x:Name="DntCheck" Content="Отправлять сигнал Do Not Track" />
+                                <CheckBox x:Name="GpcCheck" Content="Отправлять Global Privacy Control" />
+                                <CheckBox x:Name="StripParametersCheck"
+                                          Content="Удалять рекламные метки из ссылок (utm, fbclid, gclid и другие)" />
+                                <CheckBox x:Name="BlockNotificationsCheck"
+                                          Content="Блокировать запросы на уведомления" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource SettingsCard}">
+                            <StackPanel>
+                                <TextBlock Text="Локальные данные и память" FontSize="15" FontWeight="SemiBold" />
+                                <CheckBox x:Name="KnowledgeGraphCheck" Margin="0,12,0,0"
+                                          Content="Строить локальный граф знаний из посещённых страниц" />
+                                <CheckBox x:Name="MemorySaverCheck"
+                                          Content="Экономить память, приостанавливая неактивные вкладки" />
+                                <TextBlock Text="Обычный сеанс удаляется при закрытии. При обновлении ядра Guardian создаёт отдельный зашифрованный снимок вкладок и форм."
+                                           TextWrapping="Wrap" Margin="0,9,0,0" FontSize="11"
+                                           Foreground="{StaticResource MutedTextBrush}" />
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
-                </Grid>
-                <TextBlock Text="Сайты с прямым подключением — по одному в строке" Margin="0,12,0,5" />
-                <TextBox x:Name="ProxyBypassBox" Padding="9,7" MinHeight="72" AcceptsReturn="True"
-                         VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" />
-                <TextBlock Margin="0,5,0,0" TextWrapping="Wrap" FontSize="11"
-                           Foreground="{StaticResource MutedTextBrush}"
-                           Text="Пример: ozon.ru. Nexus Monach автоматически добавит поддомены. Исключения относятся только к прокси, указанному здесь, и не управляют системным VPN. Изменения вступают в силу после перезапуска браузера." />
+                </ScrollViewer>
 
-                <TextBlock Text="Защищённый DNS" Margin="0,14,0,5" />
-                <ComboBox x:Name="SecureDnsModeCombo" />
-                <TextBlock Text="Проверенный DoH-провайдер" Margin="0,10,0,5" />
-                <ComboBox x:Name="SecureDnsProviderCombo" />
-                <CheckBox x:Name="HttpsFirstCheck" Margin="0,12,0,0"
-                          Content="HTTPS-first: сначала пробовать защищённый адрес сайта" />
-                <TextBlock Margin="0,5,0,0" TextWrapping="Wrap" FontSize="11"
-                           Foreground="{StaticResource MutedTextBrush}"
-                           Text="Cloudflare используется без категорийной фильтрации. Quad9 блокирует только известные вредоносные домены. Строгий DoH не переходит незаметно на обычный DNS; Следопыт использует тот же режим и подключается к уже проверенному публичному IP. HTTPS-first никогда не игнорирует ошибку TLS. Изменения DNS требуют перезапуска." />
+                <ScrollViewer x:Name="CompatibilitySection" Margin="0,46,0,0" Visibility="Collapsed"
+                              VerticalScrollBarVisibility="Auto">
+                    <Border Style="{StaticResource SettingsCard}">
+                        <StackPanel>
+                            <TextBlock Text="Функции WebView2" FontSize="15" FontWeight="SemiBold" />
+                            <CheckBox x:Name="ExtensionsCheck" Margin="0,12,0,0"
+                                      Content="Разрешить распакованные расширения (требуется перезапуск)" />
+                            <CheckBox x:Name="PasswordCheck"
+                                      Content="Разрешить WebView2 сохранять и подставлять пароли" />
+                            <CheckBox x:Name="AutofillCheck"
+                                      Content="Разрешить автозаполнение обычных форм" />
+                            <TextBlock Text="F12 открывает стандартные Chromium DevTools: Elements, Console, Sources, Network и Performance."
+                                       TextWrapping="Wrap" Margin="0,9,0,0" FontSize="11"
+                                       Foreground="{StaticResource MutedTextBrush}" />
+                        </StackPanel>
+                    </Border>
+                </ScrollViewer>
 
-                <Separator Margin="0,18,0,18" Background="#2D4053" />
-                <TextBlock Text="Монитор приватности" FontSize="16" FontWeight="SemiBold"
-                           Foreground="{StaticResource AccentBrush}" />
-                <CheckBox x:Name="PrivacyMonitorCheck" Content="Показывать нижнюю панель Privacy Dock при запуске браузера" />
-                <CheckBox x:Name="PreventWebRtcLeakCheck" Content="Запрещать WebRTC обходить прокси и раскрывать другой IP (требуется перезапуск)" />
-                <TextBlock Margin="0,4,0,0" TextWrapping="Wrap" FontSize="11"
-                           Foreground="{StaticResource MutedTextBrush}"
-                           Text="Privacy Dock работает локально: анализирует интерфейсы, маршрут, DNS Windows и ICE-кандидаты WebRTC без STUN/TURN. Фоновых запросов к Cloudflare, ipapi.is и другим IP-сервисам нет. Поэтому внешний IP и его достоверный регион не определяются; регион показывается только как оценка по настройкам Windows." />
+                <ScrollViewer x:Name="GuardianSection" Margin="0,46,0,0" Visibility="Collapsed"
+                              VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <Border Style="{StaticResource SettingsCard}">
+                            <StackPanel>
+                                <TextBlock Text="Отчёты о сбоях" FontSize="15" FontWeight="SemiBold" />
+                                <ComboBox x:Name="CrashReportModeCombo" Margin="0,12,0,0"
+                                          SelectionChanged="CrashReportModeCombo_SelectionChanged" />
+                                <Button Content="Открыть локальный Центр Guardian"
+                                        Style="{StaticResource ActionButton}" HorizontalAlignment="Left"
+                                        Margin="0,12,0,2" Click="OpenGuardianCenter_Click" />
+                                <TextBlock x:Name="CrashDestinationLabel" Text="Куда отправлять"
+                                           Margin="0,14,0,5" />
+                                <ComboBox x:Name="CrashReportDestinationCombo"
+                                          SelectionChanged="CrashReportDestinationCombo_SelectionChanged" />
+                                <StackPanel x:Name="CollectorSettingsPanel">
+                                    <TextBlock Text="HTTPS-адрес приёмника отчётов (необязательно)"
+                                               Margin="0,12,0,5" />
+                                    <TextBox x:Name="CrashReportEndpointBox" Padding="9,7" />
+                                </StackPanel>
+                                <StackPanel x:Name="MatrixSettingsPanel" Visibility="Collapsed">
+                                    <TextBlock Text="Matrix homeserver" Margin="0,12,0,5" />
+                                    <TextBox x:Name="MatrixHomeserverBox" Padding="9,7"
+                                             ToolTip="Например: https://matrix.example.org" />
+                                    <TextBlock Text="Room ID" Margin="0,12,0,5" />
+                                    <TextBox x:Name="MatrixRoomIdBox" Padding="9,7"
+                                             ToolTip="Внутренний ID вида !room:example.org" />
+                                    <TextBlock Text="Access token бота" Margin="0,12,0,5" />
+                                    <PasswordBox x:Name="MatrixAccessTokenBox" Padding="9,7" />
+                                    <TextBlock x:Name="MatrixTokenStatusText" Margin="0,5,0,0"
+                                               FontSize="11" Foreground="{StaticResource MutedTextBrush}" />
+                                    <CheckBox x:Name="DeleteMatrixTokenCheck"
+                                              Content="Удалить ранее сохранённый Matrix token" />
+                                    <Button Content="Проверить Matrix" Style="{StaticResource ActionButton}"
+                                            HorizontalAlignment="Left" Margin="0,8,0,0"
+                                            Click="TestMatrix_Click" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource SettingsCard}">
+                            <TextBlock TextWrapping="Wrap" FontSize="11"
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       Text="В локальном режиме рапорты остаются только на этом компьютере. Guardian удаляет URL, историю, DOM, cookies, токены, введённые данные, IP/DNS и содержимое аудио." />
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
 
-                <Separator Margin="0,18,0,18" Background="#2D4053" />
-                <TextBlock Text="Passkeys и Windows Hello" FontSize="16" FontWeight="SemiBold"
-                           Foreground="{StaticResource AccentBrush}" />
-                <TextBlock Margin="0,10,0,12" TextWrapping="Wrap" FontSize="12"
-                           Foreground="{StaticResource MutedTextBrush}"
-                           Text="Nexus Monach поддерживает вход по Passkey через WebAuthn движка. Отпечаток, лицо и PIN проверяет Windows Hello: браузер и сайт не получают ваши биометрические данные." />
-                <WrapPanel>
-                    <Button Content="Параметры входа Windows" Style="{StaticResource ActionButton}"
-                            Margin="0,0,8,8" Click="OpenSignInOptions_Click" />
-                    <Button Content="Настроить отпечаток" Style="{StaticResource ActionButton}"
-                            Margin="0,0,8,8" Background="#303C49" BorderBrush="#526273"
-                            Click="OpenFingerprintSetup_Click" />
-                </WrapPanel>
-                <TextBlock TextWrapping="Wrap" Margin="0,2,0,0" FontSize="11"
-                           Foreground="{StaticResource MutedTextBrush}"
-                           Text="В Windows 11 24H2 доступ отдельных приложений к ключам настраивается в разделе «Конфиденциальность и безопасность → Доступ к ключам доступа»." />
+                <ScrollViewer x:Name="NetworkSection" Margin="0,46,0,0" Visibility="Collapsed"
+                              VerticalScrollBarVisibility="Auto">
+                    <StackPanel>
+                        <Border Style="{StaticResource SettingsCard}">
+                            <StackPanel>
+                                <TextBlock Text="Прокси" FontSize="15" FontWeight="SemiBold" />
+                                <CheckBox x:Name="CustomProxyCheck" Margin="0,12,0,0"
+                                          Content="Использовать собственный прокси для браузера" />
+                                <TextBlock Text="Тип прокси" Margin="0,10,0,5" />
+                                <ComboBox x:Name="ProxyTypeCombo" />
+                                <Grid Margin="0,12,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="120" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock Text="IP-адрес или имя сервера" Margin="0,0,0,5" />
+                                        <TextBox x:Name="ProxyHostBox" Padding="9,7" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Margin="12,0,0,0">
+                                        <TextBlock Text="Порт" Margin="0,0,0,5" />
+                                        <TextBox x:Name="ProxyPortBox" Padding="9,7" />
+                                    </StackPanel>
+                                </Grid>
+                                <TextBlock Text="Сайты с прямым подключением — по одному в строке"
+                                           Margin="0,12,0,5" />
+                                <TextBox x:Name="ProxyBypassBox" Padding="9,7" MinHeight="68"
+                                         AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
+                                         TextWrapping="Wrap" />
+                                <TextBlock Text="Изменения прокси вступают в силу после перезапуска браузера."
+                                           TextWrapping="Wrap" Margin="0,6,0,0" FontSize="11"
+                                           Foreground="{StaticResource MutedTextBrush}" />
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource SettingsCard}">
+                            <StackPanel>
+                                <TextBlock Text="DNS и HTTPS" FontSize="15" FontWeight="SemiBold" />
+                                <TextBlock Text="Защищённый DNS" Margin="0,12,0,5" />
+                                <ComboBox x:Name="SecureDnsModeCombo" />
+                                <TextBlock Text="Проверенный DoH-провайдер" Margin="0,10,0,5" />
+                                <ComboBox x:Name="SecureDnsProviderCombo" />
+                                <CheckBox x:Name="HttpsFirstCheck" Margin="0,12,0,0"
+                                          Content="HTTPS-first: сначала пробовать защищённый адрес сайта" />
+                                <TextBlock Text="Строгий DoH не переходит незаметно на обычный DNS. HTTPS-first никогда не игнорирует ошибку TLS."
+                                           TextWrapping="Wrap" Margin="0,6,0,0" FontSize="11"
+                                           Foreground="{StaticResource MutedTextBrush}" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
 
-                <Border Margin="0,18,0,8" Padding="14" Background="#111E2B" CornerRadius="8"
-                        BorderBrush="#2A465A" BorderThickness="1">
-                    <TextBlock TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" FontSize="12">
-                        Nexus Monach не отправляет скрытую телеметрию. Очищенные отчёты Guardian отправляются только в выбранном выше режиме — в HTTPS-приёмник или напрямую в указанную комнату Matrix. При этом посещаемые сайты, интернет-провайдер и сам Chromium-движок всё ещё могут видеть часть сетевой информации. Для сокрытия IP нужен отдельно выбранный VPN или Tor.
-                    </TextBlock>
-                </Border>
-            </StackPanel>
-        </ScrollViewer>
+                <ScrollViewer x:Name="MonitorSection" Margin="0,46,0,0" Visibility="Collapsed"
+                              VerticalScrollBarVisibility="Auto">
+                    <Border Style="{StaticResource SettingsCard}">
+                        <StackPanel>
+                            <TextBlock Text="Локальный монитор приватности"
+                                       FontSize="15" FontWeight="SemiBold" />
+                            <CheckBox x:Name="PrivacyMonitorCheck" Margin="0,12,0,0"
+                                      Content="Показывать нижнюю панель Privacy Dock при запуске браузера" />
+                            <CheckBox x:Name="PreventWebRtcLeakCheck"
+                                      Content="Запрещать WebRTC обходить прокси и раскрывать другой IP (требуется перезапуск)" />
+                            <TextBlock Text="Privacy Dock автоматически обновляется при открытии нового окна и затем каждые пять минут. Диагностика выполняется локально, без фоновых запросов к внешним IP-сервисам."
+                                       TextWrapping="Wrap" Margin="0,9,0,0" FontSize="11"
+                                       Foreground="{StaticResource MutedTextBrush}" />
+                        </StackPanel>
+                    </Border>
+                </ScrollViewer>
 
-        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
-            <Button Content="Отмена" Style="{StaticResource ActionButton}" Background="#303C49"
-                    BorderBrush="#526273" Click="Cancel_Click" />
+                <ScrollViewer x:Name="PasskeysSection" Margin="0,46,0,0" Visibility="Collapsed"
+                              VerticalScrollBarVisibility="Auto">
+                    <Border Style="{StaticResource SettingsCard}">
+                        <StackPanel>
+                            <TextBlock Text="Passkeys и Windows Hello" FontSize="15" FontWeight="SemiBold" />
+                            <TextBlock Text="Nexus Monach поддерживает вход по Passkey через WebAuthn движка. Отпечаток, лицо и PIN проверяет Windows Hello: браузер и сайт не получают биометрические данные."
+                                       TextWrapping="Wrap" Margin="0,10,0,14" FontSize="12"
+                                       Foreground="{StaticResource MutedTextBrush}" />
+                            <WrapPanel>
+                                <Button Content="Параметры входа Windows"
+                                        Style="{StaticResource ActionButton}" Margin="0,0,8,8"
+                                        Click="OpenSignInOptions_Click" />
+                                <Button Content="Настроить отпечаток"
+                                        Style="{StaticResource ActionButton}" Margin="0,0,8,8"
+                                        Background="#303C49" BorderBrush="#526273"
+                                        Click="OpenFingerprintSetup_Click" />
+                            </WrapPanel>
+                            <TextBlock Text="В Windows 11 доступ отдельных приложений к ключам настраивается в разделе «Конфиденциальность и безопасность → Доступ к ключам доступа»."
+                                       TextWrapping="Wrap" Margin="0,4,0,0" FontSize="11"
+                                       Foreground="{StaticResource MutedTextBrush}" />
+                        </StackPanel>
+                    </Border>
+                </ScrollViewer>
+            </Grid>
+        </Grid>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right"
+                    Margin="0,18,0,0">
+            <Button Content="Отмена" Style="{StaticResource ActionButton}"
+                    Background="#303C49" BorderBrush="#526273" Click="Cancel_Click" />
             <Button Content="Сохранить" Style="{StaticResource ActionButton}" Click="Save_Click" />
         </StackPanel>
     </Grid>
