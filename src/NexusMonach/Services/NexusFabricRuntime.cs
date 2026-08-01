@@ -22,11 +22,11 @@ public static class NexusFabricRuntime
 
     public static string ModelRoutingSummary =>
         "Fabric Router · " +
-        $"Qwen: анализ {(AiModelCatalog.TextReady ? "✓" : "—")} · " +
-        $"OPUS: перевод {(AiModelCatalog.TranslationReady ? "✓" : "—")} · " +
-        $"Whisper: речь {(AiModelCatalog.SpeechReady ? "✓" : "—")} · " +
-        $"SmolVLM: фото {(AiModelCatalog.VisionReady ? "✓" : "—")} · " +
-        $"E5: смысл {(AiModelCatalog.SemanticReady ? "✓" : "—")} · по требованию";
+        $"{FabricModelRouter.Route(FabricWorkload.TextAnalysis).Label}: анализ {(AiModelCatalog.TextReady ? "✓" : "—")} · " +
+        $"{FabricModelRouter.Route(FabricWorkload.PageTranslation).Label}: перевод {(AiModelCatalog.TranslationReady ? "✓" : "—")} · " +
+        $"{FabricModelRouter.Route(FabricWorkload.SpeechRecognition).Label}: речь {(AiModelCatalog.SpeechReady ? "✓" : "—")} · " +
+        $"{FabricModelRouter.Route(FabricWorkload.ImageUnderstanding).Label}: фото {(AiModelCatalog.VisionReady ? "✓" : "—")} · " +
+        $"{FabricModelRouter.Route(FabricWorkload.SemanticEmbedding).Label}: смысл {(AiModelCatalog.SemanticReady ? "✓" : "—")} · по требованию";
 
     public static async Task<string> AskTextAsync(string systemPrompt, string userPrompt,
         CancellationToken cancellationToken = default)

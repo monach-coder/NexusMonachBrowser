@@ -158,11 +158,14 @@ internal static class NexusSearchNetworkGuard
         }
 
         var distinct = addresses.Distinct().Take(17).ToArray();
-        if (distinct.Length == 0 || distinct.Length > 16 || distinct.Any(address => !IsPublicAddress(address)))
+        if (!AreResolvedAddressesAllowed(distinct))
             throw new HttpRequestException("Crawl Engine заблокировал локальный, служебный или неоднозначный DNS-адрес.");
 
         return distinct;
     }
+
+    internal static bool AreResolvedAddressesAllowed(IReadOnlyCollection<IPAddress> addresses) =>
+        addresses.Count is > 0 and <= 16 && addresses.All(IsPublicAddress);
 
     private static string NormalizeHost(Uri uri) => uri.DnsSafeHost.TrimEnd('.');
 
