@@ -41,4 +41,8 @@
     <EmbeddedResource Include="..\..\security\crash-report-public-key.pem"
                       LogicalName="NexusMonach.crash-report-public-key.pem" />
   </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="NexusMonach.Security.Tests" />
+  </ItemGroup>
 </Project>

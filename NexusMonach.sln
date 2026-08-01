@@ -12,6 +12,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nexus.Guardian", "src\Nexus
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Nexus.Guardian.Relay", "src\Nexus.Guardian.Relay\Nexus.Guardian.Relay.csproj", "{26FBF961-04AA-4D50-9807-144479C5399D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NexusMonach.Security.Tests", "tests\NexusMonach.Security.Tests\NexusMonach.Security.Tests.csproj", "{D45C8261-F0B4-49EF-A4DC-1E67CD5A8B91}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -38,5 +40,9 @@ Global
 		{26FBF961-04AA-4D50-9807-144479C5399D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{26FBF961-04AA-4D50-9807-144479C5399D}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{26FBF961-04AA-4D50-9807-144479C5399D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D45C8261-F0B4-49EF-A4DC-1E67CD5A8B91}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D45C8261-F0B4-49EF-A4DC-1E67CD5A8B91}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D45C8261-F0B4-49EF-A4DC-1E67CD5A8B91}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D45C8261-F0B4-49EF-A4DC-1E67CD5A8B91}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

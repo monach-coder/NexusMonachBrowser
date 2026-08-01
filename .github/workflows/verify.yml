@@ -29,6 +29,8 @@ jobs:
         run: ./scripts/Test-SecureNetworkBoundary.ps1
       - name: Build
         run: dotnet build NexusMonach.sln --configuration Release --no-restore -warnaserror
+      - name: Run security regression tests
+        run: dotnet test tests/NexusMonach.Security.Tests/NexusMonach.Security.Tests.csproj --configuration Release --no-build --no-restore --verbosity normal
       - name: Ensure runtime code has no external AI endpoints
         shell: pwsh
         run: |

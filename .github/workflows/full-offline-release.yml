@@ -186,6 +186,16 @@ jobs:
             ./scripts/Build-Portable.ps1 -OfficialGuardianBuild
           }
 
+      - name: Test page, selection and video translation pipelines
+        shell: pwsh
+        timeout-minutes: 20
+        env:
+          NEXUS_REQUIRE_FULL_OFFLINE_AI_TESTS: '1'
+        run: |
+          dotnet test tests/NexusMonach.Security.Tests/NexusMonach.Security.Tests.csproj `
+            --configuration Release --no-build --no-restore `
+            --filter "Category=FullOfflineTranslation" --verbosity normal
+
       - name: Sign official Windows binaries when certificate is configured
         shell: pwsh
         env:

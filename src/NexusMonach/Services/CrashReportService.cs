@@ -334,8 +334,8 @@ public static partial class CrashReportService
                 Component = LimitToken(component),
                 Stage = LimitToken(stage),
                 ExceptionType = exception.GetType().FullName ?? exception.GetType().Name,
-                Message = Sanitize(exception.Message),
-                StackTrace = Sanitize(exception.StackTrace ?? string.Empty),
+                Message = SanitizeForReport(exception.Message),
+                StackTrace = SanitizeForReport(exception.StackTrace ?? string.Empty),
                 IntegrityStatus = GuardianRuntime.IntegrityStatus,
                 SafeMode = GuardianRuntime.IsSafeMode,
                 GuardianSession = GuardianRuntime.SessionId,
@@ -374,12 +374,14 @@ public static partial class CrashReportService
         return cleaned[..Math.Min(64, cleaned.Length)];
     }
 
-    private static string Sanitize(string value)
+    internal static string SanitizeForReport(string value)
     {
         if (string.IsNullOrEmpty(value)) return string.Empty;
         var sanitized = UrlRegex().Replace(value, "[url-redacted]");
         sanitized = EmailRegex().Replace(sanitized, "[email-redacted]");
         sanitized = TokenRegex().Replace(sanitized, "$1=[secret-redacted]");
+        sanitized = BearerRegex().Replace(sanitized, "Bearer [secret-redacted]");
+        sanitized = JwtRegex().Replace(sanitized, "[token-redacted]");
         sanitized = WindowsPathRegex().Replace(sanitized, "[path-redacted]");
         var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (!string.IsNullOrWhiteSpace(profile))
@@ -393,8 +395,14 @@ public static partial class CrashReportService
     [GeneratedRegex(@"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", RegexOptions.IgnoreCase)]
     private static partial Regex EmailRegex();
 
-    [GeneratedRegex(@"(?i)\b(token|password|passwd|secret|authorization|cookie)\s*[:=]\s*[^\s,;]+")]
+    [GeneratedRegex(@"(?i)\b(token|password|passwd|secret|authorization|cookie|cookies|set-cookie)\s*[:=]\s*(?:bearer\s+)?[^\s,;]+")]
     private static partial Regex TokenRegex();
+
+    [GeneratedRegex(@"(?i)\bbearer\s+[A-Z0-9._~+/=-]{8,}")]
+    private static partial Regex BearerRegex();
+
+    [GeneratedRegex(@"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")]
+    private static partial Regex JwtRegex();
 
     [GeneratedRegex(@"(?i)\b[A-Z]:\\[^\r\n:]+")]
     private static partial Regex WindowsPathRegex();

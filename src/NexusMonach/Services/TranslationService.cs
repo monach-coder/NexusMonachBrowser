@@ -67,7 +67,7 @@ public static class TranslationService
                 {
                     id = item.Id,
                     text = item.Text[..Math.Min(item.Text.Length, 1_500)],
-                    source = SourceRoute(item.Text, item.Language, sourceIsEnglish)
+                    source = SelectSourceRoute(item.Text, item.Language, sourceIsEnglish)
                 })
             });
             await _process!.StandardInput.WriteLineAsync(request.AsMemory(), cancellationToken);
@@ -156,7 +156,7 @@ public static class TranslationService
         return words.Any(common.Contains);
     }
 
-    private static string SourceRoute(string text, string language, bool sourceIsEnglish)
+    internal static string SelectSourceRoute(string text, string language, bool sourceIsEnglish)
     {
         if (sourceIsEnglish || IsLikelyEnglish(text, language)) return "en";
         if (language.StartsWith("ko", StringComparison.OrdinalIgnoreCase) ||
