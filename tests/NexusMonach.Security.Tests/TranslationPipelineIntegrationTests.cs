@@ -26,7 +26,7 @@ public sealed partial class TranslationPipelineIntegrationTests : IDisposable
 
     [Fact]
     [Trait("Category", "FullOfflineTranslation")]
-    public async Task PageSegments_PreserveNodeIdsAndTranslateEveryFragment()
+    public async Task PageArticleAndInteractiveSegments_PreserveIdsAndTranslateEveryFragment()
     {
         if (!RequireTranslationPayload()) return;
 
@@ -62,11 +62,29 @@ public sealed partial class TranslationPipelineIntegrationTests : IDisposable
         Assert.NotEmpty(progressiveBatches);
         Assert.Equal(page.Length, progressiveBatches.Sum(batch => batch.Count));
         Assert.All(translated, item => AssertValidRussian(item.Text));
+
+        var articleIds = new[] { "heading-1", "paragraph-1" };
+        var narration = PageNarrationPolicy.CreateSpeechChunks(
+            translated.Where(item => articleIds.Contains(item.Id)).Select(item => item.Text));
+        Assert.NotEmpty(narration);
+        Assert.All(narration, chunk =>
+        {
+            AssertValidRussian(chunk);
+            Assert.InRange(chunk.Length, 1, PageNarrationPolicy.MaximumSpeechCharacters);
+        });
+
+        // В интерактивный DOM возвращается только заранее отобранный элемент
+        // интерфейса. Значения полей пользователя вообще не входят в пакет.
+        var interactive = translated.Where(item => item.Id == "button-1").ToArray();
+        Assert.Single(interactive);
+        AssertValidRussian(interactive[0].Text);
+        Assert.DoesNotContain(translated,
+            item => item.Id.Contains("value", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
     [Trait("Category", "FullOfflineTranslation")]
-    public async Task VideoAudio_IsRecognizedThenTranslatedToRussianSubtitle()
+    public async Task VideoAudio_IsRecognizedTranslatedAndPreparedForFemaleSpeech()
     {
         if (!RequireTranslationPayload() || !RequireSpeechPayload()) return;
 
@@ -77,11 +95,23 @@ public sealed partial class TranslationPipelineIntegrationTests : IDisposable
         var transcript = await WhisperService.TranscribeDetailedAsync(wav, budget.Token);
         Assert.False(string.IsNullOrWhiteSpace(transcript.Text));
 
-        var subtitle = await LocalIntelligenceService.TranslateToRussianAsync(
+        var translatedSpeech = await LocalIntelligenceService.TranslateToRussianAsync(
             transcript.Text, budget.Token,
             string.IsNullOrWhiteSpace(transcript.Language) ? "en" : transcript.Language);
 
-        AssertValidRussian(subtitle);
+        AssertValidRussian(translatedSpeech);
+        var safeSpeech = VoiceAssistantService.SanitizeForSpeech(translatedSpeech);
+        AssertValidRussian(safeSpeech);
+        Assert.True(safeSpeech.Length <= 360);
+
+        NexusVoiceCandidate[] installedVoices =
+        [
+            new("Russian male", "ru-RU", NexusVoiceGender.Male),
+            new("English female", "en-US", NexusVoiceGender.Female),
+            new("Russian female", "ru-RU", NexusVoiceGender.Female)
+        ];
+        var selectedVoice = VoiceProfileSelector.SelectPreferredIndex(installedVoices);
+        Assert.Equal(NexusVoiceGender.Female, installedVoices[selectedVoice].Gender);
     }
 
     private static bool RequireTranslationPayload()

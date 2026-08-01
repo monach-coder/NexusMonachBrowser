@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Windows;
+using System.Windows.Controls;
 using NexusMonach.Models;
 using NexusMonach.Services;
 
@@ -46,6 +47,13 @@ public partial class SettingsWindow : Window
             new Choice<PrivacyLevel>("Сбалансированная — рекомендуется", PrivacyLevel.Balanced),
             new Choice<PrivacyLevel>("Строгая — максимум блокировки", PrivacyLevel.Strict)
         };
+        var themeChoices = new[]
+        {
+            new Choice<BrowserTheme>("Monach Aqua — фирменная бирюза", BrowserTheme.MonachAqua),
+            new Choice<BrowserTheme>("Ocean — глубокий синий", BrowserTheme.Ocean),
+            new Choice<BrowserTheme>("Forest — спокойный зелёный", BrowserTheme.Forest),
+            new Choice<BrowserTheme>("Amethyst — тёмный фиолетовый", BrowserTheme.Amethyst)
+        };
         var proxyChoices = new[]
         {
             new Choice<ProxyKind>("SOCKS5 — подходит для Tor и локальных туннелей", ProxyKind.Socks5),
@@ -77,32 +85,42 @@ public partial class SettingsWindow : Window
             new Choice<CrashReportDestination>("HTTPS-приёмник", CrashReportDestination.HttpsCollector),
             new Choice<CrashReportDestination>("Напрямую в Matrix", CrashReportDestination.MatrixDirect)
         };
+        var voiceChoices = new[]
+        {
+            new Choice<VoiceAssistantMode>("Выключен", VoiceAssistantMode.Off),
+            new Choice<VoiceAssistantMode>("Только важное — рекомендуется", VoiceAssistantMode.ImportantOnly),
+            new Choice<VoiceAssistantMode>("Помощник — важное и ход операций", VoiceAssistantMode.Assistant)
+        };
         SearchEngineCombo.ItemsSource = searchChoices;
         PrivacyLevelCombo.ItemsSource = privacyChoices;
+        ThemeCombo.ItemsSource = themeChoices;
         ProxyTypeCombo.ItemsSource = proxyChoices;
         SecureDnsModeCombo.ItemsSource = secureDnsModeChoices;
         SecureDnsProviderCombo.ItemsSource = secureDnsProviderChoices;
         CrashReportModeCombo.ItemsSource = crashChoices;
         CrashReportDestinationCombo.ItemsSource = crashDestinationChoices;
+        VoiceModeCombo.ItemsSource = voiceChoices;
         SearchEngineCombo.SelectedItem = searchChoices.FirstOrDefault(x => x.Value == settings.SearchEngine) ?? searchChoices[0];
         PrivacyLevelCombo.SelectedItem = privacyChoices.First(x => x.Value == settings.PrivacyLevel);
+        ThemeCombo.SelectedItem = themeChoices.First(x => x.Value == settings.Theme);
         ProxyTypeCombo.SelectedItem = proxyChoices.First(x => x.Value == settings.ProxyKind);
         SecureDnsModeCombo.SelectedItem = secureDnsModeChoices.First(x => x.Value == settings.SecureDnsMode);
         SecureDnsProviderCombo.SelectedItem = secureDnsProviderChoices.First(x => x.Value == settings.SecureDnsProvider);
         CrashReportModeCombo.SelectedItem = crashChoices.First(x => x.Value == settings.CrashReportMode);
         CrashReportDestinationCombo.SelectedItem = crashDestinationChoices.First(x => x.Value == settings.CrashReportDestination);
+        VoiceModeCombo.SelectedItem = voiceChoices.First(x => x.Value == settings.VoiceAssistantMode);
         HomePageBox.Text = settings.HomePage;
         DntCheck.IsChecked = settings.SendDoNotTrack;
         GpcCheck.IsChecked = settings.SendGlobalPrivacyControl;
         StripParametersCheck.IsChecked = settings.StripTrackingParameters;
         BlockNotificationsCheck.IsChecked = settings.BlockNotifications;
         KnowledgeGraphCheck.IsChecked = settings.BuildKnowledgeGraph;
-        RestoreSessionCheck.IsChecked = settings.RestoreSession;
-        ClearOnExitCheck.IsChecked = settings.ClearBrowsingDataOnExit;
         MemorySaverCheck.IsChecked = settings.MemorySaver;
         ExtensionsCheck.IsChecked = settings.EnableExtensions;
         PasswordCheck.IsChecked = settings.EnablePasswordAutosave;
         AutofillCheck.IsChecked = settings.EnableGeneralAutofill;
+        VoiceStartupCheck.IsChecked = settings.VoiceSpeakAtStartup;
+        VoiceHandsFreeCheck.IsChecked = settings.VoiceHandsFreeEnabled;
         CustomProxyCheck.IsChecked = settings.EnableCustomProxy;
         ProxyHostBox.Text = settings.ProxyHost;
         ProxyPortBox.Text = settings.ProxyPort.ToString();
@@ -117,6 +135,35 @@ public partial class SettingsWindow : Window
             ? "Token уже сохранён в Windows Credential Manager. Оставьте поле пустым, чтобы сохранить его."
             : "Token ещё не сохранён. Создайте отдельного Matrix-бота и вставьте его token.";
         UpdateCrashDestinationVisibility();
+        ShowSection("Search");
+    }
+
+    private void SettingsTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    {
+        if (e.NewValue is TreeViewItem { Tag: string section })
+            ShowSection(section);
+    }
+
+    private void ShowSection(string section)
+    {
+        if (SearchSection is null) return;
+        var sections = new Dictionary<string, (FrameworkElement View, string Title)>
+        {
+            ["Search"] = (SearchSection, "Поиск и стартовая страница"),
+            ["Appearance"] = (AppearanceSection, "Внешний вид"),
+            ["Privacy"] = (PrivacySection, "Приватность"),
+            ["Compatibility"] = (CompatibilitySection, "Совместимость и функции"),
+            ["Guardian"] = (GuardianSection, "Nexus Guardian"),
+            ["Network"] = (NetworkSection, "Сеть, прокси и DNS"),
+            ["Monitor"] = (MonitorSection, "Privacy Dock"),
+            ["Passkeys"] = (PasskeysSection, "Passkeys и Windows Hello")
+        };
+        foreach (var item in sections.Values)
+            item.View.Visibility = Visibility.Collapsed;
+        if (!sections.TryGetValue(section, out var selected))
+            selected = sections["Search"];
+        selected.View.Visibility = Visibility.Visible;
+        SettingsSectionTitle.Text = selected.Title;
     }
 
     private void CrashReportDestinationCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e) =>
@@ -174,19 +221,30 @@ public partial class SettingsWindow : Window
             ? search.Value : SearchEngineKind.DuckDuckGo;
         _settings.PrivacyLevel = PrivacyLevelCombo.SelectedItem is Choice<PrivacyLevel> level
             ? level.Value : PrivacyLevel.Balanced;
+        _settings.Theme = ThemeCombo.SelectedItem is Choice<BrowserTheme> theme
+            ? theme.Value : BrowserTheme.MonachAqua;
+        _settings.ThemeSelectionCompleted = true;
         _settings.HomePage = string.IsNullOrWhiteSpace(HomePageBox.Text) ? "app://newtab" : HomePageBox.Text.Trim();
         _settings.SendDoNotTrack = DntCheck.IsChecked == true;
         _settings.SendGlobalPrivacyControl = GpcCheck.IsChecked == true;
         _settings.StripTrackingParameters = StripParametersCheck.IsChecked == true;
         _settings.BlockNotifications = BlockNotificationsCheck.IsChecked == true;
         _settings.BuildKnowledgeGraph = KnowledgeGraphCheck.IsChecked == true;
-        _settings.RestoreSession = RestoreSessionCheck.IsChecked == true;
-        _settings.ClearBrowsingDataOnExit = ClearOnExitCheck.IsChecked == true;
+        _settings.RestoreSession = false;
+        // История навигации, поисковые переходы и дисковый кэш очищаются
+        // автоматически при полном закрытии браузера. Cookies, авторизация,
+        // пароли и локальный граф знаний в эту очистку не входят.
+        _settings.ClearBrowsingDataOnExit = true;
         _settings.MemorySaver = MemorySaverCheck.IsChecked == true;
         _settings.EnableExtensions = ExtensionsCheck.IsChecked == true;
         _settings.EnablePasswordAutosave = PasswordCheck.IsChecked == true;
         _settings.EnableGeneralAutofill = AutofillCheck.IsChecked == true;
         _settings.EnableDevTools = false;
+        _settings.VoiceAssistantMode = VoiceModeCombo.SelectedItem is Choice<VoiceAssistantMode> voiceMode
+            ? voiceMode.Value : VoiceAssistantMode.ImportantOnly;
+        _settings.VoiceSpeakAtStartup = VoiceStartupCheck.IsChecked == true;
+        _settings.VoiceHandsFreeEnabled = VoiceHandsFreeCheck.IsChecked == true &&
+                                          _settings.VoiceAssistantMode != VoiceAssistantMode.Off;
         _settings.EnableCustomProxy = proxyEnabled;
         _settings.ProxyKind = ProxyTypeCombo.SelectedItem is Choice<ProxyKind> proxy
             ? proxy.Value : ProxyKind.Socks5;
@@ -237,6 +295,14 @@ public partial class SettingsWindow : Window
         }
         ResultSettings = _settings;
         DialogResult = true;
+    }
+
+    private void TestVoice_Click(object sender, RoutedEventArgs e)
+    {
+        var previousMode = SettingsService.Current.VoiceAssistantMode;
+        SettingsService.Current.VoiceAssistantMode = VoiceAssistantMode.Assistant;
+        try { VoiceAssistantService.SpeakTestPhrase(); }
+        finally { SettingsService.Current.VoiceAssistantMode = previousMode; }
     }
 
     private async void TestMatrix_Click(object sender, RoutedEventArgs e)

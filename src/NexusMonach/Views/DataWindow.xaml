@@ -34,7 +34,6 @@
                     Click="Open_Click" />
             <Button x:Name="ActionButton" Content="Удалить" Padding="16,7" Margin="6,0"
                     Click="Action_Click" />
-            <Button Content="Закрыть" Padding="16,7" Margin="6,0" Click="Close_Click" />
         </StackPanel>
     </Grid>
 </Window>

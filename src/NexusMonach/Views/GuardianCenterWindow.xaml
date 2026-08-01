@@ -164,8 +164,6 @@
                 <Button Content="Удалить" Style="{StaticResource GuardianButton}" Background="#594044"
                         BorderBrush="#8A6268" Click="Delete_Click" />
             </WrapPanel>
-            <Button DockPanel.Dock="Right" Content="Закрыть" Style="{StaticResource GuardianButton}"
-                    Background="#303C49" BorderBrush="#526273" Margin="8,0,0,8" Click="Close_Click" />
         </DockPanel>
     </Grid>
 </Window>

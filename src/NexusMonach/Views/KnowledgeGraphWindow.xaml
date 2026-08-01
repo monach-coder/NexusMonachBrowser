@@ -31,7 +31,6 @@
                 <TextBlock x:Name="InsightText" Margin="0,3,0,0" FontSize="11.5" Foreground="{StaticResource GoldBrush}"
                            TextTrimming="CharacterEllipsis" />
             </StackPanel>
-            <Button Grid.Column="2" Content="Закрыть" Padding="16,7" Click="Close_Click" />
         </Grid>
 
         <Grid Grid.Row="1" Margin="0,14,0,0">

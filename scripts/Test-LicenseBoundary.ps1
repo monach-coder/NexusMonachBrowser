@@ -65,6 +65,27 @@ if ($solution -notmatch 'Nexus\.Guardian\.Relay') {
     $errors.Add('Nexus Guardian Relay project is not included in NexusMonach.sln.')
 }
 
+$license = Get-Content (Join-Path $Root 'LICENSE') -Raw
+if ($license -notmatch 'GNU GENERAL PUBLIC LICENSE' -or
+    $license -notmatch 'Version 3, 29 June 2007') {
+    $errors.Add('Root LICENSE is not the complete GNU GPL version 3 license text.')
+}
+
+$buildProperties = Get-Content (Join-Path $Root 'Directory.Build.props') -Raw
+if ($buildProperties -notmatch '<PackageLicenseExpression>GPL-3\.0-only</PackageLicenseExpression>') {
+    $errors.Add('Directory.Build.props does not declare GPL-3.0-only.')
+}
+
+foreach ($source in @(
+    'src/Nexus.Intelligence.Contracts/NexusFabricContracts.cs',
+    'src/Nexus.Intelligence.Fabric/NexusIntelligenceFabric.cs'
+)) {
+    $text = Get-Content (Join-Path $Root $source) -Raw
+    if ($text -notmatch 'SPDX-License-Identifier: GPL-3\.0-only') {
+        $errors.Add("Project source has an inconsistent SPDX identifier: $source")
+    }
+}
+
 if ($errors.Count -gt 0) {
     $errors | ForEach-Object { Write-Host "ERROR: $_" -ForegroundColor Red }
     throw "Repository hygiene check failed with $($errors.Count) finding(s)."

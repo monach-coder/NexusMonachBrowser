@@ -441,18 +441,22 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     public async Task<IReadOnlyList<TranslationSegment>> CaptureTranslationSegmentsAsync()
     {
         if (Core is null || UrlService.IsInternal(CurrentUrl)) return [];
-        var json = await Core.ExecuteScriptAsync("""
+        var script = """
             (() => {
               const previous=window.__nexusPageTranslation;
               if(previous?.originals) for(const entry of previous.originals.values())
                 if(entry.node?.isConnected) entry.node.nodeValue=entry.original;
               const state={nodes:new Map(),originals:new Map()};window.__nexusPageTranslation=state;
-              const root=document.body; if(!root) return [];
+              const visible=e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>120&&r.height>80};
+              const candidates=[...document.querySelectorAll(__MAIN_CONTENT_SELECTOR__)]
+                .filter(visible).map(e=>{const text=(e.innerText||'').trim(),links=[...e.querySelectorAll('a')].reduce((n,a)=>n+(a.innerText||'').length,0);return {e,score:text.length-links*.45}})
+                .filter(x=>x.score>120).sort((a,b)=>b.score-a.score);
+              const root=candidates[0]?.e||document.querySelector('main,[role="main"]')||document.body;if(!root)return [];
               const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
               const nodes=[]; let node,total=0;
               while((node=walker.nextNode()) && nodes.length<100 && total<5500){
                 const parent=node.parentElement, raw=node.nodeValue||'', text=raw.trim();
-                if(!parent||text.length<2||parent.closest('script,style,noscript,textarea,code,pre,svg,canvas,[contenteditable="true"],[data-nexus-translation-ui]')) continue;
+                if(!parent||text.length<2||parent.closest(__ARTICLE_EXCLUSION_SELECTOR__)) continue;
                 const style=getComputedStyle(parent); if(style.display==='none'||style.visibility==='hidden'||style.opacity==='0'||parent.getClientRects().length===0) continue;
                 nodes.push({node,raw,text}); total+=text.length;
               }
@@ -462,9 +466,76 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 return {Id:id,Text:item.text,Language:language};
               });
             })();
-            """);
+            """
+            .Replace("__MAIN_CONTENT_SELECTOR__",
+                JsonSerializer.Serialize(PageTranslationPolicy.MainContentSelector), StringComparison.Ordinal)
+            .Replace("__ARTICLE_EXCLUSION_SELECTOR__",
+                JsonSerializer.Serialize(PageTranslationPolicy.ArticleExclusionSelector), StringComparison.Ordinal);
+        var json = await Core.ExecuteScriptAsync(script);
         try { return JsonSerializer.Deserialize<List<TranslationSegment>>(json) ?? []; }
         catch { return []; }
+    }
+
+    public async Task<IReadOnlyList<TranslationSegment>> CaptureInteractiveTranslationSegmentsAsync()
+    {
+        if (Core is null || UrlService.IsInternal(CurrentUrl)) return [];
+        var script = """
+            (()=>{
+              const previous=window.__nexusInteractiveTranslation;
+              if(previous?.entries)for(const entry of previous.entries.values())try{
+                if(entry.kind==='text'&&entry.node?.isConnected)entry.node.nodeValue=entry.original;
+                else if(entry.element?.isConnected)entry.element.setAttribute(entry.attribute,entry.original);
+              }catch{}
+              const state={entries:new Map()};window.__nexusInteractiveTranslation=state;
+              const result=[],seen=new Set();let total=0,index=0;
+              const visible=e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0};
+              const language=e=>(e?.closest?.('[lang]')?.getAttribute('lang')||document.documentElement.lang||'').trim();
+              const add=(key,text,entry,e)=>{text=(text||'').replace(/\s+/g,' ').trim();if(!text||text.length<1||text.length>500||seen.has(key)||result.length>=90||total+text.length>4200)return;seen.add(key);const id='f'+(++index);state.entries.set(id,entry);result.push({Id:id,Text:text,Language:language(e)});total+=text.length};
+              const addAttribute=(e,attribute)=>{const value=e.getAttribute(attribute)||'';if(value.trim())add('a:'+attribute+':'+index+':'+value,value,{kind:'attribute',element:e,attribute,original:value},e)};
+              const addText=(root,force=false)=>{if(!root||(!force&&!visible(root)))return;const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let node;while((node=walker.nextNode())){const raw=node.nodeValue||'',text=raw.trim(),parent=node.parentElement;if(!parent||!text||parent.closest('script,style,noscript,input,textarea,[contenteditable="true"]'))continue;add('t:'+index+':'+text,text,{kind:'text',node,original:raw},parent)}};
+              const translatableInputTypes=__TRANSLATABLE_INPUT_TYPES__;
+              const controls=[...document.querySelectorAll(__INTERACTIVE_SELECTOR__)].filter(visible).slice(0,100);
+              for(const control of controls){
+                for(const attribute of ['placeholder','aria-label','title'])addAttribute(control,attribute);
+                const type=(control.getAttribute('type')||'').toLowerCase();
+                if(control.tagName==='INPUT'&&translatableInputTypes.includes(type))addAttribute(control,'value');
+                if(control.tagName==='BUTTON'||control.tagName==='A'||['button','menuitem','tab'].includes(control.getAttribute('role')||''))addText(control);
+                for(const label of control.labels||[])addText(label);
+                const parentLabel=control.closest('label');if(parentLabel)addText(parentLabel);
+                const id=control.id;if(id)for(const label of document.querySelectorAll('label[for="'+CSS.escape(id)+'"]'))addText(label);
+                if(control.tagName==='SELECT')for(const option of [...control.options].slice(0,30))addText(option,true);
+              }
+              for(const item of document.querySelectorAll('form legend,[role="form"] legend,form [role="alert"],form [aria-live],form small,form .error,form [class*="hint" i],[role="form"] [role="alert"]'))addText(item);
+              return result;
+            })()
+            """
+            .Replace("__INTERACTIVE_SELECTOR__",
+                JsonSerializer.Serialize(PageTranslationPolicy.InteractiveSelector), StringComparison.Ordinal)
+            .Replace("__TRANSLATABLE_INPUT_TYPES__",
+                JsonSerializer.Serialize(PageTranslationPolicy.TranslatableInputValueTypes),
+                StringComparison.Ordinal);
+        var json = await Core.ExecuteScriptAsync(script);
+        try { return JsonSerializer.Deserialize<List<TranslationSegment>>(json) ?? []; }
+        catch { return []; }
+    }
+
+    public async Task<int> ApplyInteractiveTranslationSegmentsAsync(
+        IReadOnlyList<TranslationSegment> translated, int completedBefore, int total)
+    {
+        if (Core is null || translated.Count == 0) return 0;
+        var script = """
+            (()=>{const items=__ITEMS__;const state=window.__nexusInteractiveTranslation;if(!state)return 0;let applied=0;
+              for(const item of items){const entry=state.entries.get(item.Id);if(!entry)continue;
+                try{if(entry.kind==='text'&&entry.node?.isConnected){const lead=entry.original.match(/^\s*/)?.[0]||'',tail=entry.original.match(/\s*$/)?.[0]||'';entry.node.nodeValue=lead+item.Text+tail;applied++}
+                else if(entry.element?.isConnected){entry.element.setAttribute(entry.attribute,item.Text);applied++}}catch{}
+              }
+              const status=document.getElementById('nexus-translation-status');if(status)status.textContent='Озвучивание статьи · переведено элементов интерфейса: '+(__COMPLETED__+applied)+' / '+__TOTAL__;return applied})()
+            """
+            .Replace("__ITEMS__", JsonSerializer.Serialize(translated), StringComparison.Ordinal)
+            .Replace("__COMPLETED__", JsonSerializer.Serialize(completedBefore), StringComparison.Ordinal)
+            .Replace("__TOTAL__", JsonSerializer.Serialize(total), StringComparison.Ordinal);
+        var json = await Core.ExecuteScriptAsync(script);
+        return int.TryParse(json, out var applied) ? applied : 0;
     }
 
     public async Task BeginInPageTranslationAsync(int total)
@@ -476,15 +547,38 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
               const box=document.createElement('div'); box.id='nexus-translation-toolbar';
               box.dataset.nexusTranslationUi='true';
               box.style.cssText='position:fixed;right:22px;top:22px;z-index:2147483647;display:flex;align-items:center;gap:10px;max-width:440px;padding:11px 13px;border:1px solid #80ffffff;border-radius:14px;background:#b3101010;color:#fff;box-shadow:0 12px 36px #0008;font:600 13px Segoe UI,Arial,sans-serif;backdrop-filter:blur(12px);';
-              const status=document.createElement('span'); status.id='nexus-translation-status'; status.textContent='Перевод: 0 / '+{{total}};
-              const restore=document.createElement('button'); restore.textContent='Вернуть оригинал';
+              const status=document.createElement('span'); status.id='nexus-translation-status'; status.textContent='Озвучивание страницы · 0 / '+{{total}};
+              const restore=document.createElement('button'); restore.textContent='Вернуть интерфейс';
               restore.style.cssText='border:1px solid #66ffffff;border-radius:8px;background:#26ffffff;color:#fff;padding:6px 9px;cursor:pointer;';
-              restore.onclick=()=>{const state=window.__nexusPageTranslation;if(state?.originals)for(const entry of state.originals.values())if(entry.node?.isConnected)entry.node.nodeValue=entry.original;window.__nexusPageTranslation=null;box.remove();};
+              restore.onclick=()=>{const state=window.__nexusInteractiveTranslation;if(state?.entries)for(const entry of state.entries.values())try{if(entry.kind==='text'&&entry.node?.isConnected)entry.node.nodeValue=entry.original;else if(entry.element?.isConnected)entry.element.setAttribute(entry.attribute,entry.original)}catch{}window.__nexusInteractiveTranslation=null;box.remove();};
               const close=document.createElement('button'); close.textContent='×'; close.title='Скрыть панель, оставив перевод';
               close.style.cssText='border:0;background:transparent;color:#fff;font-size:18px;cursor:pointer;padding:2px 5px;'; close.onclick=()=>box.remove();
               box.append(status,restore,close); document.documentElement.append(box);
             })();
             """);
+    }
+
+    public async Task UpdateSpokenPageTranslationStatusAsync(int completed, int total, int translatedControls)
+    {
+        if (Core is null) return;
+        await Core.ExecuteScriptAsync($$"""
+            (()=>{const status=document.getElementById('nexus-translation-status');if(status)status.textContent={{JsonSerializer.Serialize($"Озвучено фрагментов статьи: {completed} / {total} · интерфейс: {translatedControls}")}}})()
+            """);
+    }
+
+    public async Task CompleteSpokenPageTranslationAsync(int spoken, int total, int translatedControls,
+        string? error = null)
+    {
+        if (Core is null) return;
+        var message = error is null
+            ? $"Статья озвучена: {spoken} из {total} · интерфейс: {translatedControls}"
+            : "Озвучивание остановлено: " + error;
+        var script = """
+            (()=>{const status=document.getElementById('nexus-translation-status');if(status){status.textContent=__MESSAGE__;status.style.color=__COLOR__;}})()
+            """
+            .Replace("__MESSAGE__", JsonSerializer.Serialize(message), StringComparison.Ordinal)
+            .Replace("__COLOR__", JsonSerializer.Serialize(error is null ? "#7ff5e7" : "#ffcb6b"), StringComparison.Ordinal);
+        await Core.ExecuteScriptAsync(script);
     }
 
     public async Task<int> ApplyTranslationSegmentsAsync(IReadOnlyList<TranslationSegment> translated, int completedBefore, int total)
@@ -554,7 +648,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 for(const chunk of chunks){input.set(chunk,offset);offset+=chunk.length}
                 if(!input.length) return {Success:false,Error:'Браузер не получил аудиосэмплы.',WavBase64:''};
                 let energy=0;for(let i=0;i<input.length;i+=32)energy+=input[i]*input[i];
-                if(Math.sqrt(energy/Math.max(1,input.length/32))<0.0001)return {Success:false,Error:'Получен пустой звук. Возможна защита DRM или ограничение cross-origin.',WavBase64:''};
+                if(Math.sqrt(energy/Math.max(1,input.length/32))<0.0001)return {Success:true,Error:'silence',WavBase64:''};
                 const outRate=16000,ratio=context.sampleRate/outRate,outLength=Math.floor(input.length/ratio),pcm=new Int16Array(outLength);
                 for(let i=0;i<outLength;i++){const start=Math.floor(i*ratio),end=Math.min(input.length,Math.floor((i+1)*ratio));let sum=0;for(let j=start;j<end;j++)sum+=input[j];const value=Math.max(-1,Math.min(1,sum/Math.max(1,end-start)));pcm[i]=value<0?value*32768:value*32767}
                 const bytes=new Uint8Array(44+pcm.length*2),view=new DataView(bytes.buffer),write=(p,s)=>{for(let i=0;i<s.length;i++)view.setUint8(p+i,s.charCodeAt(i))};
@@ -574,26 +668,20 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         if (Core is null) return;
         await Core.ExecuteScriptAsync("""
             (()=>{window.__nexusStopAudioTranslation=false;
-              const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
-              const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];window.__nexusSourceCaptionModes=[];
-              if(video)for(const track of video.textTracks)if(track.label!=='Nexus Live RU'&&track.label!=='Nexus RU'){window.__nexusSourceCaptionModes.push({track,mode:track.mode});track.mode='disabled'}
-              document.getElementById('nexus-hide-native-captions')?.remove();
-              const nativeStyle=document.createElement('style');nativeStyle.id='nexus-hide-native-captions';nativeStyle.dataset.nexusTranslationUi='true';
-              nativeStyle.textContent='video::cue{color:transparent!important;background:transparent!important;text-shadow:none!important}.ytp-caption-window-container,.ytp-caption-segment,.vp-captions,[data-purpose="captions-cue-text"],[class*="subtitle" i]:not(#nexus-live-subtitle-overlay),[class*="captions" i]:not(#nexus-live-subtitle-overlay){visibility:hidden!important}';document.documentElement.append(nativeStyle);
-              let overlay=document.getElementById('nexus-live-subtitle-overlay');
-              if(!overlay){overlay=document.createElement('div');overlay.id='nexus-live-subtitle-overlay';overlay.dataset.nexusTranslationUi='true';overlay.style.cssText='position:fixed;z-index:2147483647;padding:8px 12px;border-radius:8px;background:#d0000000;color:#fff;text-align:center;font:600 clamp(15px,1.8vw,23px)/1.35 Segoe UI,sans-serif;text-shadow:0 1px 3px #000;pointer-events:none;box-sizing:border-box';document.documentElement.append(overlay)}
+              let overlay=document.getElementById('nexus-live-voice-status');
+              if(!overlay){overlay=document.createElement('div');overlay.id='nexus-live-voice-status';overlay.dataset.nexusTranslationUi='true';overlay.style.cssText='position:fixed;z-index:2147483647;padding:6px 10px;border:1px solid #55d8cc;border-radius:8px;background:#d0101820;color:#eafffc;font:600 12px Segoe UI,sans-serif;pointer-events:none;box-sizing:border-box';document.documentElement.append(overlay)}
               let stop=document.getElementById('nexus-live-translation-stop');
               if(!stop){stop=document.createElement('button');stop.id='nexus-live-translation-stop';stop.dataset.nexusTranslationUi='true';stop.textContent='Стоп';stop.style.cssText='position:fixed;z-index:2147483647;border:1px solid #66ffffff;border-radius:7px;background:#d0000000;color:#fff;padding:4px 8px;cursor:pointer;font:600 12px Segoe UI,sans-serif';stop.onclick=()=>{window.__nexusStopAudioTranslation=true;overlay.textContent='Остановка…'};document.documentElement.append(stop)}
-              const place=()=>{const v=[...document.querySelectorAll('video')].filter(x=>x.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight))[0];if(!v)return;const r=v.getBoundingClientRect();overlay.style.left=Math.max(8,r.left+r.width*.08)+'px';overlay.style.width=Math.max(180,r.width*.84)+'px';overlay.style.bottom=Math.max(8,innerHeight-r.bottom+r.height*.055)+'px';stop.style.right=Math.max(8,innerWidth-r.right+8)+'px';stop.style.top=Math.max(8,r.top+8)+'px'};
+              const place=()=>{const v=[...document.querySelectorAll('video')].filter(x=>x.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight))[0];if(!v)return;const r=v.getBoundingClientRect();overlay.style.right=Math.max(8,innerWidth-r.right+8)+'px';overlay.style.top=Math.max(8,r.top+8)+'px';stop.style.right=Math.max(8,innerWidth-r.right+8)+'px';stop.style.top=Math.max(8,r.top+44)+'px'};
               if(window.__nexusPlaceLiveTranslation){removeEventListener('resize',window.__nexusPlaceLiveTranslation);removeEventListener('scroll',window.__nexusPlaceLiveTranslation)}
-              window.__nexusPlaceLiveTranslation=place;place();addEventListener('resize',place,{passive:true});addEventListener('scroll',place,{passive:true});overlay.textContent='Подготовка перевода звука…';})();
+              window.__nexusPlaceLiveTranslation=place;place();addEventListener('resize',place,{passive:true});addEventListener('scroll',place,{passive:true});overlay.textContent='Nexus Voice · подготовка…';})();
             """);
     }
 
     public async Task UpdateLiveAudioTranslationStatusAsync(string text)
     {
         if (Core is null) return;
-        await Core.ExecuteScriptAsync("(()=>{const e=document.getElementById('nexus-live-subtitle-overlay');if(e)e.textContent=" +
+        await Core.ExecuteScriptAsync("(()=>{const e=document.getElementById('nexus-live-voice-status');if(e)e.textContent=" +
                                       JsonSerializer.Serialize(text) + "})()");
     }
 
@@ -604,27 +692,46 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         return bool.TryParse(json, out var stopped) && stopped;
     }
 
-    public async Task ShowLiveVideoSubtitleAsync(string translatedText)
+    public async Task PrepareVideoForSpokenTranslationAsync(bool pausePlayback)
     {
-        if (Core is null || string.IsNullOrWhiteSpace(translatedText)) return;
+        if (Core is null) return;
         await Core.ExecuteScriptAsync("""
-            ((text)=>{const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];if(!video)return;
-              for(const track of video.textTracks)if(track.label==='Nexus Live RU')track.mode='disabled';
-              let overlay=document.getElementById('nexus-live-subtitle-overlay');
-              if(!overlay)return;window.__nexusPlaceLiveTranslation?.();
-              overlay.textContent='RU · '+text;clearTimeout(window.__nexusSubtitleTimer);window.__nexusSubtitleTimer=setTimeout(()=>overlay.textContent='',11000);
-            })(__TEXT__);
-            """.Replace("__TEXT__", JsonSerializer.Serialize(translatedText), StringComparison.Ordinal));
+            ((pausePlayback)=>{
+            (()=>{const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];if(!video)return false;
+              if(!window.__nexusSpokenVideoState)window.__nexusSpokenVideoState={video,wasPaused:video.paused,pausedByNexus:pausePlayback};
+              if(pausePlayback)video.pause();return true;})()})(__PAUSE__)
+            """.Replace("__PAUSE__", pausePlayback ? "true" : "false", StringComparison.Ordinal));
+    }
+
+    public async Task EnableVideoDubbingMixAsync()
+    {
+        if (Core is null) return;
+        await Core.ExecuteScriptAsync("""
+            (()=>{const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
+              const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];if(!video)return false;
+              if(!window.__nexusDubbingVideoState)window.__nexusDubbingVideoState={video,muted:video.muted,volume:video.volume};
+              if(!video.muted)video.volume=Math.min(video.volume,.22);return true;})()
+            """);
+    }
+
+    public async Task ResumeVideoAfterSpokenTranslationAsync()
+    {
+        if (Core is null) return;
+        await Core.ExecuteScriptAsync("""
+            (()=>{const state=window.__nexusSpokenVideoState;if(!state)return false;window.__nexusSpokenVideoState=null;
+              const video=state.video;if(!video?.isConnected)return false;
+              if(state.pausedByNexus&&!state.wasPaused)try{const pending=video.play();if(pending?.catch)pending.catch(()=>{})}catch{}return true;})()
+            """);
     }
 
     public async Task EndLiveAudioTranslationAsync(string status)
     {
         if (Core is null) return;
         await Core.ExecuteScriptAsync("""
-            ((status)=>{for(const entry of window.__nexusSourceCaptionModes||[])try{entry.track.mode=entry.mode}catch{}
-              window.__nexusSourceCaptionModes=[];window.__nexusStopAudioTranslation=true;
-              document.getElementById('nexus-hide-native-captions')?.remove();
-              const overlay=document.getElementById('nexus-live-subtitle-overlay');if(overlay){overlay.textContent=status;setTimeout(()=>overlay.remove(),1800)}
+            ((status)=>{window.__nexusStopAudioTranslation=true;
+              const state=window.__nexusSpokenVideoState;window.__nexusSpokenVideoState=null;if(state?.pausedByNexus&&state?.video?.isConnected&&!state.wasPaused)try{const pending=state.video.play();if(pending?.catch)pending.catch(()=>{})}catch{}
+              const dubbing=window.__nexusDubbingVideoState;window.__nexusDubbingVideoState=null;if(dubbing?.video?.isConnected){dubbing.video.muted=dubbing.muted;dubbing.video.volume=dubbing.volume}
+              const overlay=document.getElementById('nexus-live-voice-status');if(overlay){overlay.textContent=status;setTimeout(()=>overlay.remove(),1800)}
               document.getElementById('nexus-live-translation-stop')?.remove();
               if(window.__nexusPlaceLiveTranslation){removeEventListener('resize',window.__nexusPlaceLiveTranslation);removeEventListener('scroll',window.__nexusPlaceLiveTranslation)}
               window.__nexusPlaceLiveTranslation=null})(__STATUS__)
@@ -1460,11 +1567,24 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         };
         DownloadSecurityService.SetAssessment(item, assessment);
         DownloadService.Add(item);
+        VoiceAssistantService.Announce("Загрузка началась.", VoiceAnnouncementPriority.Important, _isPrivate);
+        var announcedMilestone = 0;
 
         operation.BytesReceivedChanged += (_, _) => Application.Current.Dispatcher.Invoke(() =>
         {
             item.BytesReceived = operation.BytesReceived;
             item.TotalBytes = NormalizeTotalBytes(operation.TotalBytesToReceive);
+            if (item.TotalBytes > 0)
+            {
+                var percent = (int)Math.Clamp(item.BytesReceived * 100L / item.TotalBytes, 0, 100);
+                var milestone = percent >= 75 ? 75 : percent >= 50 ? 50 : percent >= 25 ? 25 : 0;
+                if (milestone > announcedMilestone)
+                {
+                    announcedMilestone = milestone;
+                    VoiceAssistantService.Announce($"Загружено {milestone} процентов.",
+                        VoiceAnnouncementPriority.Progress, _isPrivate);
+                }
+            }
         });
         operation.StateChanged += (_, _) => Application.Current.Dispatcher.Invoke(() =>
         {
@@ -1475,7 +1595,13 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 _ => "Загрузка"
             };
             if (operation.State == CoreWebView2DownloadState.Completed)
+            {
                 _ = DownloadSecurityService.InspectCompletedAsync(item);
+                VoiceAssistantService.Announce("Загрузка завершена. Файл проверяется локально.",
+                    VoiceAnnouncementPriority.Important, _isPrivate);
+            }
+            else if (operation.State == CoreWebView2DownloadState.Interrupted)
+                VoiceAssistantService.Announce("Загрузка прервана.", VoiceAnnouncementPriority.Critical, _isPrivate);
         });
     }
 

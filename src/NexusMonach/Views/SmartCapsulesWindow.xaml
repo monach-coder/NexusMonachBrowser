@@ -44,7 +44,6 @@
         <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
             <Button x:Name="ArchiveButton" Content="Архивировать в граф" Padding="16,8" Margin="0,0,8,0"
                     IsEnabled="False" Click="Archive_Click" />
-            <Button Content="Закрыть" Padding="18,8" Click="Close_Click" />
         </StackPanel>
     </Grid>
 </Window>

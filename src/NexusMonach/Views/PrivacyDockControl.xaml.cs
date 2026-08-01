@@ -86,8 +86,6 @@ public partial class PrivacyDockControl : UserControl
 
     private void Control_Unloaded(object sender, RoutedEventArgs e) => _timer.Stop();
     private async void Timer_Tick(object? sender, EventArgs e) => await RefreshAsync();
-    private async void Refresh_Click(object sender, RoutedEventArgs e) => await RefreshAsync();
-    private void Hide_Click(object sender, RoutedEventArgs e) { Visibility = Visibility.Collapsed; _timer.Stop(); }
 
     public void SetCurrentTransport(string? url)
     {

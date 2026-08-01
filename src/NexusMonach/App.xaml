@@ -132,7 +132,7 @@
                                         <TextBlock Text="{TemplateBinding Title}" VerticalAlignment="Center"
                                                    FontFamily="Segoe UI" FontSize="12.5" FontWeight="SemiBold"
                                                    Foreground="#FFFFFFFF" TextTrimming="CharacterEllipsis" />
-                                        <Button Grid.Column="1" Content="×" Width="28" Height="28"
+                                        <Button x:Name="GlassCloseButton" Grid.Column="1" Content="×" Width="28" Height="28"
                                                 FontFamily="Segoe UI" FontSize="17" Padding="0"
                                                 Background="Transparent" Foreground="White" BorderThickness="0"
                                                 Cursor="Hand" Click="GlassClose_Click" />
@@ -190,6 +190,16 @@
             <Setter Property="SelectionBrush" Value="#426E83" />
         </Style>
 
+        <Style TargetType="PasswordBox">
+            <Setter Property="FontFamily" Value="Segoe UI" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="Background" Value="#0E1621" />
+            <Setter Property="BorderBrush" Value="#2C4056" />
+            <Setter Property="CaretBrush" Value="{StaticResource AccentBrush}" />
+            <Setter Property="SelectionBrush" Value="#426E83" />
+        </Style>
+
         <Style TargetType="CheckBox">
             <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
             <Setter Property="FontFamily" Value="Segoe UI" />
@@ -198,11 +208,22 @@
         </Style>
 
         <Style TargetType="ComboBox">
-            <Setter Property="Foreground" Value="#111820" />
-            <Setter Property="Background" Value="#EAF2F6" />
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="Background" Value="#14202D" />
+            <Setter Property="BorderBrush" Value="#3A5267" />
             <Setter Property="Padding" Value="8,5" />
             <Setter Property="FontFamily" Value="Segoe UI" />
             <Setter Property="FontSize" Value="14" />
+        </Style>
+
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="Background" Value="#14202D" />
+            <Setter Property="Padding" Value="8,6" />
+        </Style>
+
+        <Style TargetType="RadioButton">
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
         </Style>
     </Application.Resources>
 </Application>

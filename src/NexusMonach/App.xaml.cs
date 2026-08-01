@@ -45,12 +45,27 @@ public partial class App : Application
 
         var splash = new SplashWindow();
         splash.Show();
-        var startupAudio = StartupSoundService.PlayAsync();
+        Task startupAudio = Task.CompletedTask;
 
         try
         {
             await SettingsService.InitializeAsync();
+            if (!SettingsService.Current.ThemeSelectionCompleted)
+            {
+                splash.Hide();
+                var themePicker = new ThemeSelectionWindow(SettingsService.Current.Theme);
+                themePicker.ShowDialog();
+                var firstRunSettings = SettingsService.Current.Clone();
+                firstRunSettings.Theme = themePicker.ResultTheme;
+                firstRunSettings.ThemeSelectionCompleted = true;
+                await SettingsService.SaveAsync(firstRunSettings);
+                splash.Show();
+            }
+            ThemeService.Apply(SettingsService.Current.Theme);
             CrashReportService.AddBreadcrumb("startup", "settings-ready");
+            if (SettingsService.Current.VoiceSpeakAtStartup &&
+                SettingsService.Current.VoiceAssistantMode != Models.VoiceAssistantMode.Off)
+                startupAudio = StartupSoundService.PlayAsync();
             if (e.Args.Any(x => x.Equals("--guardian-test-crash", StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidOperationException("Intentional Nexus Guardian crash-pipeline test.");
             await BrowserEnvironment.InitializeAsync();
@@ -71,6 +86,16 @@ public partial class App : Application
                     "Nexus Guardian включил безопасный режим после повторных сбоев, графической ошибки или изменения некритических файлов. AI, расширения и аппаратное ускорение временно отключены.",
                     "Nexus Guardian — безопасный режим", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
+            VoiceAssistantService.Initialize();
+            VoiceAssistantService.Announce(
+                GuardianRuntime.IsSafeMode
+                    ? "Nexus запущен в безопасном режиме."
+                    : GuardianRuntime.IntegrityStatus.Equals("verified", StringComparison.OrdinalIgnoreCase)
+                        ? "Nexus готов. Целостность браузера подтверждена."
+                        : "Nexus готов к работе.",
+                GuardianRuntime.IsSafeMode
+                    ? VoiceAnnouncementPriority.Critical
+                    : VoiceAnnouncementPriority.Important);
             if (!GuardianRuntime.IsSafeMode)
             {
                 WhisperService.PrepareInBackground();
@@ -103,6 +128,7 @@ public partial class App : Application
         WhisperService.Shutdown();
         TranslationService.Stop();
         LocalAiService.Shutdown();
+        VoiceAssistantService.Shutdown();
         CrashReportService.MarkCleanExit();
         base.OnExit(e);
     }

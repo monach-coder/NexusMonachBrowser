@@ -13,7 +13,6 @@
                 <ColumnDefinition Width="230" />
                 <ColumnDefinition Width="1" />
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
             <StackPanel Margin="0,0,10,0">
@@ -47,17 +46,6 @@
                            Foreground="{StaticResource MutedTextBrush}" Text="DNS Windows: —" />
                 <TextBlock x:Name="MatchText" Margin="0,2,0,0" FontSize="10.5" TextTrimming="CharacterEllipsis"
                            Foreground="{StaticResource MutedTextBrush}" Text="Часовой пояс и язык: —" />
-            </StackPanel>
-
-            <StackPanel Grid.Column="7" Orientation="Horizontal" VerticalAlignment="Center">
-                <Button Content="↻" Width="32" Height="30" Padding="0" FontSize="15"
-                        FontFamily="Segoe UI" Foreground="White" Background="#26FFFFFF"
-                        Style="{StaticResource IconButton}" ToolTip="Обновить диагностику"
-                        Click="Refresh_Click" />
-                <Button Content="×" Width="32" Height="30" Padding="0" Margin="6,0,0,0" FontSize="15"
-                        FontFamily="Segoe UI" Foreground="White" Background="#26FFFFFF"
-                        Style="{StaticResource IconButton}"
-                        ToolTip="Скрыть Privacy Dock" Click="Hide_Click" />
             </StackPanel>
 
             <wv2:WebView2 x:Name="NetworkProbe" Width="1" Height="1" IsHitTestVisible="False"
