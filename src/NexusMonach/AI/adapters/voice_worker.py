@@ -12,6 +12,11 @@ import sys
 
 
 def main() -> int:
+    # PyInstaller inherits the Windows ANSI code page for redirected pipes.
+    # The browser protocol is always UTF-8, including Russian request text.
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     protocol_output = sys.stdout
     # stdout is a strict JSON Lines protocol. Third-party import/model banners
     # and diagnostics are redirected so the browser can never parse them as a

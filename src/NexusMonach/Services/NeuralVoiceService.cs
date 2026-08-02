@@ -7,8 +7,8 @@ using NexusMonach.Models;
 namespace NexusMonach.Services;
 
 /// <summary>
-/// Persistent, network-free bridge to the Vosk TTS worker. The model is loaded
-/// once and generated WAV files live only in the OS temporary directory.
+/// Persistent, network-free bridge to the best installed TTS worker. Piper HD
+/// is preferred; the verified Vosk voice pack and Windows voice remain fallbacks.
 /// </summary>
 public static class NeuralVoiceService
 {
@@ -18,11 +18,13 @@ public static class NeuralVoiceService
     private static readonly TimeSpan SynthesisTimeout = TimeSpan.FromSeconds(45);
     private static readonly TimeSpan PlaybackTimeout = TimeSpan.FromMinutes(2);
     private static Process? _worker;
+    private static string? _workerExecutable;
+    private static string? _workerModel;
     private static WaveOutEvent? _activeOutput;
 
     public static bool IsAvailable => AiModelCatalog.NeuralVoiceReady;
     public static string Status => IsAvailable
-        ? "Nexus Neural Voice · Vosk TTS · полностью локально"
+        ? AiModelCatalog.VoiceModelId + " · полностью локально"
         : AiModelCatalog.MissingNeuralVoiceMessage;
 
     public static bool TrySpeak(string text, NeuralVoiceProfile profile, int rate)
@@ -40,6 +42,7 @@ public static class NeuralVoiceService
                     id = requestId,
                     text,
                     output,
+                    style = VoiceStyle(profile),
                     speaker = SpeakerId(profile),
                     rate = Math.Clamp(rate, -4, 4)
                 });
@@ -55,7 +58,7 @@ public static class NeuralVoiceService
                     !root.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
                 {
                     var error = root.TryGetProperty("error", out var value) ? value.GetString() : "неизвестная ошибка";
-                    throw new InvalidOperationException("Vosk TTS: " + error);
+                    throw new InvalidOperationException("Локальный TTS: " + error);
                 }
 
                 PlayWave(output);
@@ -94,9 +97,19 @@ public static class NeuralVoiceService
     {
         lock (WorkerSync)
         {
-            if (_worker is { HasExited: false }) return _worker;
             var executable = AiModelCatalog.VoiceWorker
                 ?? throw new FileNotFoundException(AiModelCatalog.MissingNeuralVoiceMessage);
+            var model = AiModelCatalog.VoiceModel;
+            if (_worker is { HasExited: false } &&
+                string.Equals(_workerExecutable, executable, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(_workerModel, model, StringComparison.OrdinalIgnoreCase))
+                return _worker;
+            if (_worker is not null)
+            {
+                try { if (!_worker.HasExited) _worker.Kill(true); } catch { }
+                try { _worker.Dispose(); } catch { }
+                _worker = null;
+            }
             var start = new ProcessStartInfo(executable)
             {
                 UseShellExecute = false,
@@ -109,11 +122,13 @@ public static class NeuralVoiceService
                 StandardErrorEncoding = new UTF8Encoding(false)
             };
             start.ArgumentList.Add("--model");
-            start.ArgumentList.Add(AiModelCatalog.VoiceModelRoot);
+            start.ArgumentList.Add(model);
             start.ArgumentList.Add("--stdio");
             var process = Process.Start(start)
-                ?? throw new InvalidOperationException("Не удалось запустить локальный Vosk TTS.");
+                ?? throw new InvalidOperationException("Не удалось запустить локальный TTS.");
             _worker = process;
+            _workerExecutable = executable;
+            _workerModel = model;
             _ = Task.Run(async () =>
             {
                 try
@@ -161,7 +176,7 @@ public static class NeuralVoiceService
         {
             var line = await worker.StandardOutput.ReadLineAsync(cancellationToken);
             if (line is null)
-                throw new InvalidOperationException("Локальный процесс Vosk TTS не вернул ответ.");
+                throw new InvalidOperationException("Локальный процесс TTS не вернул ответ.");
             try
             {
                 using var document = JsonDocument.Parse(line);
@@ -174,8 +189,15 @@ public static class NeuralVoiceService
                 // Only the matching structured reply belongs to the protocol.
             }
         }
-        throw new InvalidOperationException("Vosk TTS вернул слишком много служебных строк без ответа.");
+        throw new InvalidOperationException("Локальный TTS вернул слишком много служебных строк без ответа.");
     }
+
+    private static string VoiceStyle(NeuralVoiceProfile profile) => profile switch
+    {
+        NeuralVoiceProfile.Irina => "calm",
+        NeuralVoiceProfile.Aurora => "expressive",
+        _ => "natural"
+    };
 
     private static int SpeakerId(NeuralVoiceProfile profile) => profile switch
     {
@@ -191,6 +213,8 @@ public static class NeuralVoiceService
         {
             worker = _worker;
             _worker = null;
+            _workerExecutable = null;
+            _workerModel = null;
         }
         if (worker is null) return;
         try { if (!worker.HasExited) worker.Kill(true); } catch { }

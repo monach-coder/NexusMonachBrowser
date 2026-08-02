@@ -97,7 +97,8 @@ public static partial class VoiceAssistantService
     }
 
     public static void SpeakTestPhrase() =>
-        Announce("Женский голос Nexus готов помогать в сети.", VoiceAnnouncementPriority.Critical);
+        Announce("Nexus Monach готов. Сегодня 02.08.2026. WebView2 работает. Чем я могу помочь?",
+            VoiceAnnouncementPriority.Critical);
 
     public static void StopSpeaking()
     {
@@ -139,7 +140,10 @@ public static partial class VoiceAssistantService
         text = SecretPattern().Replace(text, "$1 скрыто");
         text = ControlPattern().Replace(text, " ");
         text = SpacePattern().Replace(text, " ").Trim();
-        return text[..Math.Min(text.Length, 360)];
+        text = RussianSpeechTextNormalizer.Normalize(text);
+        if (text.Length <= 360) return text;
+        var boundary = text.LastIndexOf(' ', 359);
+        return text[..(boundary >= 240 ? boundary : 360)].TrimEnd();
     }
 
     private static void Run()

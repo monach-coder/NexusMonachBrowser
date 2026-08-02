@@ -201,7 +201,7 @@
                                            Text="Проверка локального голосового движка…" />
                                 <TextBlock TextWrapping="Wrap" Margin="0,5,0,0" FontSize="11"
                                            Foreground="{StaticResource MutedTextBrush}"
-                                           Text="Распознавание выполняет Whisper, озвучивание — Vosk TTS из Full Offline voice-pack. Женский голос Windows используется только как резерв. Микрофон не включается в приватных окнах." />
+                                           Text="Распознавание выполняет Whisper. Для озвучивания Nexus выбирает Piper HD, проверенный Vosk из Full Offline voice-pack или женский голос Windows — в таком порядке. Микрофон не включается в приватных окнах." />
                                 <Button Content="Проверить голос" Style="{StaticResource ActionButton}"
                                         HorizontalAlignment="Left" Margin="0,12,0,0"
                                         Click="TestVoice_Click" />

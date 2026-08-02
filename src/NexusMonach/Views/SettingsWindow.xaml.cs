@@ -98,9 +98,9 @@ public partial class SettingsWindow : Window
         };
         var neuralVoiceChoices = new[]
         {
-            new Choice<NeuralVoiceProfile>("Наташа · естественный женский голос (рекомендуется)", NeuralVoiceProfile.Natasha),
-            new Choice<NeuralVoiceProfile>("Ирина · спокойный женский голос", NeuralVoiceProfile.Irina),
-            new Choice<NeuralVoiceProfile>("Аврора · выразительный синтетический голос", NeuralVoiceProfile.Aurora)
+            new Choice<NeuralVoiceProfile>("Естественный · живой темп (рекомендуется)", NeuralVoiceProfile.Natasha),
+            new Choice<NeuralVoiceProfile>("Спокойный · мягче и медленнее", NeuralVoiceProfile.Irina),
+            new Choice<NeuralVoiceProfile>("Выразительный · больше интонации", NeuralVoiceProfile.Aurora)
         };
         SearchEngineCombo.ItemsSource = searchChoices;
         PrivacyLevelCombo.ItemsSource = privacyChoices;

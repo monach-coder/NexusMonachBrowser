@@ -11,7 +11,9 @@ public static class AiModelCatalog
     public const string SemanticModelId = "Nexus Semantics · multilingual-e5-small";
     public const string VisionModelId = "Nexus Vision · SmolVLM 500M";
     public const string TranslationModelId = "Nexus Translation · OPUS-MT";
-    public const string VoiceModelId = "Nexus Neural Voice · Vosk TTS Russian Multi";
+    public static string VoiceModelId => PiperVoiceReady
+        ? "Nexus Neural Voice HD · Piper Russian"
+        : "Nexus Neural Voice · Vosk TTS Russian Multi";
 
     public static string Root => Path.Combine(AppContext.BaseDirectory, "AI");
     public static string LlamaRoot => Path.Combine(Root, "llama");
@@ -27,7 +29,9 @@ public static class AiModelCatalog
     public static string NodeRoot => Path.Combine(Root, "node");
     public static string AdapterRoot => Path.Combine(Root, "adapters");
     public static string VoiceRoot => Path.Combine(Root, "voice");
-    public static string VoiceModelRoot => Path.Combine(Root, "models", "voice", "vosk-tts-ru-multi");
+    public static string VoskVoiceModelRoot => Path.Combine(Root, "models", "voice", "vosk-tts-ru-multi");
+    public static string PiperVoiceModelRoot => Path.Combine(Root, "models", "voice", "piper-hd");
+    public static string PiperVoiceModel => Path.Combine(PiperVoiceModelRoot, "voice.onnx");
 
     public static string? LlamaCli => FindFile(LlamaRoot, "llama-cli.exe");
     public static string? LlamaServer => FindFile(LlamaRoot, "llama-server.exe");
@@ -41,7 +45,10 @@ public static class AiModelCatalog
     public static string? NodeExecutable => FindFile(NodeRoot, "node.exe");
     public static string SemanticAdapter => Path.Combine(AdapterRoot, "semantic.mjs");
     public static string TranslationAdapter => Path.Combine(AdapterRoot, "translate.mjs");
-    public static string? VoiceWorker => FindFile(VoiceRoot, "nexus-voice-worker.exe");
+    public static string? VoskVoiceWorker => FindFile(VoiceRoot, "nexus-voice-worker.exe");
+    public static string? PiperVoiceWorker => FindFile(VoiceRoot, "nexus-piper-worker.exe");
+    public static string? VoiceWorker => PiperVoiceReady ? PiperVoiceWorker : VoskVoiceWorker;
+    public static string VoiceModel => PiperVoiceReady ? PiperVoiceModel : VoskVoiceModelRoot;
 
     public static bool TextReady => (IsUsable(LlamaServer, 8_000) || IsUsable(LlamaCli, 8_000)) &&
                                     IsUsable(TextModel, 300_000_000);
@@ -54,10 +61,14 @@ public static class AiModelCatalog
     public static bool TranslationReady => IsUsable(NodeExecutable, 20_000_000) && File.Exists(TranslationAdapter) &&
         HasTranslationModel(MultilingualToEnglishRoot) && HasTranslationModel(EnglishToRussianRoot) &&
         HasTranslationModel(KoreanToEnglishRoot);
-    public static bool NeuralVoiceReady => IsUsable(VoiceWorker, 500_000) &&
-                                           File.Exists(Path.Combine(VoiceModelRoot, "config.json")) &&
-                                           IsUsable(Path.Combine(VoiceModelRoot, "dictionary"), 1_000_000) &&
-                                           IsUsable(Path.Combine(VoiceModelRoot, "model.onnx"), 50_000_000);
+    public static bool PiperVoiceReady => IsUsable(PiperVoiceWorker, 500_000) &&
+                                          IsUsable(PiperVoiceModel, 50_000_000) &&
+                                          File.Exists(PiperVoiceModel + ".json");
+    public static bool VoskVoiceReady => IsUsable(VoskVoiceWorker, 500_000) &&
+                                         File.Exists(Path.Combine(VoskVoiceModelRoot, "config.json")) &&
+                                         IsUsable(Path.Combine(VoskVoiceModelRoot, "dictionary"), 1_000_000) &&
+                                         IsUsable(Path.Combine(VoskVoiceModelRoot, "model.onnx"), 50_000_000);
+    public static bool NeuralVoiceReady => PiperVoiceReady || VoskVoiceReady;
 
     public static string ReadinessSummary =>
         $"Текст {(TextReady ? "✓" : "—")} · Речь {(SpeechReady ? "✓" : "—")} · " +
@@ -65,9 +76,9 @@ public static class AiModelCatalog
         $"Перевод {(TranslationReady ? "✓" : "—")} · Голос {(NeuralVoiceReady ? "✓" : "—")}";
 
     public static string MissingNeuralVoiceMessage =>
-        "Нейроголос Vosk TTS отсутствует. Нужны AI\\voice\\nexus-voice-worker.exe и " +
-        "AI\\models\\voice\\vosk-tts-ru-multi. До установки официального voice-pack " +
-        "Nexus использует локальный женский голос Windows.";
+        "Локальный нейроголос отсутствует. Установите официальный Full Offline voice-pack " +
+        "с Vosk TTS либо совместимый Piper HD pack. До установки Nexus использует " +
+        "локальный женский голос Windows.";
 
     public static string MissingTextRuntimeMessage =>
         "В этой сборке отсутствует автономный текстовый AI-комплект. Ожидается AI\\llama\\llama-server.exe " +

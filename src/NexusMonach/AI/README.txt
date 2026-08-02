@@ -17,12 +17,20 @@ AI\models\translation\en-ru\*.onnx + tokenizer (английский → рус�
 AI\voice\nexus-voice-worker.exe
 AI\models\voice\vosk-tts-ru-multi\config.json, model.onnx и dictionary
 
+Опциональный Piper HD pack, если лицензия конкретного голоса проверена:
+AI\voice\nexus-piper-worker.exe
+AI\models\voice\piper-hd\voice.onnx и voice.onnx.json
+
 Код worker и поддержка профилей входят в исходники. Full Offline workflow
 собирает worker, проверяет закреплённый архив модели и выполняет реальный
 smoke-test синтеза до упаковки. Непроверенные бинарники и веса не загружаются
 во время работы браузера. Если подписанный голосовой комплект отсутствует,
 Nexus честно переключается на
 установленный женский голос Windows.
+
+Перед синтезом единый русский speech frontend раскрывает даты, время, числа,
+единицы измерения, валюты и технические сокращения. Пользовательские исправления
+произношений читаются из локального pronunciation-dictionary.json.
 
 Основная статья переводится OPUS-MT в памяти и озвучивается женским голосом.
 В DOM переводятся только меню, кнопки, подписи и подсказки форм. Перевод

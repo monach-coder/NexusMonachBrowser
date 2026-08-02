@@ -85,6 +85,11 @@ public static class StartupSoundService
 
     private static void SpeakBrandName()
     {
+        if (NeuralVoiceService.TrySpeak(
+                RussianSpeechTextNormalizer.Normalize("Nexus Monach"),
+                SettingsService.Current.NeuralVoiceProfile,
+                rate: -1))
+            return;
         try
         {
             SpeakWithWindowsSynthesizer();
