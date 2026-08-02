@@ -230,11 +230,8 @@
                         <Separator />
                         <MenuItem x:Name="ExtensionsMenuItem" Header="Расширения" Click="ShowExtensions_Click" />
                         <MenuItem Header="Показать / скрыть Privacy Dock" Click="ShowPrivacyMonitor_Click" />
-                        <MenuItem Header="Безопасная структура текущего сайта" InputGestureText="Ctrl+Shift+E"
-                                  Click="ShowSiteExplorer_Click" />
-                        <MenuItem Header="Nexus Inspector · дерево сайта" InputGestureText="F12" Click="ShowDeveloperTools_Click" />
-                        <MenuItem Header="Chromium DevTools · профилировщик" InputGestureText="Ctrl+Shift+I"
-                                  Click="ShowChromiumDeveloperTools_Click" />
+                        <MenuItem Header="Инструменты разработчика Chromium" InputGestureText="F12 / Ctrl+Shift+I"
+                                  Click="ShowDeveloperTools_Click" />
                         <MenuItem Header="SSH-терминал Linux" Click="SshTerminal_Click" />
                         <MenuItem Header="Nexus Guardian · локальные рапорты" Click="ShowGuardianCenter_Click" />
                         <MenuItem Header="Настройки" Click="ShowSettings_Click" />

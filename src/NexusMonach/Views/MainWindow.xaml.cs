@@ -32,7 +32,6 @@ public partial class MainWindow : Window
     private bool _restartRequested;
     private bool _coreUpdatePromptShown;
     private TopologyDetailsWindow? _topologyDetailsWindow;
-    private NexusInspectorWindow? _inspectorWindow;
     private readonly DispatcherTimer _memoryTimer;
     private readonly DispatcherTimer _networkPerformanceTimer;
     private readonly Dictionary<string, (long Received, long Sent)> _networkCounters = new(StringComparer.Ordinal);
@@ -642,11 +641,6 @@ public partial class MainWindow : Window
 
     private async void TabsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (_inspectorWindow is { IsLoaded: true } inspector &&
-            !ReferenceEquals(inspector.InspectedCore, ActiveTab?.Core))
-        {
-            try { inspector.Close(); } catch { }
-        }
         if (ActiveTab is not null)
             await EnsureTabReadyAsync(ActiveTab);
     }
@@ -674,11 +668,6 @@ public partial class MainWindow : Window
     {
         var index = Tabs.IndexOf(tab);
         if (index < 0) return;
-        if (_inspectorWindow is { IsLoaded: true } inspector &&
-            ReferenceEquals(inspector.InspectedCore, tab.Core))
-        {
-            try { inspector.Close(); } catch { }
-        }
         if (ReferenceEquals(BrowserHost.Content, tab.View))
             BrowserHost.Content = null;
         _lastKnowledgeUrl.Remove(tab);
@@ -1074,43 +1063,8 @@ public partial class MainWindow : Window
     private void SshTerminal_CloseRequested(object? sender, EventArgs e) =>
         SshTerminalDock.Visibility = Visibility.Collapsed;
 
-    private void ShowDeveloperTools_Click(object sender, RoutedEventArgs e)
-    {
-        if (ActiveTab?.Core is null) return;
-        SshTerminalDock.Visibility = Visibility.Collapsed;
-        if (_inspectorWindow is { IsLoaded: true } inspector &&
-            ReferenceEquals(inspector.InspectedCore, ActiveTab.Core))
-        {
-            inspector.Activate();
-            return;
-        }
-        if (_inspectorWindow is { IsLoaded: true } staleInspector)
-            try { staleInspector.Close(); } catch { }
-
-        _inspectorWindow = new NexusInspectorWindow(ActiveTab.Core)
-        {
-            Owner = this
-        };
-        _inspectorWindow.Closed += (_, _) => _inspectorWindow = null;
-        _inspectorWindow.Show();
-    }
-
-    private void ShowChromiumDeveloperTools_Click(object sender, RoutedEventArgs e) =>
+    private void ShowDeveloperTools_Click(object sender, RoutedEventArgs e) =>
         ActiveTab?.Core?.OpenDevToolsWindow();
-
-    private void ShowSiteExplorer_Click(object sender, RoutedEventArgs e)
-    {
-        var tab = ActiveTab;
-        if (tab?.Core is null)
-        {
-            GlassDialogWindow.Show(this, "Сначала откройте обычную веб-страницу.",
-                "Структура сайта", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
-        var window = new SiteExplorerWindow(tab) { Owner = this };
-        window.Show();
-    }
 
     private async void ShowPrivacyMonitor_Click(object sender, RoutedEventArgs e)
     {
@@ -1183,7 +1137,6 @@ public partial class MainWindow : Window
         else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.N) { NewPrivateWindow_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.K) { ShowSmartCapsules_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.G) { ShowKnowledgeGraph_Click(sender, e); e.Handled = true; }
-        else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.E) { ShowSiteExplorer_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.D) { Bookmark_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.J) { ShowDownloads_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == ModifierKeys.Alt && e.Key == Key.Left) { ActiveTab?.GoBack(); e.Handled = true; }
@@ -1191,7 +1144,7 @@ public partial class MainWindow : Window
         else if (e.Key == Key.F12)
         { ShowDeveloperTools_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.I)
-        { ShowChromiumDeveloperTools_Click(sender, e); e.Handled = true; }
+        { ShowDeveloperTools_Click(sender, e); e.Handled = true; }
         else if (e.Key == Key.F5) { ActiveTab?.ReloadOrStop(); e.Handled = true; }
     }
 
