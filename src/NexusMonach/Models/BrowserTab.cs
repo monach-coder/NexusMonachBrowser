@@ -25,11 +25,25 @@ public sealed record TabNetworkSnapshot(
     IReadOnlyList<string> ContactedHosts,
     IReadOnlyList<string> ThirdPartyHosts,
     IReadOnlyList<string> BlockedTrackerHosts,
+    IReadOnlyList<NetworkRecipientSnapshot> Recipients,
     IReadOnlyList<int> ObservedPorts,
-    int RequestCount);
+    int RequestCount,
+    bool Truncated);
+
+public sealed record NetworkRecipientSnapshot(
+    string Host,
+    int RequestCount,
+    bool IsThirdParty,
+    bool IsKnownTracker,
+    bool WasBlocked,
+    bool SentCookies,
+    bool SentReferrer,
+    bool SentOrigin,
+    IReadOnlyList<string> ResourceKinds);
 
 public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
 {
+    private const int MaxObservedNetworkHosts = 512;
     private readonly bool _isPrivate;
     private readonly bool _navigateOnInitialize;
     private readonly TaskCompletionSource<bool> _firstNavigation =
@@ -48,8 +62,11 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     private readonly HashSet<string> _contactedHosts = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _thirdPartyHosts = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _blockedTrackerHosts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, NetworkRecipientAccumulator> _networkRecipients =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<int> _observedPorts = [];
     private int _requestCount;
+    private bool _networkSnapshotTruncated;
     private string _networkTopHost = string.Empty;
     private string _agentDomToken = string.Empty;
     private SecureRestartTabState? _pendingRestartState;
@@ -180,7 +197,29 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         Core.Settings.IsGeneralAutofillEnabled = !_isPrivate && settings.EnableGeneralAutofill;
         BrowserEnvironment.ApplyPrivacyLevel(Core.Profile,
             _isPrivate ? PrivacyLevel.Strict : settings.PrivacyLevel);
-        await Task.CompletedTask;
+        await ConfigureStartPageAsync();
+    }
+
+    private async Task ConfigureStartPageAsync()
+    {
+        if (Core is null || !CurrentUrl.Equals(UrlService.NewTabUrl, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var settings = SettingsService.Current;
+        var configuration = JsonSerializer.Serialize(new
+        {
+            showSetup = !settings.InitialProtectionSetupShown,
+            theme = settings.Theme.ToString(),
+            mode = settings.ThemeMode.ToString()
+        });
+        try
+        {
+            await Core.ExecuteScriptAsync($"window.nexusConfigureStartPage?.({configuration});");
+        }
+        catch (InvalidOperationException)
+        {
+            // The tab may have navigated away while the theme was being applied.
+        }
     }
 
     public void MarkActive()
@@ -368,9 +407,127 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 _contactedHosts.OrderBy(x => x).ToArray(),
                 _thirdPartyHosts.OrderBy(x => x).ToArray(),
                 _blockedTrackerHosts.OrderBy(x => x).ToArray(),
+                _networkRecipients.Values
+                    .OrderByDescending(x => x.IsThirdParty)
+                    .ThenByDescending(x => x.IsKnownTracker)
+                    .ThenBy(x => x.Host, StringComparer.OrdinalIgnoreCase)
+                    .Select(x => x.Snapshot())
+                    .ToArray(),
                 _observedPorts.OrderBy(x => x).ToArray(),
-                _requestCount);
+                _requestCount,
+                _networkSnapshotTruncated);
         }
+    }
+
+    public async Task<SiteTreeSnapshot> CaptureSiteTreeAsync(CancellationToken cancellationToken = default)
+    {
+        var core = Core;
+        if (core is null || UrlService.IsInternal(CurrentUrl) ||
+            !Uri.TryCreate(CurrentUrl, UriKind.Absolute, out var current) ||
+            current.Scheme is not ("http" or "https"))
+            throw new InvalidOperationException("Откройте обычную веб-страницу, чтобы изучить её структуру.");
+
+        const string script = """
+            (() => {
+              const MAX_NODES=650,MAX_DEPTH=14,MAX_LINKS=220,MAX_RESOURCES=260;
+              const skipped=new Set(['SCRIPT','STYLE','NOSCRIPT','META','LINK','TEMPLATE','SVG','PATH','CANVAS']);
+              const sensitive=/pass|pwd|secret|token|auth|otp|one.?time|verification|2fa|mfa|card|credit|debit|cvv|cvc|iban|account/i;
+              let captured=0,truncated=false;
+
+              const clip=(value,limit)=>String(value||'').replace(/\s+/g,' ').trim().slice(0,limit);
+              const safePart=value=>/^[A-Za-z_][A-Za-z0-9_-]{0,80}$/.test(value||'')&&!sensitive.test(value);
+              const selectorFor=element=>{
+                if(safePart(element.id))return '#'+element.id;
+                const parts=[];let node=element;
+                while(node&&node.nodeType===1&&node!==document.documentElement&&parts.length<8){
+                  let part=node.tagName.toLowerCase();
+                  const classes=[...node.classList].filter(safePart).slice(0,2);
+                  if(classes.length)part+='.'+classes.join('.');
+                  const siblings=node.parentElement?[...node.parentElement.children].filter(x=>x.tagName===node.tagName):[];
+                  if(siblings.length>1)part+=':nth-of-type('+(siblings.indexOf(node)+1)+')';
+                  parts.unshift(part);node=node.parentElement;
+                }
+                return parts.join(' > ');
+              };
+              const safeUrl=value=>{
+                try{
+                  const url=new URL(value,location.href);
+                  if(url.protocol!=='http:'&&url.protocol!=='https:')return '';
+                  url.username='';url.password='';url.search='';url.hash='';
+                  return url.href;
+                }catch{return ''}
+              };
+              const ownText=element=>{
+                if(element.closest('form,input,textarea,select,option,[contenteditable="true"]'))return '';
+                if(element.hidden||element.getAttribute('aria-hidden')==='true')return '';
+                const style=getComputedStyle(element);
+                if(style.display==='none'||style.visibility==='hidden'||style.opacity==='0')return '';
+                return clip([...element.childNodes]
+                  .filter(x=>x.nodeType===Node.TEXT_NODE)
+                  .map(x=>x.textContent).join(' '),140);
+              };
+              const visit=(element,depth)=>{
+                if(!element||skipped.has(element.tagName))return null;
+                if(captured>=MAX_NODES||depth>MAX_DEPTH){truncated=true;return null}
+                captured++;
+                const selector=selectorFor(element);
+                const text=ownText(element);
+                const role=clip(element.getAttribute('role'),40);
+                const title='<'+element.tagName.toLowerCase()+'>'+(text?' · '+text:'');
+                const details=['Элемент: '+element.tagName.toLowerCase(),selector?'CSS: '+selector:'',role?'Роль: '+role:'',text?'Текст: '+text:'']
+                  .filter(Boolean).join('\n');
+                const item={title:clip(title,180),details,copyValue:selector,children:[]};
+                for(const child of element.children){
+                  const nested=visit(child,depth+1);if(nested)item.children.push(nested);
+                  if(captured>=MAX_NODES)break;
+                }
+                return item;
+              };
+
+              const structure=[];
+              if(document.body){const root=visit(document.body,0);if(root)structure.push(root)}
+
+              const links=[];
+              let examinedLinks=0;
+              for(const anchor of document.querySelectorAll('a[href]')){
+                if(++examinedLinks>1200){truncated=true;break}
+                if(links.length>=MAX_LINKS){truncated=true;break}
+                const url=safeUrl(anchor.href);if(!url)continue;
+                const label=clip(anchor.innerText||anchor.getAttribute('aria-label')||anchor.title,120)||new URL(url).hostname;
+                links.push({title:label,details:'Ссылка: '+url,copyValue:url,children:[]});
+              }
+
+              const resources=[];
+              try{
+                const seen=new Set();
+                let examinedResources=0;
+                for(const entry of performance.getEntriesByType('resource')){
+                  if(++examinedResources>1600){truncated=true;break}
+                  if(resources.length>=MAX_RESOURCES){truncated=true;break}
+                  const url=safeUrl(entry.name);if(!url||seen.has(url))continue;seen.add(url);
+                  const kind=clip(entry.initiatorType||'resource',40);
+                  resources.push({title:kind+' · '+new URL(url).hostname,details:'Тип: '+kind+'\nРесурс: '+url,copyValue:url,children:[]});
+                }
+              }catch{}
+
+              return {
+                pageTitle:clip(document.title,180),
+                origin:location.origin,
+                totalElements:document.getElementsByTagName('*').length,
+                truncated,
+                structure,links,resources
+              };
+            })();
+            """;
+
+        using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        budget.CancelAfter(TimeSpan.FromSeconds(15));
+        var json = await core.ExecuteScriptAsync(script).WaitAsync(budget.Token);
+        var snapshot = JsonSerializer.Deserialize<SiteTreeSnapshot>(json,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        if (snapshot is null)
+            throw new InvalidOperationException("Страница не вернула доступную структуру.");
+        return snapshot;
     }
 
     public async Task<string> GetReadablePageTextAsync()
@@ -1103,33 +1260,94 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
             _contactedHosts.Clear();
             _thirdPartyHosts.Clear();
             _blockedTrackerHosts.Clear();
+            _networkRecipients.Clear();
             _observedPorts.Clear();
             _requestCount = 0;
+            _networkSnapshotTruncated = false;
             _networkTopHost = Uri.TryCreate(topLevelUrl, UriKind.Absolute, out var top) ? top.Host : string.Empty;
         }
     }
 
-    private void RecordNetworkRequest(string requestUrl, bool blocked)
+    private void RecordNetworkRequest(WebRequestObservation observation)
     {
-        if (!Uri.TryCreate(requestUrl, UriKind.Absolute, out var request) ||
+        if (!Uri.TryCreate(observation.Url, UriKind.Absolute, out var request) ||
             request.Scheme is not ("http" or "https"))
             return;
 
         lock (_networkLock)
         {
-            _requestCount++;
-            _contactedHosts.Add(request.Host);
+            if (_requestCount < int.MaxValue) _requestCount++;
             var port = request.IsDefaultPort
                 ? request.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ? 443 : 80
                 : request.Port;
             if (port is > 0 and <= 65535)
-                _observedPorts.Add(port);
+            {
+                if (_observedPorts.Count < 128 || _observedPorts.Contains(port))
+                    _observedPorts.Add(port);
+                else
+                    _networkSnapshotTruncated = true;
+            }
 
-            if (!string.IsNullOrWhiteSpace(_networkTopHost) && !IsSameSite(request.Host, _networkTopHost))
-                _thirdPartyHosts.Add(request.Host);
-            if (blocked)
-                _blockedTrackerHosts.Add(request.Host);
+            var thirdParty = !string.IsNullOrWhiteSpace(_networkTopHost) &&
+                             !IsSameSite(request.Host, _networkTopHost);
+
+            var knownHost = _networkRecipients.ContainsKey(request.Host);
+            if (!knownHost && _networkRecipients.Count >= MaxObservedNetworkHosts)
+            {
+                _networkSnapshotTruncated = true;
+                return;
+            }
+
+            _contactedHosts.Add(request.Host);
+            if (thirdParty) _thirdPartyHosts.Add(request.Host);
+            if (observation.Blocked) _blockedTrackerHosts.Add(request.Host);
+
+            if (!_networkRecipients.TryGetValue(request.Host, out var recipient))
+            {
+                recipient = new NetworkRecipientAccumulator(request.Host);
+                _networkRecipients.Add(request.Host, recipient);
+            }
+            recipient.Observe(observation, thirdParty);
         }
+    }
+
+    private sealed class NetworkRecipientAccumulator(string host)
+    {
+        private readonly HashSet<string> _resourceKinds = new(StringComparer.OrdinalIgnoreCase);
+
+        public string Host { get; } = host;
+        public int RequestCount { get; private set; }
+        public bool IsThirdParty { get; private set; }
+        public bool IsKnownTracker { get; private set; }
+        public bool WasBlocked { get; private set; }
+        public bool SentCookies { get; private set; }
+        public bool SentReferrer { get; private set; }
+        public bool SentOrigin { get; private set; }
+
+        public void Observe(WebRequestObservation observation, bool thirdParty)
+        {
+            if (RequestCount < int.MaxValue) RequestCount++;
+            IsThirdParty |= thirdParty;
+            IsKnownTracker |= observation.IsKnownTracker;
+            WasBlocked |= observation.Blocked;
+            SentCookies |= observation.HasCookieHeader;
+            SentReferrer |= observation.HasReferrerHeader;
+            SentOrigin |= observation.HasOriginHeader;
+            if (!string.IsNullOrWhiteSpace(observation.ResourceKind) &&
+                (_resourceKinds.Count < 32 || _resourceKinds.Contains(observation.ResourceKind)))
+                _resourceKinds.Add(observation.ResourceKind);
+        }
+
+        public NetworkRecipientSnapshot Snapshot() => new(
+            Host,
+            RequestCount,
+            IsThirdParty,
+            IsKnownTracker,
+            WasBlocked,
+            SentCookies,
+            SentReferrer,
+            SentOrigin,
+            _resourceKinds.OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray());
     }
 
     private static bool IsSameSite(string left, string right) =>
@@ -1336,6 +1554,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 _pendingHttpFallback = null;
                 _upgradedHttpsUrl = null;
                 NavigationSucceeded?.Invoke(this, EventArgs.Empty);
+                _ = ConfigureStartPageAsync();
                 _ = TryRestoreSecureRestartStateAsync();
             }
             else if (_pendingHttpFallback is not null && _upgradedHttpsUrl is not null)
@@ -1523,7 +1742,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
 
     private static bool IsAllowedInternalMessage(string page, string? type) =>
         page.Equals("/start.html", StringComparison.OrdinalIgnoreCase)
-            ? type is "navigate" or "search" or "settings"
+            ? type is "navigate" or "settings"
             : page.Equals("/search.html", StringComparison.OrdinalIgnoreCase) && type == "result-open";
 
     private void HandleDownload(CoreWebView2DownloadStartingEventArgs e)

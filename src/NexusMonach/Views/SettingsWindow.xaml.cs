@@ -54,6 +54,11 @@ public partial class SettingsWindow : Window
             new Choice<BrowserTheme>("Forest — спокойный зелёный", BrowserTheme.Forest),
             new Choice<BrowserTheme>("Amethyst — тёмный фиолетовый", BrowserTheme.Amethyst)
         };
+        var themeModeChoices = new[]
+        {
+            new Choice<BrowserThemeMode>("Тёмный — тёмный фон и светлый текст", BrowserThemeMode.Dark),
+            new Choice<BrowserThemeMode>("Светлый — светлый фон и тёмный текст", BrowserThemeMode.Light)
+        };
         var proxyChoices = new[]
         {
             new Choice<ProxyKind>("SOCKS5 — подходит для Tor и локальных туннелей", ProxyKind.Socks5),
@@ -91,24 +96,35 @@ public partial class SettingsWindow : Window
             new Choice<VoiceAssistantMode>("Только важное — рекомендуется", VoiceAssistantMode.ImportantOnly),
             new Choice<VoiceAssistantMode>("Помощник — важное и ход операций", VoiceAssistantMode.Assistant)
         };
+        var neuralVoiceChoices = new[]
+        {
+            new Choice<NeuralVoiceProfile>("Наташа · естественный женский голос (рекомендуется)", NeuralVoiceProfile.Natasha),
+            new Choice<NeuralVoiceProfile>("Ирина · спокойный женский голос", NeuralVoiceProfile.Irina),
+            new Choice<NeuralVoiceProfile>("Аврора · выразительный синтетический голос", NeuralVoiceProfile.Aurora)
+        };
         SearchEngineCombo.ItemsSource = searchChoices;
         PrivacyLevelCombo.ItemsSource = privacyChoices;
         ThemeCombo.ItemsSource = themeChoices;
+        ThemeModeCombo.ItemsSource = themeModeChoices;
         ProxyTypeCombo.ItemsSource = proxyChoices;
         SecureDnsModeCombo.ItemsSource = secureDnsModeChoices;
         SecureDnsProviderCombo.ItemsSource = secureDnsProviderChoices;
         CrashReportModeCombo.ItemsSource = crashChoices;
         CrashReportDestinationCombo.ItemsSource = crashDestinationChoices;
         VoiceModeCombo.ItemsSource = voiceChoices;
+        NeuralVoiceCombo.ItemsSource = neuralVoiceChoices;
         SearchEngineCombo.SelectedItem = searchChoices.FirstOrDefault(x => x.Value == settings.SearchEngine) ?? searchChoices[0];
         PrivacyLevelCombo.SelectedItem = privacyChoices.First(x => x.Value == settings.PrivacyLevel);
         ThemeCombo.SelectedItem = themeChoices.First(x => x.Value == settings.Theme);
+        ThemeModeCombo.SelectedItem = themeModeChoices.First(x => x.Value == settings.ThemeMode);
         ProxyTypeCombo.SelectedItem = proxyChoices.First(x => x.Value == settings.ProxyKind);
         SecureDnsModeCombo.SelectedItem = secureDnsModeChoices.First(x => x.Value == settings.SecureDnsMode);
         SecureDnsProviderCombo.SelectedItem = secureDnsProviderChoices.First(x => x.Value == settings.SecureDnsProvider);
         CrashReportModeCombo.SelectedItem = crashChoices.First(x => x.Value == settings.CrashReportMode);
         CrashReportDestinationCombo.SelectedItem = crashDestinationChoices.First(x => x.Value == settings.CrashReportDestination);
         VoiceModeCombo.SelectedItem = voiceChoices.First(x => x.Value == settings.VoiceAssistantMode);
+        NeuralVoiceCombo.SelectedItem = neuralVoiceChoices.First(x => x.Value == settings.NeuralVoiceProfile);
+        VoiceEngineStatusText.Text = VoiceAssistantService.EngineStatus;
         HomePageBox.Text = settings.HomePage;
         DntCheck.IsChecked = settings.SendDoNotTrack;
         GpcCheck.IsChecked = settings.SendGlobalPrivacyControl;
@@ -223,6 +239,8 @@ public partial class SettingsWindow : Window
             ? level.Value : PrivacyLevel.Balanced;
         _settings.Theme = ThemeCombo.SelectedItem is Choice<BrowserTheme> theme
             ? theme.Value : BrowserTheme.MonachAqua;
+        _settings.ThemeMode = ThemeModeCombo.SelectedItem is Choice<BrowserThemeMode> mode
+            ? mode.Value : BrowserThemeMode.Dark;
         _settings.ThemeSelectionCompleted = true;
         _settings.HomePage = string.IsNullOrWhiteSpace(HomePageBox.Text) ? "app://newtab" : HomePageBox.Text.Trim();
         _settings.SendDoNotTrack = DntCheck.IsChecked == true;
@@ -242,6 +260,8 @@ public partial class SettingsWindow : Window
         _settings.EnableDevTools = false;
         _settings.VoiceAssistantMode = VoiceModeCombo.SelectedItem is Choice<VoiceAssistantMode> voiceMode
             ? voiceMode.Value : VoiceAssistantMode.ImportantOnly;
+        _settings.NeuralVoiceProfile = NeuralVoiceCombo.SelectedItem is Choice<NeuralVoiceProfile> neuralVoice
+            ? neuralVoice.Value : NeuralVoiceProfile.Natasha;
         _settings.VoiceSpeakAtStartup = VoiceStartupCheck.IsChecked == true;
         _settings.VoiceHandsFreeEnabled = VoiceHandsFreeCheck.IsChecked == true &&
                                           _settings.VoiceAssistantMode != VoiceAssistantMode.Off;
@@ -300,9 +320,16 @@ public partial class SettingsWindow : Window
     private void TestVoice_Click(object sender, RoutedEventArgs e)
     {
         var previousMode = SettingsService.Current.VoiceAssistantMode;
+        var previousVoice = SettingsService.Current.NeuralVoiceProfile;
         SettingsService.Current.VoiceAssistantMode = VoiceAssistantMode.Assistant;
+        SettingsService.Current.NeuralVoiceProfile = NeuralVoiceCombo.SelectedItem is Choice<NeuralVoiceProfile> voice
+            ? voice.Value : NeuralVoiceProfile.Natasha;
         try { VoiceAssistantService.SpeakTestPhrase(); }
-        finally { SettingsService.Current.VoiceAssistantMode = previousMode; }
+        finally
+        {
+            SettingsService.Current.VoiceAssistantMode = previousMode;
+            SettingsService.Current.NeuralVoiceProfile = previousVoice;
+        }
     }
 
     private async void TestMatrix_Click(object sender, RoutedEventArgs e)

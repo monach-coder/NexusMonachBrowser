@@ -60,11 +60,24 @@ public enum BrowserTheme
     Amethyst
 }
 
+public enum BrowserThemeMode
+{
+    Dark,
+    Light
+}
+
 public enum VoiceAssistantMode
 {
     Off,
     ImportantOnly,
     Assistant
+}
+
+public enum NeuralVoiceProfile
+{
+    Natasha,
+    Irina,
+    Aurora
 }
 
 public sealed class BrowserSettings
@@ -105,11 +118,13 @@ public sealed class BrowserSettings
     public string MatrixRoomId { get; set; } = string.Empty;
     public bool InitialProtectionSetupShown { get; set; }
     public BrowserTheme Theme { get; set; } = BrowserTheme.MonachAqua;
+    public BrowserThemeMode ThemeMode { get; set; } = BrowserThemeMode.Dark;
     public bool ThemeSelectionCompleted { get; set; }
     public VoiceAssistantMode VoiceAssistantMode { get; set; } = VoiceAssistantMode.ImportantOnly;
     public bool VoiceSpeakAtStartup { get; set; } = true;
     public bool VoiceHandsFreeEnabled { get; set; }
     public int VoiceRate { get; set; } = -1;
+    public NeuralVoiceProfile NeuralVoiceProfile { get; set; } = NeuralVoiceProfile.Natasha;
 
     public BrowserSettings Clone() => new()
     {
@@ -145,10 +160,12 @@ public sealed class BrowserSettings
         MatrixRoomId = MatrixRoomId,
         InitialProtectionSetupShown = InitialProtectionSetupShown,
         Theme = Theme,
+        ThemeMode = ThemeMode,
         ThemeSelectionCompleted = ThemeSelectionCompleted,
         VoiceAssistantMode = VoiceAssistantMode,
         VoiceSpeakAtStartup = VoiceSpeakAtStartup,
         VoiceHandsFreeEnabled = VoiceHandsFreeEnabled,
-        VoiceRate = VoiceRate
+        VoiceRate = VoiceRate,
+        NeuralVoiceProfile = NeuralVoiceProfile
     };
 }

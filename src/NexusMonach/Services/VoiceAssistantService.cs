@@ -28,6 +28,7 @@ public static partial class VoiceAssistantService
 
     public static bool IsSpeaking => _isSpeaking;
     public static bool IsBusy => _isSpeaking || Queue.Count > 0;
+    public static string EngineStatus => NeuralVoiceService.Status;
 
     public static void Initialize()
     {
@@ -54,7 +55,7 @@ public static partial class VoiceAssistantService
         var safe = SanitizeForSpeech(text);
         if (safe.Length == 0) return false;
         Initialize();
-        var item = new VoiceQueueItem(safe, priority, false, null, null);
+        var item = new VoiceQueueItem(safe, priority, false, null, null, settings.NeuralVoiceProfile);
         if (Queue.TryAdd(item)) return true;
         if (priority != VoiceAnnouncementPriority.Critical) return false;
         DrainPendingQueue();
@@ -82,7 +83,8 @@ public static partial class VoiceAssistantService
 
         Initialize();
         var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!Queue.TryAdd(new VoiceQueueItem(safe, priority, false, completion, rateOverride))) return false;
+        if (!Queue.TryAdd(new VoiceQueueItem(safe, priority, false, completion, rateOverride,
+                settings.NeuralVoiceProfile))) return false;
         try
         {
             return await completion.Task.WaitAsync(cancellationToken);
@@ -103,7 +105,9 @@ public static partial class VoiceAssistantService
         DrainPendingQueue();
         lock (Sync)
             try { _activeSynthesizer?.SpeakAsyncCancelAll(); } catch { }
-        Queue.TryAdd(new VoiceQueueItem(string.Empty, VoiceAnnouncementPriority.Critical, true, null, null));
+        NeuralVoiceService.Stop();
+        Queue.TryAdd(new VoiceQueueItem(string.Empty, VoiceAnnouncementPriority.Critical, true, null, null,
+            SettingsService.Current.NeuralVoiceProfile));
     }
 
     public static void Shutdown()
@@ -113,9 +117,11 @@ public static partial class VoiceAssistantService
             if (_shutdown) return;
             _shutdown = true;
             DrainPendingQueue();
-            Queue.TryAdd(new VoiceQueueItem(string.Empty, VoiceAnnouncementPriority.Critical, true, null, null));
+            Queue.TryAdd(new VoiceQueueItem(string.Empty, VoiceAnnouncementPriority.Critical, true, null, null,
+                SettingsService.Current.NeuralVoiceProfile));
             Queue.CompleteAdding();
         }
+        NeuralVoiceService.Shutdown();
     }
 
     internal static bool ShouldSpeak(VoiceAssistantMode mode, VoiceAnnouncementPriority priority,
@@ -160,9 +166,15 @@ public static partial class VoiceAssistantService
                 }
                 try
                 {
-                    synthesizer.Rate = Math.Clamp(
-                        item.RateOverride ?? SettingsService.Current.VoiceRate, -4, 4);
                     _isSpeaking = true;
+                    var rate = Math.Clamp(item.RateOverride ?? SettingsService.Current.VoiceRate, -4, 4);
+                    if (NeuralVoiceService.TrySpeak(item.Text, item.Profile, rate))
+                    {
+                        item.Completion?.TrySetResult(true);
+                        continue;
+                    }
+
+                    synthesizer.Rate = rate;
                     using var completed = new ManualResetEventSlim(false);
                     SpeakCompletedEventArgs? result = null;
                     EventHandler<SpeakCompletedEventArgs> handler = (_, args) =>
@@ -223,7 +235,7 @@ public static partial class VoiceAssistantService
     }
 
     private sealed record VoiceQueueItem(string Text, VoiceAnnouncementPriority Priority, bool Cancel,
-        TaskCompletionSource<bool>? Completion, int? RateOverride);
+        TaskCompletionSource<bool>? Completion, int? RateOverride, NeuralVoiceProfile Profile);
 
     [GeneratedRegex(@"(?i)\b(?:https?|wss?)://[^\s]+|\bwww\.[^\s]+")]
     private static partial Regex UrlPattern();

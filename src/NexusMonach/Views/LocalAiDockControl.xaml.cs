@@ -474,7 +474,7 @@ public partial class LocalAiDockControl : UserControl
         ShoppingCardsPanel.Children.Add(new TextBlock
         {
             Text = "ВЫЖИМКА СЛЕДОПЫТА\n" + report.DirectAnswer,
-            TextWrapping = TextWrapping.Wrap, Foreground = Brushes.White,
+            TextWrapping = TextWrapping.Wrap, Foreground = ThemeBrush("TextBrush"),
             FontSize = 13.5, Margin = new Thickness(2, 0, 2, 12)
         });
         foreach (var item in report.Items.Take(6))
@@ -483,12 +483,12 @@ public partial class LocalAiDockControl : UserControl
             content.Children.Add(new TextBlock
             {
                 Text = item.Title, TextWrapping = TextWrapping.Wrap,
-                FontSize = 13.5, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White
+                FontSize = 13.5, FontWeight = FontWeights.SemiBold, Foreground = ThemeBrush("TextBrush")
             });
             content.Children.Add(new TextBlock
             {
                 Text = item.Answer, TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 6, 0, 0), Foreground = new SolidColorBrush(Color.FromRgb(200, 205, 213))
+                Margin = new Thickness(0, 6, 0, 0), Foreground = ThemeBrush("MutedTextBrush")
             });
             if (!string.IsNullOrWhiteSpace(item.Url))
             {
@@ -502,8 +502,8 @@ public partial class LocalAiDockControl : UserControl
             }
             ShoppingCardsPanel.Children.Add(new Border
             {
-                Background = new SolidColorBrush(Color.FromArgb(105, 16, 16, 16)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(120, 255, 255, 255)),
+                Background = ThemeBrush("PanelBrush"),
+                BorderBrush = ThemeBrush("BorderBrush"),
                 BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(12),
                 Padding = new Thickness(11), Margin = new Thickness(0, 0, 0, 9), Child = content
             });
@@ -806,7 +806,7 @@ public partial class LocalAiDockControl : UserControl
         ShoppingCardsPanel.Children.Add(new TextBlock
         {
             Text = "Найдено вариантов: " + report.Items.Count,
-            Foreground = Brushes.White,
+            Foreground = ThemeBrush("TextBrush"),
             FontSize = 16,
             FontWeight = FontWeights.SemiBold,
             Margin = new Thickness(2, 0, 2, 9)
@@ -825,9 +825,9 @@ public partial class LocalAiDockControl : UserControl
                 content.Children.Add(image);
                 _ = LoadShoppingImageAsync(image, item);
             }
-            content.Children.Add(new TextBlock { Text = item.Name, TextWrapping = TextWrapping.Wrap, FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White });
-            content.Children.Add(new TextBlock { Text = $"Цена: {item.Price}   Рейтинг: {item.Rating}", Margin = new Thickness(0, 6, 0, 0), Foreground = new SolidColorBrush(Color.FromRgb(127, 245, 231)) });
-            content.Children.Add(new TextBlock { Text = "Купили/отзывы: " + item.Buyers, Margin = new Thickness(0, 3, 0, 0), Foreground = new SolidColorBrush(Color.FromRgb(200, 205, 213)) });
+            content.Children.Add(new TextBlock { Text = item.Name, TextWrapping = TextWrapping.Wrap, FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = ThemeBrush("TextBrush") });
+            content.Children.Add(new TextBlock { Text = $"Цена: {item.Price}   Рейтинг: {item.Rating}", Margin = new Thickness(0, 6, 0, 0), Foreground = ThemeBrush("AccentBrush") });
+            content.Children.Add(new TextBlock { Text = "Купили/отзывы: " + item.Buyers, Margin = new Thickness(0, 3, 0, 0), Foreground = ThemeBrush("MutedTextBrush") });
             if (!string.IsNullOrWhiteSpace(item.Url))
             {
                 var open = new Button { Content = "Открыть товар", Tag = item.Url, Margin = new Thickness(0, 8, 0, 0), Padding = new Thickness(10, 6, 10, 6), HorizontalAlignment = HorizontalAlignment.Left };
@@ -836,8 +836,8 @@ public partial class LocalAiDockControl : UserControl
             }
             ShoppingCardsPanel.Children.Add(new Border
             {
-                Background = new SolidColorBrush(Color.FromArgb(105, 16, 16, 16)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(120, 255, 255, 255)),
+                Background = ThemeBrush("PanelBrush"),
+                BorderBrush = ThemeBrush("BorderBrush"),
                 BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(12),
                 Padding = new Thickness(12), Margin = new Thickness(0, 0, 0, 9), Child = content
             });
@@ -846,10 +846,13 @@ public partial class LocalAiDockControl : UserControl
         {
             Text = "ВЫВОД NEXUS AI\n" + report.Recommendation +
                    (string.IsNullOrWhiteSpace(report.Caveat) ? string.Empty : "\n\nОграничение: " + report.Caveat),
-            TextWrapping = TextWrapping.Wrap, Foreground = Brushes.White, Margin = new Thickness(3, 5, 3, 12)
+            TextWrapping = TextWrapping.Wrap, Foreground = ThemeBrush("TextBrush"), Margin = new Thickness(3, 5, 3, 12)
         });
         ShoppingCardsScroll.ScrollToHome();
     }
+
+    private static Brush ThemeBrush(string key) =>
+        (Brush)Application.Current.FindResource(key);
 
     private async Task LoadShoppingImageAsync(Image image, ShoppingCandidate item)
     {

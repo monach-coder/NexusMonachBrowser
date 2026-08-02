@@ -56,7 +56,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $ai = 'src/NexusMonach/AI'
-          New-Item -ItemType Directory -Force "$ai/llama","$ai/whisper","$ai/node","$ai/models/qwen3-0.6b","$ai/models/whisper","$ai/models/smolvlm-500m","$ai/models/multilingual-e5-small/onnx","$ai/models/translation/mul-en/onnx","$ai/models/translation/ko-en/onnx","$ai/models/translation/en-ru/onnx" | Out-Null
+          New-Item -ItemType Directory -Force "$ai/llama","$ai/whisper","$ai/node","$ai/voice","$ai/models/qwen3-0.6b","$ai/models/whisper","$ai/models/voice/vosk-tts-ru-multi","$ai/models/smolvlm-500m","$ai/models/multilingual-e5-small/onnx","$ai/models/translation/mul-en/onnx","$ai/models/translation/ko-en/onnx","$ai/models/translation/en-ru/onnx" | Out-Null
           function Get-Asset([string]$Url, [string]$Out, [string]$Sha256 = '') {
             curl.exe -L --fail --retry 5 --retry-delay 3 $Url -o $Out
             if ($LASTEXITCODE) { throw "Download failed: $Url" }
@@ -79,6 +79,84 @@ jobs:
             throw 'Pinned whisper.cpp archive has no whisper-server.exe.'
           }
           Copy-Item (Get-Command node).Source "$ai/node/node.exe"
+
+          # Vosk TTS is built from the open worker source on the release runner.
+          # The official model archive is pinned by SHA-256 and the resulting
+          # executable/model are later covered by the Guardian manifest.
+          Get-Asset 'https://alphacephei.com/vosk/models/vosk-model-tts-ru-0.9-multi.zip' `
+            "$env:TEMP/vosk-tts-ru-multi.zip" '0aa332451ce46bfdbd620e74765fc16a4087988067c299969121ed0f8ed5bdf2'
+          $voiceExtract = Join-Path $env:TEMP 'nexus-vosk-model'
+          Expand-Archive "$env:TEMP/vosk-tts-ru-multi.zip" $voiceExtract -Force
+          $voiceModelSource = Get-ChildItem $voiceExtract -Directory |
+            Where-Object { Test-Path (Join-Path $_.FullName 'config.json') } |
+            Select-Object -First 1
+          if ($null -eq $voiceModelSource) { throw 'Pinned Vosk TTS archive has no model root.' }
+          Copy-Item (Join-Path $voiceModelSource.FullName '*') "$ai/models/voice/vosk-tts-ru-multi" -Recurse -Force
+
+          python -m pip install --disable-pip-version-check --no-input `
+            'vosk-tts==0.3.61' 'pyinstaller==6.21.0'
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Vosk TTS build dependencies failed to install.' }
+          $voiceBuild = Join-Path $env:TEMP 'nexus-voice-build'
+          python -m PyInstaller --noconfirm --clean --onedir `
+            --name nexus-voice-worker `
+            --distpath (Join-Path $voiceBuild 'dist') `
+            --workpath (Join-Path $voiceBuild 'work') `
+            --specpath $voiceBuild `
+            --collect-all vosk_tts `
+            "$ai/adapters/voice_worker.py"
+          if ($LASTEXITCODE -ne 0) { throw 'nexus-voice-worker.exe build failed.' }
+          Copy-Item (Join-Path $voiceBuild 'dist/nexus-voice-worker/*') "$ai/voice" -Recurse -Force
+          if (-not (Test-Path "$ai/voice/nexus-voice-worker.exe")) {
+            throw 'Built Vosk TTS worker is missing.'
+          }
+
+          $voiceSmokeWav = Join-Path $env:TEMP 'nexus-voice-smoke.wav'
+          $voiceSmokeRequest = @{
+            id='voice-release-smoke'; text='Нексус готов'; output=$voiceSmokeWav; speaker=1; rate=0
+          } | ConvertTo-Json -Compress
+          $voiceStart = [Diagnostics.ProcessStartInfo]::new()
+          $voiceStart.FileName = (Resolve-Path "$ai/voice/nexus-voice-worker.exe").Path
+          $voiceStart.UseShellExecute = $false
+          $voiceStart.CreateNoWindow = $true
+          $voiceStart.RedirectStandardInput = $true
+          $voiceStart.RedirectStandardOutput = $true
+          $voiceStart.RedirectStandardError = $true
+          $voiceStart.ArgumentList.Add('--model')
+          $voiceStart.ArgumentList.Add((Resolve-Path "$ai/models/voice/vosk-tts-ru-multi").Path)
+          $voiceStart.ArgumentList.Add('--stdio')
+          $voiceProcess = [Diagnostics.Process]::new()
+          $voiceProcess.StartInfo = $voiceStart
+          if (-not $voiceProcess.Start()) { throw 'Vosk TTS release smoke process did not start.' }
+          $voiceStdout = $voiceProcess.StandardOutput.ReadToEndAsync()
+          $voiceStderr = $voiceProcess.StandardError.ReadToEndAsync()
+          $voiceProcess.StandardInput.WriteLine($voiceSmokeRequest)
+          $voiceProcess.StandardInput.Close()
+          if (-not $voiceProcess.WaitForExit(180000)) {
+            try { $voiceProcess.Kill($true) } catch {}
+            throw 'Vosk TTS release smoke test exceeded three minutes.'
+          }
+          $voiceExitCode = $voiceProcess.ExitCode
+          $voiceSmokeReply = $null
+          foreach ($line in ($voiceStdout.GetAwaiter().GetResult() -split '\r?\n')) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            try {
+              $candidate = $line | ConvertFrom-Json
+              if ($candidate.id -eq 'voice-release-smoke') { $voiceSmokeReply = $candidate }
+            } catch {
+              # Native dependencies may write banners. Only a structured reply
+              # carrying the matching request id belongs to the protocol.
+            }
+          }
+          $voiceSmokeError = $voiceStderr.GetAwaiter().GetResult()
+          $voiceProcess.Dispose()
+          if ($voiceExitCode -ne 0 -or -not $voiceSmokeReply -or -not (Test-Path $voiceSmokeWav)) {
+            Write-Error $voiceSmokeError
+            throw 'Vosk TTS release smoke test failed.'
+          }
+          if (-not $voiceSmokeReply.ok -or (Get-Item $voiceSmokeWav).Length -lt 1000) {
+            throw "Vosk TTS release smoke test returned an invalid WAV: $($voiceSmokeReply.error)"
+          }
+          Remove-Item $voiceSmokeWav -Force
 
           Get-Asset 'https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf?download=true' "$ai/models/qwen3-0.6b/Qwen3-0.6B-Q8_0.gguf"
           Get-Asset 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin?download=true' "$ai/models/whisper/ggml-base-q5_1.bin"
@@ -287,7 +365,7 @@ jobs:
           Nexus Monach $env:NEXUS_VERSION Full Offline
 
           Includes pinned local Qwen3 0.6B, Whisper base q5_1, SmolVLM 500M,
-          multilingual-e5-small and dedicated OPUS multilingual/Korean/Russian translation models.
+          multilingual-e5-small, Vosk TTS Russian Multi and dedicated OPUS multilingual/Korean/Russian translation models.
           Model hashes are verified before every build. No model is downloaded while the browser is running.
           The open Nexus Intelligence Fabric is built from the same repository and includes deep page analysis,
           controlled same-origin research and an agent summary with sources, conflicts and missing information.

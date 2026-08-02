@@ -53,15 +53,17 @@ public partial class App : Application
             if (!SettingsService.Current.ThemeSelectionCompleted)
             {
                 splash.Hide();
-                var themePicker = new ThemeSelectionWindow(SettingsService.Current.Theme);
+                var themePicker = new ThemeSelectionWindow(
+                    SettingsService.Current.Theme, SettingsService.Current.ThemeMode);
                 themePicker.ShowDialog();
                 var firstRunSettings = SettingsService.Current.Clone();
                 firstRunSettings.Theme = themePicker.ResultTheme;
+                firstRunSettings.ThemeMode = themePicker.ResultMode;
                 firstRunSettings.ThemeSelectionCompleted = true;
                 await SettingsService.SaveAsync(firstRunSettings);
                 splash.Show();
             }
-            ThemeService.Apply(SettingsService.Current.Theme);
+            ThemeService.Apply(SettingsService.Current.Theme, SettingsService.Current.ThemeMode);
             CrashReportService.AddBreadcrumb("startup", "settings-ready");
             if (SettingsService.Current.VoiceSpeakAtStartup &&
                 SettingsService.Current.VoiceAssistantMode != Models.VoiceAssistantMode.Off)

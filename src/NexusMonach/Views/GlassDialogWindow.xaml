@@ -18,7 +18,7 @@
                        Foreground="{StaticResource AccentBrush}" VerticalAlignment="Top" />
             <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
                 <TextBlock x:Name="MessageText" TextWrapping="Wrap" FontSize="14"
-                           LineHeight="21" Foreground="White" />
+                           LineHeight="21" Foreground="{StaticResource TextBrush}" />
             </ScrollViewer>
         </Grid>
         <StackPanel Grid.Row="1" Margin="0,18,0,0" Orientation="Horizontal" HorizontalAlignment="Right">

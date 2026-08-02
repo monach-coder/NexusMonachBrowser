@@ -22,6 +22,7 @@ try {
         "llama\llama-server.exe",
         "llama\llama-mtmd-cli.exe",
         "node\node.exe",
+        "voice\nexus-voice-worker.exe",
         "adapters\semantic.mjs",
         "adapters\translate.mjs",
         "models\whisper\ggml-base-q5_1.bin",
@@ -33,7 +34,10 @@ try {
         "models\translation\ko-en\onnx\encoder_model_quantized.onnx",
         "models\translation\ko-en\onnx\decoder_model_merged_quantized.onnx",
         "models\translation\en-ru\onnx\encoder_model_quantized.onnx",
-        "models\translation\en-ru\onnx\decoder_model_merged_quantized.onnx"
+        "models\translation\en-ru\onnx\decoder_model_merged_quantized.onnx",
+        "models\voice\vosk-tts-ru-multi\config.json",
+        "models\voice\vosk-tts-ru-multi\dictionary",
+        "models\voice\vosk-tts-ru-multi\model.onnx"
     )
     foreach ($relative in $required) {
         if (-not (Test-Path (Join-Path $packRoot $relative))) { throw "AI pack is missing $relative" }
@@ -47,7 +51,6 @@ try {
     if (@(Get-ChildItem (Join-Path $packRoot "models\qwen3-0.6b") -Filter *.gguf -ErrorAction SilentlyContinue).Count -eq 0) {
         throw "AI pack has no Qwen3 0.6B GGUF model."
     }
-
     $expected = @{}
     foreach ($line in Get-Content $checksumFile) {
         if ($line -match '^([0-9a-fA-F]{64})\s+\*?(.+)$') {

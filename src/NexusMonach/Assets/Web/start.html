@@ -6,7 +6,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
   <title>Новая вкладка</title>
   <style>
-    :root { color-scheme: dark; --bg:#0b1018; --panel:#111c28; --line:#294054; --text:#eef4f8; --muted:#91a2b4; --aqua:#36d7c4; --gold:#dab96a; --accent-rgb:54,215,196; --gold-rgb:218,185,106; }
+    :root { color-scheme: dark; --bg:#0b1018; --panel:#111c28; --line:#294054; --text:#eef4f8; --muted:#91a2b4; --aqua:#36d7c4; --gold:#dab96a; --accent-rgb:54,215,196; --gold-rgb:218,185,106; --end:#080d14; --card:rgba(17,28,40,.72); }
     * { box-sizing:border-box; }
     html, body { min-height:100%; margin:0; }
     body {
@@ -15,7 +15,7 @@
       background:
         radial-gradient(circle at 18% 14%, rgba(var(--accent-rgb),.09), transparent 30%),
         radial-gradient(circle at 82% 82%, rgba(var(--gold-rgb),.07), transparent 28%),
-        linear-gradient(145deg, var(--bg), var(--panel) 55%, #080d14);
+        linear-gradient(145deg, var(--bg), var(--panel) 55%, var(--end));
     }
     .page { width:min(820px, 100%); text-align:center; }
     .brand { display:flex; flex-direction:column; align-items:center; }
@@ -23,16 +23,10 @@
     h1 { margin:16px 0 0; font-size:30px; letter-spacing:.18em; font-weight:650; }
     .tagline { margin:7px 0 28px; color:var(--muted); font-size:14px; }
     .cards { display:grid; grid-template-columns:repeat(3,1fr); gap:13px; margin-top:18px; text-align:left; }
-    .card { min-height:116px; padding:17px; border:1px solid #203548; border-radius:14px; background:rgba(17,28,40,.72); }
+    .card { min-height:116px; padding:17px; border:1px solid var(--line); border-radius:14px; background:var(--card); box-shadow:0 12px 28px rgba(0,0,0,.08); }
     .card .icon { color:var(--aqua); font-size:20px; }
     .card strong { display:block; margin:10px 0 4px; font-size:13px; }
     .card span { color:var(--muted); font-size:11.5px; line-height:1.45; }
-    .search { display:flex; gap:10px; margin:0 auto 22px; width:min(700px,100%); padding:8px;
-              border:1px solid #2b5360; border-radius:18px; background:rgba(13,26,36,.88); }
-    .search input { flex:1; min-width:0; border:0; outline:0; padding:10px 12px; color:var(--text);
-                    background:transparent; font:15px "Segoe UI",system-ui,sans-serif; }
-    .search button { border:1px solid #3b817d; border-radius:12px; padding:9px 18px; color:#061714;
-                     background:var(--aqua); font-weight:650; cursor:pointer; }
     .settings { margin-top:26px; border:1px solid #35536a; border-radius:16px; padding:8px 16px; color:#b9cad7; background:transparent; cursor:pointer; }
     .settings:hover { color:var(--text); border-color:#4b7c80; background:rgba(54,215,196,.05); }
     .foot { margin-top:26px; color:#607284; font-size:10.5px; }
@@ -47,12 +41,6 @@
       <p class="tagline">Тихая защита. Обычный интернет без лишнего наблюдения.</p>
     </section>
 
-    <form class="search" id="search-form">
-      <input id="search-input" type="search" autocomplete="off"
-             placeholder="Что найти, проверить или сравнить?" aria-label="Запрос для Следопыта">
-      <button type="submit">Начать поиск</button>
-    </form>
-
     <section class="cards" aria-label="Возможности браузера">
       <article class="card"><div class="icon">◈</div><strong>Сбалансированная защита</strong><span>Трекеры ограничиваются на уровне Chromium без грубой маскировки, которая ломает сайты.</span></article>
       <article class="card"><div class="icon">◎</div><strong>Без нашей телеметрии</strong><span>Nexus Monach не отправляет разработчику историю, поисковые запросы и статистику использования.</span></article>
@@ -65,25 +53,23 @@
   <script>
     const send = message => { if (window.chrome?.webview) window.chrome.webview.postMessage(message); };
     document.getElementById('settings').addEventListener('click', () => send({ type: 'settings' }));
-    document.getElementById('search-form').addEventListener('submit', event => {
-      event.preventDefault();
-      const value = document.getElementById('search-input').value.trim();
-      if (value) send({ type: 'search', value });
-    });
     const palettes = {
-      MonachAqua: { bg:'#0b1018', panel:'#111c28', line:'#294054', text:'#eef4f8', muted:'#91a2b4', accent:'#36d7c4', gold:'#dab96a', accentRgb:'54,215,196', goldRgb:'218,185,106' },
-      Ocean:      { bg:'#09111d', panel:'#101d2d', line:'#294968', text:'#f1f7fc', muted:'#91a8bc', accent:'#4bb7ff', gold:'#79d4e8', accentRgb:'75,183,255', goldRgb:'121,212,232' },
-      Forest:     { bg:'#09140f', panel:'#102219', line:'#2a503b', text:'#eff8f2', muted:'#91aa99', accent:'#50d890', gold:'#d1ba69', accentRgb:'80,216,144', goldRgb:'209,186,105' },
-      Amethyst:   { bg:'#100b18', panel:'#1c1429', line:'#4a3564', text:'#f6f0ff', muted:'#aa9ab9', accent:'#b68cff', gold:'#e0b86f', accentRgb:'182,140,255', goldRgb:'224,184,111' }
+      MonachAqua: { bg:'#0b1018', panel:'#111c28', line:'#294054', text:'#eef4f8', muted:'#91a2b4', aqua:'#36d7c4', gold:'#dab96a', accentRgb:'54,215,196', goldRgb:'218,185,106' },
+      Ocean:      { bg:'#09111d', panel:'#101d2d', line:'#294968', text:'#f1f7fc', muted:'#91a8bc', aqua:'#4bb7ff', gold:'#79d4e8', accentRgb:'75,183,255', goldRgb:'121,212,232' },
+      Forest:     { bg:'#09140f', panel:'#102219', line:'#2a503b', text:'#eff8f2', muted:'#91aa99', aqua:'#50d890', gold:'#d1ba69', accentRgb:'80,216,144', goldRgb:'209,186,105' },
+      Amethyst:   { bg:'#100b18', panel:'#1c1429', line:'#4a3564', text:'#f6f0ff', muted:'#aa9ab9', aqua:'#b68cff', gold:'#e0b86f', accentRgb:'182,140,255', goldRgb:'224,184,111' }
     };
-    window.nexusConfigureStartPage = ({ showSetup = false, theme = 'MonachAqua' } = {}) => {
+    window.nexusConfigureStartPage = ({ showSetup = false, theme = 'MonachAqua', mode = 'Dark' } = {}) => {
       document.getElementById('settings').hidden = !showSetup;
-      const palette = palettes[theme] || palettes.MonachAqua;
+      const dark = palettes[theme] || palettes.MonachAqua;
+      const palette = mode === 'Light'
+        ? { ...dark, bg:'#f5f7fa', panel:'#ffffff', line:'#c6d1db', text:'#17212b', muted:'#5c6b78', end:'#e9eef3', card:'rgba(255,255,255,.88)' }
+        : { ...dark, end:'#080d14', card:'rgba(17,28,40,.72)' };
+      document.documentElement.style.colorScheme = mode === 'Light' ? 'light' : 'dark';
       const style = document.documentElement.style;
       for (const [key, value] of Object.entries(palette))
         style.setProperty('--' + key.replace(/[A-Z]/g, letter => '-' + letter.toLowerCase()), value);
     };
-    window.nexusFocusSearch = () => document.getElementById('search-input').focus();
   </script>
 </body>
 </html>

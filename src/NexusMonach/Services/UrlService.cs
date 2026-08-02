@@ -10,7 +10,9 @@ public static class UrlService
     {
         "fbclid", "gclid", "dclid", "msclkid", "yclid", "ymclid", "_openstat",
         "mc_cid", "mc_eid", "igshid", "vero_conv", "vero_id", "wickedid",
-        "rb_clickid", "s_cid", "ref_src", "ref_url"
+        "rb_clickid", "s_cid", "ref_src", "ref_url", "ttclid", "twclid",
+        "li_fat_id", "wbraid", "gbraid", "gad_source", "gad_campaignid",
+        "epik", "irclickid", "srsltid", "mkt_tok", "oly_anon_id", "oly_enc_id"
     };
 
     public static string Resolve(string input)
@@ -48,7 +50,9 @@ public static class UrlService
         {
             var separator = pair.IndexOf('=');
             var rawKey = separator >= 0 ? pair[..separator] : pair;
-            var key = Uri.UnescapeDataString(rawKey.Replace('+', ' '));
+            string key;
+            try { key = Uri.UnescapeDataString(rawKey.Replace('+', ' ')); }
+            catch (UriFormatException) { kept.Add(pair); continue; }
             if (key.StartsWith("utm_", StringComparison.OrdinalIgnoreCase) || TrackingKeys.Contains(key))
                 continue;
             kept.Add(pair);
@@ -59,6 +63,25 @@ public static class UrlService
 
         var builder = new UriBuilder(uri) { Query = string.Join('&', kept) };
         return builder.Uri.AbsoluteUri;
+    }
+
+    /// <summary>
+    /// Returns an address that is safe to show in diagnostics: credentials,
+    /// query parameters and fragments are deliberately omitted.
+    /// </summary>
+    public static string SanitizeForDisplay(string? url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+            uri.Scheme is not ("http" or "https"))
+            return string.Empty;
+
+        return new UriBuilder(uri)
+        {
+            UserName = string.Empty,
+            Password = string.Empty,
+            Query = string.Empty,
+            Fragment = string.Empty
+        }.Uri.AbsoluteUri;
     }
 
     public static bool IsInternal(string? url) =>

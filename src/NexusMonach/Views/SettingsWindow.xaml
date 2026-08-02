@@ -6,24 +6,24 @@
         Icon="/Assets/nexus-monach.ico" WindowStartupLocation="CenterOwner"
         Style="{StaticResource GlassPopupWindow}">
     <Window.Resources>
-        <SolidColorBrush x:Key="{x:Static SystemColors.ControlTextBrushKey}" Color="#EEF4F8" />
-        <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="#FFFFFF" />
-        <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="#285F67" />
-        <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="#203C49" />
-        <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="#EEF4F8" />
+        <SolidColorBrush x:Key="{x:Static SystemColors.ControlTextBrushKey}" Color="{StaticResource TextColor}" />
+        <SolidColorBrush x:Key="{x:Static SystemColors.HighlightTextBrushKey}" Color="{StaticResource OnAccentColor}" />
+        <SolidColorBrush x:Key="{x:Static SystemColors.HighlightBrushKey}" Color="{StaticResource AccentColor}" />
+        <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="{StaticResource SelectedColor}" />
+        <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="{StaticResource TextColor}" />
         <Style x:Key="ActionButton" TargetType="Button">
             <Setter Property="Padding" Value="18,8" />
             <Setter Property="Margin" Value="6,0,0,0" />
-            <Setter Property="Foreground" Value="White" />
-            <Setter Property="Background" Value="#285F67" />
-            <Setter Property="BorderBrush" Value="#3F8990" />
+            <Setter Property="Foreground" Value="{StaticResource OnAccentBrush}" />
+            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
             <Setter Property="Cursor" Value="Hand" />
         </Style>
         <Style x:Key="SettingsCard" TargetType="Border">
             <Setter Property="Margin" Value="0,0,12,14" />
             <Setter Property="Padding" Value="18" />
-            <Setter Property="Background" Value="#111E2B" />
-            <Setter Property="BorderBrush" Value="#2A465A" />
+            <Setter Property="Background" Value="{StaticResource PanelBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="10" />
         </Style>
@@ -36,8 +36,8 @@
             <Setter Property="IsExpanded" Value="True" />
             <Style.Triggers>
                 <Trigger Property="IsSelected" Value="True">
-                    <Setter Property="Foreground" Value="White" />
-                    <Setter Property="Background" Value="#285F67" />
+                    <Setter Property="Foreground" Value="{StaticResource OnAccentBrush}" />
+                    <Setter Property="Background" Value="{StaticResource AccentBrush}" />
                     <Setter Property="FontWeight" Value="SemiBold" />
                 </Trigger>
                 <Trigger Property="IsEnabled" Value="False">
@@ -67,7 +67,7 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
-            <Border Grid.Column="0" Padding="10" Background="#0E1924" BorderBrush="#2A465A"
+            <Border Grid.Column="0" Padding="10" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
                     BorderThickness="1" CornerRadius="10">
                 <TreeView x:Name="SettingsTree" Background="Transparent"
                           Foreground="{StaticResource TextBrush}" BorderThickness="0"
@@ -126,8 +126,9 @@
                     <Border Style="{StaticResource SettingsCard}">
                         <StackPanel>
                             <TextBlock Text="Цветовая тема" FontSize="15" FontWeight="SemiBold" />
+                            <ComboBox x:Name="ThemeModeCombo" Margin="0,12,0,0" />
                             <ComboBox x:Name="ThemeCombo" Margin="0,12,0,0" />
-                            <TextBlock Text="Monach Aqua — фирменная бирюза; Ocean — синий; Forest — зелёный; Amethyst — фиолетовый. Новая тема полностью применяется после перезапуска."
+                            <TextBlock Text="Режим меняет всё окружение: в светлом режиме фон светлый, а текст тёмный; в тёмном — наоборот. Цветовая палитра задаёт акцент."
                                        TextWrapping="Wrap" Margin="0,8,0,0" FontSize="11"
                                        Foreground="{StaticResource MutedTextBrush}" />
                         </StackPanel>
@@ -179,7 +180,7 @@
                                           Content="Разрешить WebView2 сохранять и подставлять пароли" />
                                 <CheckBox x:Name="AutofillCheck"
                                           Content="Разрешить автозаполнение обычных форм" />
-                                <TextBlock Text="F12 открывает стандартные Chromium DevTools: Elements, Console, Sources, Network и Performance."
+                                <TextBlock Text="F12 открывает Nexus Inspector с деревом DOM, accessibility, ресурсов, storage, сети и консоли. Ctrl+Shift+I оставляет полный Chromium DevTools для профилирования."
                                            TextWrapping="Wrap" Margin="0,9,0,0" FontSize="11"
                                            Foreground="{StaticResource MutedTextBrush}" />
                             </StackPanel>
@@ -189,14 +190,19 @@
                                 <TextBlock Text="Nexus Voice · женский локальный голос"
                                            FontSize="15" FontWeight="SemiBold" />
                                 <ComboBox x:Name="VoiceModeCombo" Margin="0,12,0,0" />
+                                <TextBlock Text="Голос" Margin="0,10,0,5" />
+                                <ComboBox x:Name="NeuralVoiceCombo" />
                                 <CheckBox x:Name="VoiceStartupCheck" Margin="0,10,0,0"
                                           Content="Озвучивать запуск браузера" />
                                 <CheckBox x:Name="VoiceHandsFreeCheck"
                                           Content="Свободные руки: слушать команды после слова «Нексус»" />
-                                <TextBlock TextWrapping="Wrap" Margin="0,7,0,0" FontSize="11"
+                                <TextBlock x:Name="VoiceEngineStatusText" TextWrapping="Wrap" Margin="0,7,0,0" FontSize="11"
                                            Foreground="{StaticResource MutedTextBrush}"
-                                           Text="Распознавание выполняет локальный Whisper, озвучивание — женский голос Windows. Микрофон не используется в приватных окнах. Режим «свободные руки» увеличивает нагрузку и включается только вручную." />
-                                <Button Content="Проверить женский голос" Style="{StaticResource ActionButton}"
+                                           Text="Проверка локального голосового движка…" />
+                                <TextBlock TextWrapping="Wrap" Margin="0,5,0,0" FontSize="11"
+                                           Foreground="{StaticResource MutedTextBrush}"
+                                           Text="Распознавание выполняет Whisper, озвучивание — Vosk TTS из Full Offline voice-pack. Женский голос Windows используется только как резерв. Микрофон не включается в приватных окнах." />
+                                <Button Content="Проверить голос" Style="{StaticResource ActionButton}"
                                         HorizontalAlignment="Left" Margin="0,12,0,0"
                                         Click="TestVoice_Click" />
                             </StackPanel>
@@ -333,7 +339,7 @@
                                         Click="OpenSignInOptions_Click" />
                                 <Button Content="Настроить отпечаток"
                                         Style="{StaticResource ActionButton}" Margin="0,0,8,8"
-                                        Background="#303C49" BorderBrush="#526273"
+                                        Background="{StaticResource SelectedBrush}" BorderBrush="{StaticResource BorderBrush}"
                                         Click="OpenFingerprintSetup_Click" />
                             </WrapPanel>
                             <TextBlock Text="В Windows 11 доступ отдельных приложений к ключам настраивается в разделе «Конфиденциальность и безопасность → Доступ к ключам доступа»."
@@ -348,7 +354,7 @@
         <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right"
                     Margin="0,18,0,0">
             <Button Content="Отмена" Style="{StaticResource ActionButton}"
-                    Background="#303C49" BorderBrush="#526273" Click="Cancel_Click" />
+                    Background="{StaticResource SelectedBrush}" BorderBrush="{StaticResource BorderBrush}" Click="Cancel_Click" />
             <Button Content="Сохранить" Style="{StaticResource ActionButton}" Click="Save_Click" />
         </StackPanel>
     </Grid>

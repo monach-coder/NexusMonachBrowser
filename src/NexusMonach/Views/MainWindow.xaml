@@ -17,12 +17,14 @@
     <shell:WindowChrome.WindowChrome>
         <shell:WindowChrome CaptionHeight="0"
                             ResizeBorderThickness="6"
-                            CornerRadius="8"
-                            GlassFrameThickness="0"
+                            CornerRadius="12"
+                            GlassFrameThickness="1"
                             UseAeroCaptionButtons="False" />
     </shell:WindowChrome.WindowChrome>
 
-    <Grid>
+    <Border x:Name="MainSurface" Background="{StaticResource BackgroundBrush}"
+            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="12">
+    <Grid ClipToBounds="True">
         <Grid.RowDefinitions>
             <RowDefinition Height="42" />
             <RowDefinition Height="54" />
@@ -33,7 +35,7 @@
         </Grid.RowDefinitions>
 
         <!-- Собственная верхняя панель без системных чёрных полос. -->
-        <Grid x:Name="TitleBar" Grid.Row="0" Background="#0A0F17"
+        <Grid x:Name="TitleBar" Grid.Row="0" Background="{StaticResource ChromeBrush}"
               MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="42" />
@@ -78,17 +80,17 @@
                             <Setter.Value>
                                 <ControlTemplate TargetType="ListBoxItem">
                                     <Border x:Name="TabBorder" Width="190" Height="38"
-                                            Background="#0F1722" CornerRadius="9,9,0,0"
-                                            BorderBrush="#172535" BorderThickness="1,1,1,0">
+                                            Background="{StaticResource PanelBrush}" CornerRadius="9,9,0,0"
+                                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1,1,1,0">
                                         <ContentPresenter />
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsSelected" Value="True">
-                                            <Setter TargetName="TabBorder" Property="Background" Value="#172432" />
-                                            <Setter TargetName="TabBorder" Property="BorderBrush" Value="#2D5660" />
+                                            <Setter TargetName="TabBorder" Property="Background" Value="{StaticResource SelectedBrush}" />
+                                            <Setter TargetName="TabBorder" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
                                         </Trigger>
                                         <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="TabBorder" Property="Background" Value="#1A2938" />
+                                            <Setter TargetName="TabBorder" Property="Background" Value="{StaticResource PanelHoverBrush}" />
                                         </Trigger>
                                     </ControlTemplate.Triggers>
                                 </ControlTemplate>
@@ -133,7 +135,7 @@
                     Click="RestartWindow_Click" />
         </Grid>
 
-        <Grid Grid.Row="1" Background="#121A26" Margin="0">
+        <Grid Grid.Row="1" Background="{StaticResource ToolbarBrush}" Margin="0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="44" />
                 <ColumnDefinition Width="44" />
@@ -158,7 +160,7 @@
                     Style="{StaticResource IconButton}" ToolTip="Домой" Click="Home_Click" />
 
             <Border x:Name="AddressBorder" Grid.Column="4" Margin="5,8" CornerRadius="18"
-                    Background="#0B121B" BorderBrush="#2C4056" BorderThickness="1">
+                    Background="{StaticResource FieldBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="34" />
@@ -228,7 +230,11 @@
                         <Separator />
                         <MenuItem x:Name="ExtensionsMenuItem" Header="Расширения" Click="ShowExtensions_Click" />
                         <MenuItem Header="Показать / скрыть Privacy Dock" Click="ShowPrivacyMonitor_Click" />
-                        <MenuItem Header="Инструменты разработчика" InputGestureText="F12" Click="ShowDeveloperTools_Click" />
+                        <MenuItem Header="Безопасная структура текущего сайта" InputGestureText="Ctrl+Shift+E"
+                                  Click="ShowSiteExplorer_Click" />
+                        <MenuItem Header="Nexus Inspector · дерево сайта" InputGestureText="F12" Click="ShowDeveloperTools_Click" />
+                        <MenuItem Header="Chromium DevTools · профилировщик" InputGestureText="Ctrl+Shift+I"
+                                  Click="ShowChromiumDeveloperTools_Click" />
                         <MenuItem Header="SSH-терминал Linux" Click="SshTerminal_Click" />
                         <MenuItem Header="Nexus Guardian · локальные рапорты" Click="ShowGuardianCenter_Click" />
                         <MenuItem Header="Настройки" Click="ShowSettings_Click" />
@@ -240,7 +246,7 @@
         </Grid>
 
         <ProgressBar x:Name="LoadingBar" Grid.Row="2" Height="2" IsIndeterminate="True"
-                     Foreground="{StaticResource AccentBrush}" Background="#13202B"
+                     Foreground="{StaticResource AccentBrush}" Background="{StaticResource BorderBrush}"
                      Visibility="Collapsed" />
 
         <Grid Grid.Row="3" Background="{StaticResource BackgroundBrush}">
@@ -251,7 +257,7 @@
             <ContentControl x:Name="BrowserHost" Grid.Column="0"
                             HorizontalContentAlignment="Stretch"
                             VerticalContentAlignment="Stretch" />
-            <Border x:Name="TabLoadingOverlay" Grid.Column="0" Background="#0B1018" Visibility="Collapsed">
+            <Border x:Name="TabLoadingOverlay" Grid.Column="0" Background="{StaticResource BackgroundBrush}" Visibility="Collapsed">
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                     <Image Width="82" Height="82" Source="/Assets/nexus-monach-512.png" />
                     <TextBlock Text="Загрузка вкладки…" Margin="0,16,0,0"
@@ -265,8 +271,8 @@
                                           CloseRequested="SshTerminal_CloseRequested" />
             <Border x:Name="VoiceStatusBadge" Grid.Column="0" Visibility="Collapsed"
                     HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,14,0,0"
-                    Padding="16,8" CornerRadius="18" Background="#E6121B27"
-                    BorderBrush="#36D7C4" BorderThickness="1" Panel.ZIndex="20">
+                    Padding="16,8" CornerRadius="18" Background="{StaticResource OverlayBrush}"
+                    BorderBrush="{StaticResource AccentBrush}" BorderThickness="1" Panel.ZIndex="20">
                 <StackPanel Orientation="Horizontal">
                     <TextBlock Text="&#xE720;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
                                Foreground="{StaticResource AccentBrush}" Margin="0,0,8,0" />
@@ -275,7 +281,7 @@
             </Border>
         </Grid>
 
-        <Border Grid.Row="4" Background="#09111A" BorderBrush="#203747" BorderThickness="0,1,0,0"
+        <Border Grid.Row="4" Background="{StaticResource ChromeBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0"
                 Padding="8,3">
             <Border.Resources>
                 <Style x:Key="TopologyNodeButton" TargetType="Button" BasedOn="{StaticResource IconButton}">
@@ -308,7 +314,7 @@
                                    FontSize="9.5" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" />
                     </StackPanel>
                 </Button>
-                <Border Grid.Column="1" Height="2" Margin="6,0" Background="#2B6463" VerticalAlignment="Center" />
+                <Border Grid.Column="1" Height="2" Margin="6,0" Background="{StaticResource BorderBrush}" VerticalAlignment="Center" />
 
                 <Button Grid.Column="2" Style="{StaticResource TopologyNodeButton}" Click="SystemRouteNode_Click">
                     <StackPanel>
@@ -316,7 +322,7 @@
                         <TextBlock Text="Windows / VPN" FontSize="9.5" HorizontalAlignment="Center" />
                     </StackPanel>
                 </Button>
-                <Border Grid.Column="3" Height="2" Margin="6,0" Background="#2B6463" VerticalAlignment="Center" />
+                <Border Grid.Column="3" Height="2" Margin="6,0" Background="{StaticResource BorderBrush}" VerticalAlignment="Center" />
 
                 <Button Grid.Column="4" Style="{StaticResource TopologyNodeButton}" Click="LocalPortsNode_Click">
                     <StackPanel>
@@ -325,7 +331,7 @@
                                    Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" HorizontalAlignment="Center" />
                     </StackPanel>
                 </Button>
-                <Border Grid.Column="5" Height="2" Margin="6,0" Background="#2B6463" VerticalAlignment="Center" />
+                <Border Grid.Column="5" Height="2" Margin="6,0" Background="{StaticResource BorderBrush}" VerticalAlignment="Center" />
 
                 <Button Grid.Column="6" Style="{StaticResource TopologyNodeButton}" Click="RoutingNode_Click">
                     <StackPanel>
@@ -333,8 +339,8 @@
                         <TextBlock x:Name="TopologyProxyText" Text="Прямое подключение" FontSize="9.5" HorizontalAlignment="Center" />
                     </StackPanel>
                 </Button>
-                <Border Grid.Column="7" Margin="8,4" Padding="8,3" Background="#101D29"
-                        BorderBrush="#2B6463" BorderThickness="1" CornerRadius="7"
+                <Border Grid.Column="7" Margin="8,4" Padding="8,3" Background="{StaticResource FieldBrush}"
+                        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="7"
                         VerticalAlignment="Center"
                         ToolTip="Текущая скорость активного сетевого адаптера и локальная проверка шлюза Windows">
                     <StackPanel>
@@ -353,7 +359,7 @@
                         <TextBlock Text="TLS / WebView2" FontSize="9.5" HorizontalAlignment="Center" />
                     </StackPanel>
                 </Button>
-                <Border Grid.Column="9" Height="2" Margin="6,0" Background="#2B6463" VerticalAlignment="Center" />
+                <Border Grid.Column="9" Height="2" Margin="6,0" Background="{StaticResource BorderBrush}" VerticalAlignment="Center" />
 
                 <Button Grid.Column="10" Style="{StaticResource TopologyNodeButton}" Click="CurrentSiteNode_Click" MaxWidth="220">
                     <StackPanel>
@@ -370,4 +376,5 @@
         <views:PrivacyDockControl x:Name="PrivacyDock" Grid.Row="5" />
 
     </Grid>
+    </Border>
 </Window>

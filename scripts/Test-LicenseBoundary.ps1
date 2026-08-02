@@ -47,6 +47,20 @@ foreach ($file in $tracked) {
     }
 }
 
+$textFiles = @($tracked |
+    Where-Object { $_ -match '\.(cs|xaml|csproj|props|targets|ps1|cmd|json|md|yml|yaml|mjs|js)$' } |
+    ForEach-Object { Join-Path $Root $_ } |
+    Where-Object { Test-Path $_ })
+$mergeMarkerFiles = if ($textFiles.Count -gt 0) {
+    @(Select-String -Path $textFiles -Pattern '^<{7} |^={7}$|^>{7} ')
+} else { @() }
+if ($mergeMarkerFiles) {
+    $mergeMarkerFiles | ForEach-Object {
+        $relative = $_.Path.Substring($Root.Length + 1).Replace('\','/')
+        $errors.Add("Unresolved merge marker detected: ${relative}:$($_.LineNumber)")
+    }
+}
+
 $privateKeys = Get-ChildItem $Root -File -Recurse -Include *.cs,*.json,*.yml,*.yaml,*.ps1,*.md |
     Where-Object { $_.FullName -notmatch '[\\/](bin|obj|dist|\.git)[\\/]' } |
     Select-String -Pattern '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----' -SimpleMatch:$false

@@ -9,6 +9,7 @@
     { "id": "vision", "name": "SmolVLM 500M Q8", "runtime": "llama.cpp mtmd", "load": "image-only" },
     { "id": "translation-multilingual", "name": "OPUS-MT multilingual to English Q8", "runtime": "Transformers.js / ONNX", "load": "translation-only" },
     { "id": "translation-korean", "name": "OPUS-MT Korean to English Q8", "runtime": "Transformers.js / ONNX", "load": "translation-only" },
-    { "id": "translation-russian", "name": "OPUS-MT English to Russian Q8", "runtime": "Transformers.js / ONNX", "load": "translation-only" }
+    { "id": "translation-russian", "name": "OPUS-MT English to Russian Q8", "runtime": "Transformers.js / ONNX", "load": "translation-only" },
+    { "id": "voice", "name": "Vosk TTS Russian Multi", "runtime": "verified nexus-voice-worker", "load": "voice-only" }
   ]
 }

@@ -3,6 +3,15 @@ using NexusMonach.Models;
 
 namespace NexusMonach.Services;
 
+public sealed record WebRequestObservation(
+    string Url,
+    bool Blocked,
+    bool IsKnownTracker,
+    string ResourceKind,
+    bool HasCookieHeader,
+    bool HasReferrerHeader,
+    bool HasOriginHeader);
+
 public static class TrackingProtectionService
 {
     private static readonly string[] StrictTrackerHosts =
@@ -17,16 +26,24 @@ public static class TrackingProtectionService
     ];
 
     public static void Attach(CoreWebView2 core, Func<string?> topLevelUrl, Action onBlocked,
-        Action<string, bool>? onObserved = null, bool forceStrict = false)
+        Action<WebRequestObservation>? onObserved = null, bool forceStrict = false)
     {
         core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.All);
         core.WebResourceRequested += (_, e) =>
         {
             ApplyPrivacyHeaders(e.Request.Headers, forceStrict);
+            var knownTracker = IsKnownTracker(e.Request.Uri);
             var shouldBlock = (forceStrict || SettingsService.Current.PrivacyLevel == PrivacyLevel.Strict) &&
                               e.ResourceContext != CoreWebView2WebResourceContext.Document &&
-                              ShouldBlock(e.Request.Uri, topLevelUrl());
-            onObserved?.Invoke(e.Request.Uri, shouldBlock);
+                              ShouldBlock(e.Request.Uri, topLevelUrl(), knownTracker);
+            onObserved?.Invoke(new WebRequestObservation(
+                e.Request.Uri,
+                shouldBlock,
+                knownTracker,
+                e.ResourceContext.ToString(),
+                HasHeader(e.Request.Headers, "Cookie"),
+                HasHeader(e.Request.Headers, "Referer"),
+                HasHeader(e.Request.Headers, "Origin")));
 
             if (!shouldBlock)
                 return;
@@ -38,6 +55,12 @@ public static class TrackingProtectionService
                 "Content-Type: text/plain\r\nCache-Control: no-store");
             onBlocked();
         };
+    }
+
+    private static bool HasHeader(CoreWebView2HttpRequestHeaders headers, string name)
+    {
+        try { return headers.Contains(name); }
+        catch { return false; }
     }
 
     private static void ApplyPrivacyHeaders(CoreWebView2HttpRequestHeaders headers, bool forceStrict)
@@ -55,16 +78,22 @@ public static class TrackingProtectionService
         }
     }
 
-    private static bool ShouldBlock(string requestUrl, string? topLevelUrl)
+    private static bool IsKnownTracker(string requestUrl)
     {
         if (!Uri.TryCreate(requestUrl, UriKind.Absolute, out var request) ||
             (request.Scheme != Uri.UriSchemeHttp && request.Scheme != Uri.UriSchemeHttps))
             return false;
 
-        var tracker = StrictTrackerHosts.Any(x =>
+        return StrictTrackerHosts.Any(x =>
             request.Host.Equals(x, StringComparison.OrdinalIgnoreCase) ||
             request.Host.EndsWith('.' + x, StringComparison.OrdinalIgnoreCase));
-        if (!tracker)
+    }
+
+    private static bool ShouldBlock(string requestUrl, string? topLevelUrl, bool knownTracker)
+    {
+        if (!knownTracker ||
+            !Uri.TryCreate(requestUrl, UriKind.Absolute, out var request) ||
+            (request.Scheme != Uri.UriSchemeHttp && request.Scheme != Uri.UriSchemeHttps))
             return false;
 
         if (!Uri.TryCreate(topLevelUrl, UriKind.Absolute, out var top))

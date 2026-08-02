@@ -42,6 +42,16 @@ Require-Text $whisper 'RandomNumberGenerator.GetBytes(24)' 'Whisper route must u
 Require-Text $whisper '"--inference-path", inferencePath' 'Whisper must receive the random inference route.'
 Reject-Text $whisper '"--inference-path", "/inference"' 'Whisper must not expose the fixed inference route.'
 
+$voiceWorker = Read-Source 'src/NexusMonach/AI/adapters/voice_worker.py'
+Require-Text $voiceWorker 'Model(model_path=args.model)' 'Vosk TTS must load only the bundled model path.'
+Reject-Text $voiceWorker 'Model(model_name=args.model)' 'Vosk TTS must not invoke upstream model discovery/download.'
+Reject-Text $voiceWorker 'http://' 'Vosk TTS worker must not contain a runtime download URL.'
+Reject-Text $voiceWorker 'https://' 'Vosk TTS worker must not contain a runtime download URL.'
+
+$voiceService = Read-Source 'src/NexusMonach/Services/NeuralVoiceService.cs'
+Require-Text $voiceService 'SynthesisTimeout' 'Vosk TTS synthesis must have a bounded timeout.'
+Require-Text $voiceService 'StopWorker();' 'Vosk TTS cancellation must terminate a stuck worker.'
+
 $tab = Read-Source 'src/NexusMonach/Models/BrowserTab.cs'
 Require-Text $tab 'source.Scheme != Uri.UriSchemeHttps' 'Internal WebView messages must require HTTPS.'
 Require-Text $tab '!source.IsDefaultPort' 'Internal WebView messages must reject a non-default port.'

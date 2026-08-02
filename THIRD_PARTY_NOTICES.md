@@ -5,6 +5,11 @@ Nexus Monach использует или распространяет компо
 NAudio, llama.cpp, whisper.cpp, Node.js, Transformers.js и автономные модели
 Qwen, Whisper, multilingual-e5, SmolVLM и OPUS-MT.
 
+Опциональный автономный голосовой комплект использует Vosk TTS и русскую
+многоголосную модель `vosk-tts-ru-multi` проекта Alpha Cephei. Код и модель
+опубликованы по Apache License 2.0. В комплекте используются только локальные
+веса и локальный worker; загрузка модели во время работы браузера запрещена.
+
 Специализированный перевод использует совместимые с Transformers.js ONNX-
 преобразования `Xenova/opus-mt-mul-en`, `Xenova/opus-mt-ko-en` и
 `Xenova/opus-mt-en-ru`, основанные на

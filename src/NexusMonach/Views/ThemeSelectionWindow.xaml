@@ -1,26 +1,26 @@
 <Window x:Class="NexusMonach.Views.ThemeSelectionWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Первый запуск · цветовая тема" Width="720" Height="520"
+        Title="Первый запуск · оформление" Width="720" Height="590"
         MinWidth="680" MinHeight="480" WindowStartupLocation="CenterScreen"
         Background="{StaticResource BackgroundBrush}" Foreground="{StaticResource TextBrush}"
         Icon="/Assets/nexus-monach.ico" Style="{StaticResource GlassPopupWindow}">
     <Window.Resources>
         <Style x:Key="ThemeChoice" TargetType="RadioButton">
-            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
             <Setter Property="FontFamily" Value="Segoe UI" />
             <Setter Property="FontSize" Value="14" />
             <Setter Property="Margin" Value="0,0,12,12" />
             <Setter Property="Padding" Value="14" />
-            <Setter Property="Background" Value="#14202D" />
-            <Setter Property="BorderBrush" Value="#3A5267" />
+            <Setter Property="Background" Value="{StaticResource PanelBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         </Style>
         <Style x:Key="ContinueButton" TargetType="Button">
-            <Setter Property="Foreground" Value="White" />
-            <Setter Property="Background" Value="#285F67" />
-            <Setter Property="BorderBrush" Value="#3F8990" />
+            <Setter Property="Foreground" Value="{StaticResource OnAccentBrush}" />
+            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
             <Setter Property="Padding" Value="22,9" />
             <Setter Property="Cursor" Value="Hand" />
         </Style>
@@ -33,9 +33,15 @@
         </Grid.RowDefinitions>
 
         <StackPanel>
-            <TextBlock Text="Выберите цвет Nexus Monach" FontSize="24" FontWeight="SemiBold" />
-            <TextBlock Text="Тема хранится только на этом компьютере. Её можно изменить позже в настройках."
-                       Margin="0,5,0,18" Foreground="{StaticResource MutedTextBrush}" />
+            <TextBlock Text="Выберите оформление Nexus Monach" FontSize="24" FontWeight="SemiBold" />
+            <TextBlock Text="Светлый или тёмный режим меняет всё окружение; цвет задаёт фирменный акцент."
+                       Margin="0,5,0,10" Foreground="{StaticResource MutedTextBrush}" />
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
+                <RadioButton x:Name="DarkModeChoice" GroupName="Mode" Content="Тёмный режим"
+                             IsChecked="True" Margin="0,0,24,0" Checked="ModeChoice_Checked" />
+                <RadioButton x:Name="LightModeChoice" GroupName="Mode" Content="Светлый режим"
+                             Checked="ModeChoice_Checked" />
+            </StackPanel>
         </StackPanel>
 
         <Grid Grid.Row="1">
@@ -49,7 +55,7 @@
             </Grid.RowDefinitions>
 
             <RadioButton x:Name="AquaChoice" Grid.Row="0" Grid.Column="0"
-                         Style="{StaticResource ThemeChoice}" Tag="MonachAqua">
+                         Style="{StaticResource ThemeChoice}" Tag="MonachAqua" Checked="ThemeChoice_Checked">
                 <StackPanel>
                     <Border Height="42" CornerRadius="8" Background="#0B1018"
                             BorderBrush="#36D7C4" BorderThickness="3" />
@@ -58,7 +64,7 @@
                 </StackPanel>
             </RadioButton>
             <RadioButton x:Name="OceanChoice" Grid.Row="0" Grid.Column="1"
-                         Style="{StaticResource ThemeChoice}" Tag="Ocean">
+                         Style="{StaticResource ThemeChoice}" Tag="Ocean" Checked="ThemeChoice_Checked">
                 <StackPanel>
                     <Border Height="42" CornerRadius="8" Background="#09111D"
                             BorderBrush="#4BB7FF" BorderThickness="3" />
@@ -67,7 +73,7 @@
                 </StackPanel>
             </RadioButton>
             <RadioButton x:Name="ForestChoice" Grid.Row="1" Grid.Column="0"
-                         Style="{StaticResource ThemeChoice}" Tag="Forest">
+                         Style="{StaticResource ThemeChoice}" Tag="Forest" Checked="ThemeChoice_Checked">
                 <StackPanel>
                     <Border Height="42" CornerRadius="8" Background="#09140F"
                             BorderBrush="#50D890" BorderThickness="3" />
@@ -76,7 +82,7 @@
                 </StackPanel>
             </RadioButton>
             <RadioButton x:Name="AmethystChoice" Grid.Row="1" Grid.Column="1"
-                         Style="{StaticResource ThemeChoice}" Tag="Amethyst">
+                         Style="{StaticResource ThemeChoice}" Tag="Amethyst" Checked="ThemeChoice_Checked">
                 <StackPanel>
                     <Border Height="42" CornerRadius="8" Background="#100B18"
                             BorderBrush="#B68CFF" BorderThickness="3" />

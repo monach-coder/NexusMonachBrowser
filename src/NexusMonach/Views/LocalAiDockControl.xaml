@@ -2,7 +2,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Width="430" MinWidth="370" Background="Transparent">
-    <Border Background="#B3101010" BorderBrush="#80FFFFFF" BorderThickness="1"
+    <Border Background="{StaticResource OverlayBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
             CornerRadius="16" Padding="15">
         <Grid>
             <Grid.RowDefinitions>
@@ -26,7 +26,7 @@
             </Grid>
 
             <Border Grid.Row="1" Margin="0,13,0,0" Padding="11" CornerRadius="8"
-                    Background="#11232A" BorderBrush="#2B6463" BorderThickness="1">
+                    Background="{StaticResource FieldBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
                 <Grid>
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                     <StackPanel>
@@ -64,7 +64,7 @@
 
             <Grid Grid.Row="4" Margin="0,12,0,0">
                 <TextBox x:Name="ResultBox" Padding="12"
-                         Background="#80101010" BorderBrush="#66FFFFFF" Foreground="{StaticResource TextBrush}"
+                         Background="{StaticResource FieldBrush}" BorderBrush="{StaticResource BorderBrush}" Foreground="{StaticResource TextBrush}"
                          IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
                          VerticalScrollBarVisibility="Auto"
                          Text="Нажми AI, чтобы начать локальный поиск и анализ текущего сайта." />
