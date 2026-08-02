@@ -16,11 +16,50 @@
             <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="ChoiceCard" Padding="{TemplateBinding Padding}"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="12">
+                            <Grid>
+                                <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                  VerticalAlignment="Center" />
+                                <Border x:Name="SelectionRing" Width="24" Height="24"
+                                        HorizontalAlignment="Right" VerticalAlignment="Top"
+                                        Margin="0,-5,-5,0" CornerRadius="12"
+                                        Background="{DynamicResource BackgroundBrush}"
+                                        BorderBrush="{DynamicResource AccentBrush}"
+                                        BorderThickness="2">
+                                    <Ellipse x:Name="SelectionDot" Width="10" Height="10"
+                                             Fill="{DynamicResource AccentBrush}"
+                                             Visibility="Collapsed" />
+                                </Border>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ChoiceCard" Property="Background"
+                                        Value="{DynamicResource PanelHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="ChoiceCard" Property="BorderBrush"
+                                        Value="{DynamicResource AccentBrush}" />
+                                <Setter TargetName="ChoiceCard" Property="BorderThickness" Value="3" />
+                                <Setter TargetName="SelectionDot" Property="Visibility" Value="Visible" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="ChoiceCard" Property="BorderBrush"
+                                        Value="{DynamicResource GoldBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
-        <Style x:Key="ContinueButton" TargetType="Button">
-            <Setter Property="Foreground" Value="{StaticResource OnAccentBrush}" />
-            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+        <Style x:Key="ContinueButton" TargetType="Button" BasedOn="{StaticResource NexusButton}">
             <Setter Property="Padding" Value="22,9" />
             <Setter Property="Cursor" Value="Hand" />
         </Style>

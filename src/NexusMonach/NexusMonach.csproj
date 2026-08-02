@@ -45,4 +45,9 @@
   <ItemGroup>
     <InternalsVisibleTo Include="NexusMonach.Security.Tests" />
   </ItemGroup>
+
+  <Target Name="RequireSelfContainedReleasePublish" BeforeTargets="Publish"
+          Condition="'$(Configuration)' == 'Release' and ('$(SelfContained)' != 'true' or '$(RuntimeIdentifier)' != 'win-x64')">
+    <Error Text="Release builds must be published as self-contained win-x64. Use --runtime win-x64 --self-contained true." />
+  </Target>
 </Project>

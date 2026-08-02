@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using System.Speech.Synthesis;
 using System.Text.RegularExpressions;
 using NexusMonach.Models;
@@ -23,6 +24,7 @@ public static partial class VoiceAssistantService
     private static readonly object Sync = new();
     private static Thread? _thread;
     private static SpeechSynthesizer? _activeSynthesizer;
+    private static object? _activeSapiVoice;
     private static volatile bool _isSpeaking;
     private static bool _shutdown;
 
@@ -105,7 +107,18 @@ public static partial class VoiceAssistantService
         Initialize();
         DrainPendingQueue();
         lock (Sync)
+        {
             try { _activeSynthesizer?.SpeakAsyncCancelAll(); } catch { }
+            try
+            {
+                if (_activeSapiVoice is not null)
+                {
+                    dynamic sapi = _activeSapiVoice;
+                    sapi.Speak(string.Empty, 3); // async + purge queued speech
+                }
+            }
+            catch { }
+        }
         NeuralVoiceService.Stop();
         Queue.TryAdd(new VoiceQueueItem(string.Empty, VoiceAnnouncementPriority.Critical, true, null, null,
             SettingsService.Current.NeuralVoiceProfile));
@@ -148,18 +161,31 @@ public static partial class VoiceAssistantService
 
     private static void Run()
     {
+        SpeechSynthesizer? synthesizer = null;
         try
         {
-            using var synthesizer = new SpeechSynthesizer();
+            try
+            {
+                synthesizer = new SpeechSynthesizer();
+                SelectFemaleVoice(synthesizer);
+                synthesizer.SetOutputToDefaultAudioDevice();
+                synthesizer.Volume = 95;
+            }
+            catch (PlatformNotSupportedException ex)
+            {
+                // Self-contained Windows packages can legitimately have no
+                // System.Speech backend. Neural TTS is the primary engine and
+                // must remain usable without creating SAPI first.
+                try { synthesizer?.Dispose(); } catch { }
+                synthesizer = null;
+                CrashReportService.RecordNonFatal("voice", "sapi-unavailable", ex);
+            }
             lock (Sync) _activeSynthesizer = synthesizer;
-            SelectFemaleVoice(synthesizer);
-            synthesizer.SetOutputToDefaultAudioDevice();
-            synthesizer.Volume = 95;
             foreach (var item in Queue.GetConsumingEnumerable())
             {
                 if (item.Cancel)
                 {
-                    synthesizer.SpeakAsyncCancelAll();
+                    try { synthesizer?.SpeakAsyncCancelAll(); } catch { }
                     item.Completion?.TrySetResult(false);
                     continue;
                 }
@@ -177,7 +203,12 @@ public static partial class VoiceAssistantService
                         item.Completion?.TrySetResult(true);
                         continue;
                     }
-
+                    if (synthesizer is null)
+                    {
+                        SpeakWithNativeSapi(item.Text, rate);
+                        item.Completion?.TrySetResult(true);
+                        continue;
+                    }
                     synthesizer.Rate = rate;
                     using var completed = new ManualResetEventSlim(false);
                     SpeakCompletedEventArgs? result = null;
@@ -211,7 +242,44 @@ public static partial class VoiceAssistantService
         finally
         {
             lock (Sync) _activeSynthesizer = null;
+            try { synthesizer?.Dispose(); } catch { }
             _isSpeaking = false;
+        }
+    }
+
+    private static void SpeakWithNativeSapi(string text, int rate)
+    {
+        object? voiceObject = null;
+        VideoDubbingVoiceService.SuspendPlayback();
+        try
+        {
+            var sapiType = Type.GetTypeFromProgID("SAPI.SpVoice")
+                           ?? throw new PlatformNotSupportedException(
+                               "Windows SAPI.SpVoice не зарегистрирован.");
+            voiceObject = Activator.CreateInstance(sapiType)
+                          ?? throw new InvalidOperationException("Windows не создал SAPI.SpVoice.");
+            dynamic voice = voiceObject;
+            dynamic russianFemale = voice.GetVoices("Language=419;Gender=Female", string.Empty);
+            dynamic russian = voice.GetVoices("Language=419", string.Empty);
+            dynamic female = voice.GetVoices("Gender=Female", string.Empty);
+            dynamic all = voice.GetVoices(string.Empty, string.Empty);
+            if (russianFemale.Count > 0) voice.Voice = russianFemale.Item(0);
+            else if (russian.Count > 0) voice.Voice = russian.Item(0);
+            else if (female.Count > 0) voice.Voice = female.Item(0);
+            else if (all.Count > 0) voice.Voice = all.Item(0);
+            else throw new InvalidOperationException("Windows SAPI не вернул доступных голосов.");
+            voice.Rate = Math.Clamp(rate, -4, 4);
+            voice.Volume = 95;
+            lock (Sync) _activeSapiVoice = voiceObject;
+            voice.Speak(text, 0); // synchronous on the dedicated STA voice thread
+        }
+        finally
+        {
+            lock (Sync)
+                if (ReferenceEquals(_activeSapiVoice, voiceObject)) _activeSapiVoice = null;
+            if (voiceObject is not null && Marshal.IsComObject(voiceObject))
+                try { Marshal.FinalReleaseComObject(voiceObject); } catch { }
+            VideoDubbingVoiceService.ResumePlayback();
         }
     }
 

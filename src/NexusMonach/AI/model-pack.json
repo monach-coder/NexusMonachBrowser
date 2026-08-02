@@ -4,12 +4,12 @@
   "runtimeNetworkAccess": false,
   "components": [
     { "id": "text", "name": "Qwen3 0.6B Q8", "runtime": "llama.cpp", "load": "on-demand" },
-    { "id": "speech", "name": "Whisper base q5_1 multilingual", "runtime": "whisper.cpp", "load": "video-only" },
+    { "id": "speech", "name": "Whisper base q5_1 multilingual realtime", "runtime": "whisper.cpp", "load": "video-only" },
     { "id": "semantics", "name": "multilingual-e5-small INT8", "runtime": "ONNX Runtime", "load": "background-low-priority" },
     { "id": "vision", "name": "SmolVLM 500M Q8", "runtime": "llama.cpp mtmd", "load": "image-only" },
     { "id": "translation-multilingual", "name": "OPUS-MT multilingual to English Q8", "runtime": "Transformers.js / ONNX", "load": "translation-only" },
     { "id": "translation-korean", "name": "OPUS-MT Korean to English Q8", "runtime": "Transformers.js / ONNX", "load": "translation-only" },
     { "id": "translation-russian", "name": "OPUS-MT English to Russian Q8", "runtime": "Transformers.js / ONNX", "load": "translation-only" },
-    { "id": "voice", "name": "Vosk TTS Russian Multi", "runtime": "verified nexus-voice-worker", "load": "voice-only" }
+    { "id": "voice", "name": "Silero Kseniya V5", "runtime": "PyTorch CPU worker", "load": "on-demand-local" }
   ]
 }

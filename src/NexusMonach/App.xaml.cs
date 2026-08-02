@@ -109,9 +109,9 @@ public partial class App : Application
         catch (Exception ex)
         {
             CrashReportService.RecordFatal(ex, "startup", "startup-failed");
+            var runtimeSnapshot = WebView2RuntimeMonitor.Check();
             GlassDialogWindow.Show(
-                "Nexus Monach не смог запуститься.\n\n" + ex.Message +
-                "\n\nПроверьте наличие актуального Microsoft Edge WebView2 Runtime.",
+                WebView2RuntimeMonitor.FormatStartupFailure(ex, runtimeSnapshot),
                 "Ошибка запуска",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -130,6 +130,7 @@ public partial class App : Application
         WhisperService.Shutdown();
         TranslationService.Stop();
         LocalAiService.Shutdown();
+        VideoDubbingVoiceService.Shutdown();
         VoiceAssistantService.Shutdown();
         CrashReportService.MarkCleanExit();
         base.OnExit(e);

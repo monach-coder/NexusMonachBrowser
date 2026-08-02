@@ -832,6 +832,7 @@ public partial class MainWindow : Window
     private void VoiceStopMenu_Click(object sender, RoutedEventArgs e)
     {
         _voiceListenCancellation?.Cancel();
+        VideoDubbingVoiceService.Stop();
         VoiceAssistantService.StopSpeaking();
         SetVoiceStatus("Голос остановлен", visible: true);
         _ = HideVoiceStatusLaterAsync();
@@ -958,6 +959,7 @@ public partial class MainWindow : Window
         CancellationToken cancellationToken)
     {
         await _voiceListenGate.WaitAsync(cancellationToken);
+        VideoDubbingVoiceService.SuspendPlayback();
         try
         {
             SetVoiceStatus(requireWakeWord ? "Жду «Нексус»…" : "Слушаю команду…", visible: true);
@@ -974,7 +976,11 @@ public partial class MainWindow : Window
             SetVoiceStatus("Команда: " + command.Kind, visible: true);
             await ExecuteVoiceCommandAsync(command);
         }
-        finally { _voiceListenGate.Release(); }
+        finally
+        {
+            VideoDubbingVoiceService.ResumePlayback();
+            _voiceListenGate.Release();
+        }
     }
 
     private async Task ExecuteVoiceCommandAsync(VoiceCommand command)
@@ -983,6 +989,7 @@ public partial class MainWindow : Window
         switch (command.Kind)
         {
             case VoiceCommandKind.StopVoice:
+                VideoDubbingVoiceService.Stop();
                 VoiceAssistantService.StopSpeaking();
                 break;
             case VoiceCommandKind.DisableHandsFree:
@@ -1185,19 +1192,14 @@ public partial class MainWindow : Window
 
     private void HandleCoreUpdateSnapshot(WebView2RuntimeSnapshot snapshot)
     {
-        if (_isPrivate || _closing || snapshot.State != WebView2RuntimeState.RestartRequired ||
-            _coreUpdatePromptShown || !IsLoaded) return;
+        if (_isPrivate || _closing || _coreUpdatePromptShown || !IsLoaded) return;
+        var localSnapshot = WebView2RuntimeMonitor.Check();
+        if (!WebView2RuntimeMonitor.ShouldOfferRestart(snapshot, localSnapshot)) return;
+
+        // Evergreen WebView2 keeps the environment already used by this window.
+        // Remember that the newer runtime is ready, but never interrupt browsing:
+        // Windows will activate it on the next natural application start.
         _coreUpdatePromptShown = true;
-        var answer = GlassDialogWindow.Show(this,
-            "Microsoft Edge Update уже загрузила и установила новое ядро WebView2. " +
-            "Оно начнёт работать после перезапуска Nexus Monach.\n\n" +
-            $"Активная версия: {snapshot.ActiveVersion}\n" +
-            $"Готовая версия: {snapshot.InstalledVersion}\n\n" +
-            "Перезапустить сейчас? Обычные вкладки и разрешённые непарольные поля будут " +
-            "локально зашифрованы средствами Windows и восстановлены после запуска. " +
-            "Пароли, OTP, платёжные поля и приватные окна не сохраняются.",
-            "Nexus Guardian · обновление ядра готово", MessageBoxButton.YesNo, MessageBoxImage.Information);
-        if (answer == MessageBoxResult.Yes) RequestSecureRestart();
     }
 
     private void Window_StateChanged(object sender, EventArgs e)

@@ -18,6 +18,13 @@ internal static class IntegrityVerifier
     internal const string PublicKeyName = "integrity-public-key.pem";
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
+    /// <summary>
+    /// Silent updates are permitted only when Guardian carries the official
+    /// trust anchor inside its own signed executable. A key placed next to a
+    /// development build must never be able to authorize the update channel.
+    /// </summary>
+    internal static bool UsesEmbeddedTrust => HasEmbeddedPublicKey();
+
     public static IntegrityResult Verify(string root, bool full)
     {
         var normalizedRoot = Path.GetFullPath(root);

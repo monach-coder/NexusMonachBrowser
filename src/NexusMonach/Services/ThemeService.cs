@@ -23,7 +23,7 @@ public static class ThemeService
         var palette = mode == BrowserThemeMode.Light
             ? new Palette(
                 "#F5F7FA", "#FFFFFF", "#E8EEF4", "#EEF2F6", "#FAFBFC", "#FFFFFF",
-                "#C6D1DB", "#F8FFFFFF", "#DDE8EF", accent.Accent, accent.Gold,
+                "#C6D1DB", "#99FFFFFF", "#DDE8EF", accent.Accent, accent.Gold,
                 "#17212B", "#5C6B78", "#FFFFFF")
             : theme switch
             {
@@ -54,7 +54,7 @@ public static class ThemeService
     private static Palette Dark(string background, string panel, string panelHover,
         string accent, string gold, string text, string muted) => new(
         background, panel, panelHover, "#0A0F17", panel, "#0E1621", "#2C4056",
-        "#E6101010", panelHover, accent, gold, text, muted, "#07130F");
+        "#99101010", panelHover, accent, gold, text, muted, "#07130F");
 
     private static void Set(string colorKey, string brushKey, string value)
     {

@@ -7,6 +7,7 @@ public sealed class PhishingProtectionTests
     [Theory]
     [InlineData("https://google.com")]
     [InlineData("https://accounts.google.com/signin")]
+    [InlineData("https://accounts.google.se/accounts/SetSID?continue=https%3A%2F%2Fwww.youtube.com")]
     [InlineData("https://github.com/login")]
     public void OfficialHttpsHosts_AreNotFlagged(string url)
     {
@@ -45,6 +46,14 @@ public sealed class PhishingProtectionTests
     public void BrandCombinedWithLoginPrompt_IsHighRisk()
     {
         var result = PhishingProtectionService.Analyze("https://secure-google-login.example");
+
+        Assert.Equal(PhishingRiskLevel.High, result.Level);
+    }
+
+    [Fact]
+    public void LookalikeRegionalGoogleLogin_IsStillBlocked()
+    {
+        var result = PhishingProtectionService.Analyze("https://accounts.google.se.evil.example/login");
 
         Assert.Equal(PhishingRiskLevel.High, result.Level);
     }

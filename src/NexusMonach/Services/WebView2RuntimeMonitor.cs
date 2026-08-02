@@ -133,6 +133,35 @@ public static class WebView2RuntimeMonitor
         }
     }
 
+    /// <summary>
+    /// An update prompt is valid only when a fresh local check confirms the
+    /// earlier notification. This prevents a stale WebView2 event from asking
+    /// for another restart after Windows has already applied the component.
+    /// </summary>
+    internal static bool ShouldOfferRestart(WebView2RuntimeSnapshot observed,
+        WebView2RuntimeSnapshot localSnapshot) =>
+        observed.State == WebView2RuntimeState.RestartRequired &&
+        localSnapshot.State == WebView2RuntimeState.RestartRequired;
+
+    internal static string FormatStartupFailure(Exception exception,
+        WebView2RuntimeSnapshot localSnapshot)
+    {
+        var details = "Nexus Monach не смог запуститься.\n\n" + exception.Message;
+        return localSnapshot.State switch
+        {
+            WebView2RuntimeState.Missing => details +
+                "\n\nЛокальная проверка: Microsoft Edge WebView2 Runtime не найден. " +
+                "Установите официальный Evergreen Runtime.",
+            WebView2RuntimeState.RestartRequired => details +
+                $"\n\nЛокальная проверка: обновление WebView2 {localSnapshot.InstalledVersion} " +
+                "уже установлено. Закройте все окна Nexus Monach и запустите браузер снова.",
+            WebView2RuntimeState.Current => details +
+                $"\n\nЛокальная проверка: WebView2 {localSnapshot.InstalledVersion} уже установлен " +
+                "и доступен. Повторная установка компонента не требуется.",
+            _ => details + "\n\n" + localSnapshot.Message
+        };
+    }
+
     private static void Environment_NewBrowserVersionAvailable(object? sender, object e) => Publish(Check());
 
     private static void Publish(WebView2RuntimeSnapshot snapshot)

@@ -166,58 +166,85 @@ public partial class LocalAiDockControl : UserControl
                 "Перевод звука видео", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
+        if (!AiModelCatalog.SpeechReady)
+        {
+            GlassDialogWindow.Show(AiModelCatalog.MissingSpeechRuntimeMessage,
+                "Перевод звука видео", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (!AiModelCatalog.NeuralVoiceReady)
+        {
+            GlassDialogWindow.Show(AiModelCatalog.MissingNeuralVoiceMessage,
+                "Перевод звука видео", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
         StopVideoTranslation();
         var session = new CancellationTokenSource();
         _videoCancellation = session;
-        VoiceAssistantService.Announce("Локальный перевод видео запускается.",
-            VoiceAnnouncementPriority.Important, tab.IsPrivate);
-        await WaitForVoiceSilenceAsync(session.Token);
         await tab.BeginLiveAudioTranslationAsync();
         var finalStatus = "Перевод звука остановлен.";
         try
         {
-            await tab.UpdateLiveAudioTranslationStatusAsync("Один раз загружаю Whisper и Nexus OPUS…");
-            await WhisperService.WarmUpAsync(session.Token);
+            CrashReportService.AddBreadcrumb("video-translation", "warmup-started");
+            await tab.UpdateLiveAudioTranslationStatusAsync(
+                "Один раз прогреваю Whisper, OPUS и русский голос…");
+            await Task.WhenAll(
+                WhisperService.WarmUpAsync(WhisperLane.Dubbing, session.Token),
+                TranslationService.WarmUpForLiveVideoAsync(
+                    includeAllSourceRoutes: false, cancellationToken: session.Token),
+                VideoDubbingVoiceService.WarmUpAsync(session.Token));
+            CrashReportService.AddBreadcrumb("video-translation", "warmup-completed");
             await tab.EnableVideoDubbingMixAsync();
             await tab.UpdateLiveAudioTranslationStatusAsync(
                 "Слушаю видео · русский перевод озвучивает Nexus Voice");
 
-            var lastSpokenTranslation = string.Empty;
             var lastTranscript = string.Empty;
+            var recentTranscripts = new RecentVideoPhraseGuard(capacity: 8, retentionSeconds: 30);
+            var recentTranslations = new RecentVideoPhraseGuard(capacity: 8, retentionSeconds: 40);
             var consecutiveErrors = 0;
 
-            async Task TranslateAndSpeakAsync(byte[] wav)
+            async Task<string?> TranslateSegmentAsync(LiveAudioSegment segment)
             {
-                var speech = await NexusFabricRuntime.TranscribeSpeechDetailedAsync(wav, session.Token);
-                var transcript = RemoveTranscriptOverlap(lastTranscript, speech.Text);
-                if (string.IsNullOrWhiteSpace(transcript)) return;
-                lastTranscript = speech.Text;
-
-                // Whisper только распознаёт исходный язык. В отличие от -tr,
-                // который умеет переводить лишь на английский, Nexus OPUS
-                // выполняет отдельный маршрут исходный язык -> русский.
-                var text = await LocalIntelligenceService.TranslateToRussianAsync(
-                    transcript, session.Token, speech.Language);
+                if (!VideoDubbingPolicy.IsFresh(segment.CapturedAt, DateTimeOffset.UtcNow)) return null;
+                var translated = await VideoSpeechTranslationService.TranslateToRussianTextAsync(
+                    segment, lastTranscript, session.Token);
+                if (translated is null) return null;
+                lastTranscript = translated.TranscriptWindow;
+                var now = DateTimeOffset.UtcNow;
+                if (!recentTranscripts.IsNovel(translated.Transcript, now)) return null;
+                var text = translated.RussianText;
                 if (string.IsNullOrWhiteSpace(text) ||
-                    text.Equals(lastSpokenTranslation, StringComparison.OrdinalIgnoreCase)) return;
+                    !recentTranslations.IsNovel(text, now)) return null;
+                return text;
+            }
 
-                lastSpokenTranslation = text;
-                await WaitForVoiceSilenceAsync(session.Token);
-                var spoken = await VoiceAssistantService.SpeakAndWaitAsync(
-                    text, VoiceAnnouncementPriority.Important, tab.IsPrivate,
-                    userInitiated: true, rateOverride: VideoDubbingPolicy.SpeechRate,
-                    cancellationToken: session.Token);
+            async Task SpeakTranslationAsync(string text, CancellationToken voiceToken,
+                Func<Task>? beforeSpeaking = null, Func<Task>? afterSpeaking = null)
+            {
+                if (beforeSpeaking is not null) await beforeSpeaking();
+                bool spoken;
+                try
+                {
+                    spoken = await VideoDubbingVoiceService.SpeakAndWaitAsync(
+                        text, VideoDubbingPolicy.SelectSpeechRate(text.Length),
+                        cancellationToken: voiceToken);
+                }
+                finally
+                {
+                    if (afterSpeaking is not null) await afterSpeaking();
+                }
                 if (!spoken)
                     throw new InvalidOperationException(
                         "Женский голос Nexus не смог озвучить перевод.");
             }
 
-            async Task ProcessSegmentSafelyAsync(byte[] wav)
+            async Task<string?> TranslateSegmentSafelyAsync(LiveAudioSegment segment)
             {
                 try
                 {
-                    await TranslateAndSpeakAsync(wav);
+                    var text = await TranslateSegmentAsync(segment);
                     consecutiveErrors = 0;
+                    return text;
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
@@ -227,48 +254,146 @@ public partial class LocalAiDockControl : UserControl
                         await tab.UpdateLiveAudioTranslationStatusAsync(
                             "Продолжаю слушать · последняя ошибка: " +
                             ex.Message[..Math.Min(ex.Message.Length, 140)]);
+                    return null;
                 }
             }
 
-            var firstDirect = await tab.CaptureActiveVideoAudioAsync(3, session.Token);
-            if (firstDirect.Success)
+            async Task ProcessSegmentSafelyAsync(LiveAudioSegment segment,
+                Func<Task>? beforeSpeaking = null, Func<Task>? afterSpeaking = null)
             {
+                var text = await TranslateSegmentSafelyAsync(segment);
+                if (!string.IsNullOrWhiteSpace(text))
+                    await SpeakTranslationAsync(text, session.Token, beforeSpeaking, afterSpeaking);
+            }
+
+            async Task SpeakQueuedTranslationsAsync(ChannelReader<string> translations,
+                CancellationToken speakerToken)
+            {
+                var voiceErrors = 0;
+                try
+                {
+                    await foreach (var text in translations.ReadAllAsync(speakerToken))
+                    {
+                        try
+                        {
+                            await SpeakTranslationAsync(text, speakerToken);
+                            voiceErrors = 0;
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex)
+                        {
+                            if (++voiceErrors >= 3)
+                                await tab.UpdateLiveAudioTranslationStatusAsync(
+                                    "Продолжаю переводить · ошибка голоса: " +
+                                    ex.Message[..Math.Min(ex.Message.Length, 120)]);
+                        }
+                    }
+                }
+                catch (OperationCanceledException) { }
+            }
+
+            AudioCaptureResult firstDirect;
+            var firstDirectStartedAt = DateTimeOffset.UtcNow;
+            var silentDirectProbes = 0;
+            var useLoopback = false;
+            while (true)
+            {
+                firstDirectStartedAt = DateTimeOffset.UtcNow;
+                firstDirect = await tab.CaptureActiveVideoAudioAsync(
+                    VideoDubbingPolicy.SegmentMilliseconds, session.Token,
+                    VideoDubbingPolicy.SegmentOverlapMilliseconds);
+                if (firstDirect.WaitingForPlayback)
+                {
+                    await tab.UpdateLiveAudioTranslationStatusAsync(
+                        "Видео на паузе · прямой перевод начнётся вместе с воспроизведением");
+                    if (await tab.ShouldStopLiveAudioTranslationAsync())
+                        throw new OperationCanceledException(session.Token);
+                    await Task.Delay(VideoDubbingPolicy.PlaybackProbeMilliseconds, session.Token);
+                    continue;
+                }
+                if (VideoDubbingPolicy.IsSilentDirectCapture(
+                        firstDirect.Success, firstDirect.WavBase64))
+                {
+                    silentDirectProbes++;
+                    if (silentDirectProbes < VideoDubbingPolicy.DirectSilenceProbeLimit)
+                    {
+                        await tab.UpdateLiveAudioTranslationStatusAsync(
+                            $"Проверяю аудиопоток видео · тишина {silentDirectProbes} / {VideoDubbingPolicy.DirectSilenceProbeLimit}");
+                        continue;
+                    }
+                    useLoopback = true;
+                }
+                else if (!firstDirect.Success)
+                    useLoopback = true;
+                break;
+            }
+            if (VideoDubbingPolicy.HasUsableDirectAudio(
+                    firstDirect.Success, firstDirect.WavBase64))
+            {
+                CrashReportService.AddBreadcrumb("video-translation", "direct-capture-selected");
                 await tab.UpdateLiveAudioTranslationStatusAsync(
-                    "Закадровый перевод · оригинал приглушён · без пауз");
-                var directSegments = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(
+                    "Прямой перевод · распознавание не пропускает речь во время озвучки");
+                var directSegments = Channel.CreateBounded<LiveAudioSegment>(new BoundedChannelOptions(
                     VideoDubbingPolicy.MaxBufferedSegments)
                 {
-                    FullMode = BoundedChannelFullMode.DropOldest,
+                    FullMode = BoundedChannelFullMode.Wait,
                     SingleReader = true,
                     SingleWriter = true
                 });
                 if (!string.IsNullOrWhiteSpace(firstDirect.WavBase64))
-                    directSegments.Writer.TryWrite(Convert.FromBase64String(firstDirect.WavBase64));
+                    directSegments.Writer.TryWrite(new LiveAudioSegment(
+                        Convert.FromBase64String(firstDirect.WavBase64), firstDirectStartedAt));
                 using var producerCancellation =
                     CancellationTokenSource.CreateLinkedTokenSource(session.Token);
 
                 async Task ProduceDirectSegmentsAsync()
                 {
                     var failures = 0;
+                    var silentCaptures = 0;
                     try
                     {
                         while (!producerCancellation.IsCancellationRequested)
                         {
+                            var capturedAt = DateTimeOffset.UtcNow -
+                                             TimeSpan.FromMilliseconds(
+                                                 VideoDubbingPolicy.SegmentOverlapMilliseconds);
                             var captured = await tab.CaptureActiveVideoAudioAsync(
-                                VideoDubbingPolicy.DirectSegmentSeconds, producerCancellation.Token);
+                                VideoDubbingPolicy.SegmentMilliseconds, producerCancellation.Token,
+                                VideoDubbingPolicy.SegmentOverlapMilliseconds);
+                            if (captured.WaitingForPlayback)
+                            {
+                                failures = 0;
+                                await tab.UpdateLiveAudioTranslationStatusAsync(
+                                    "Видео на паузе · перевод продолжится вместе с воспроизведением");
+                                await Task.Delay(VideoDubbingPolicy.PlaybackProbeMilliseconds,
+                                    producerCancellation.Token);
+                                continue;
+                            }
                             if (captured.Success)
                             {
                                 failures = 0;
-                                if (!string.IsNullOrWhiteSpace(captured.WavBase64))
-                                    directSegments.Writer.TryWrite(
-                                        Convert.FromBase64String(captured.WavBase64));
+                                if (VideoDubbingPolicy.IsSilentDirectCapture(
+                                        captured.Success, captured.WavBase64))
+                                {
+                                    if (++silentCaptures >= VideoDubbingPolicy.DirectSilenceProbeLimit)
+                                    {
+                                        useLoopback = true;
+                                        break;
+                                    }
+                                    continue;
+                                }
+                                silentCaptures = 0;
+                                await directSegments.Writer.WriteAsync(
+                                    new LiveAudioSegment(
+                                        Convert.FromBase64String(captured.WavBase64), capturedAt),
+                                    producerCancellation.Token);
                                 continue;
                             }
                             if (++failures >= 3)
-                                throw new InvalidOperationException(
-                                    captured.Error.Length == 0
-                                        ? "Плеер прекратил прямой захват звука."
-                                        : captured.Error);
+                            {
+                                useLoopback = true;
+                                break;
+                            }
                         }
                     }
                     catch (OperationCanceledException) { }
@@ -276,41 +401,127 @@ public partial class LocalAiDockControl : UserControl
                     directSegments.Writer.TryComplete();
                 }
 
+                var directTranslations = Channel.CreateBounded<string>(new BoundedChannelOptions(
+                    VideoDubbingPolicy.MaxBufferedSegments * 2)
+                {
+                    FullMode = BoundedChannelFullMode.Wait,
+                    SingleReader = true,
+                    SingleWriter = true
+                });
+                using var speakerCancellation =
+                    CancellationTokenSource.CreateLinkedTokenSource(session.Token);
+
                 var producer = ProduceDirectSegmentsAsync();
+                var speaker = SpeakQueuedTranslationsAsync(
+                    directTranslations.Reader, speakerCancellation.Token);
                 try
                 {
-                    await foreach (var wav in directSegments.Reader.ReadAllAsync(session.Token))
+                    await foreach (var segment in directSegments.Reader.ReadAllAsync(session.Token))
                     {
                         if (await tab.ShouldStopLiveAudioTranslationAsync()) break;
-                        await ProcessSegmentSafelyAsync(wav);
+                        var text = await TranslateSegmentSafelyAsync(segment);
+                        if (!string.IsNullOrWhiteSpace(text))
+                            await directTranslations.Writer.WriteAsync(text, session.Token);
                     }
                 }
                 finally
                 {
                     producerCancellation.Cancel();
+                    speakerCancellation.Cancel();
+                    directTranslations.Writer.TryComplete();
                     try { await producer; } catch { }
+                    try { await speaker; } catch { }
                 }
             }
-            else
+            if (useLoopback)
             {
+                CrashReportService.AddBreadcrumb("video-translation", "loopback-selected");
                 // DRM и некоторые нестандартные плееры запрещают captureStream.
-                // В резерве остаётся системный loopback. На этом пути кадр
-                // ненадолго удерживается, иначе SAPI попал бы в собственный вход.
+                // В резерве сначала пробуем process-loopback, который слышит
+                // только WebView2. Endpoint-loopback никогда не управляет
+                // воспроизведением видео: на время Kseniya приостанавливается
+                // исключительно захват общего аудиоустройства.
                 await tab.UpdateLiveAudioTranslationStatusAsync(
-                    "Совместимый режим · короткая пауза только во время озвучки");
-                await using var audio = SystemAudioCaptureService.StartContinuousCapture(
-                    segmentMilliseconds: 2_800, overlapMilliseconds: 300);
-                await foreach (var segment in audio.ReadSegmentsAsync(session.Token))
+                    "Подключаю изолированный аудиопоток WebView2…");
+                await using var audio = await SystemAudioCaptureService.StartPreferredContinuousCaptureAsync(
+                    tab.WebViewProcessId,
+                    segmentMilliseconds: VideoDubbingPolicy.SegmentMilliseconds,
+                    overlapMilliseconds: VideoDubbingPolicy.SegmentOverlapMilliseconds,
+                    cancellationToken: session.Token);
+                await tab.UpdateLiveAudioTranslationStatusAsync(audio.IsProcessIsolated
+                    ? "Закадровый перевод · изолированный поток WebView2 · непрерывное видео"
+                    : "Совместимый перевод · видео воспроизводится непрерывно");
+                await using var capturedSegments =
+                    audio.ReadSegmentsAsync(session.Token).GetAsyncEnumerator(session.Token);
+                bool hasFirstSegment;
+                try
                 {
-                    if (await tab.ShouldStopLiveAudioTranslationAsync()) break;
-                    audio.SuspendAndFlush();
-                    await tab.PrepareVideoForSpokenTranslationAsync(pausePlayback: true);
-                    try { await ProcessSegmentSafelyAsync(segment.Wav); }
+                    hasFirstSegment = await capturedSegments.MoveNextAsync().AsTask().WaitAsync(
+                        TimeSpan.FromMilliseconds(
+                            VideoDubbingPolicy.FirstLoopbackSegmentTimeoutMilliseconds),
+                        session.Token);
+                }
+                catch (TimeoutException)
+                {
+                    throw new InvalidOperationException(
+                        "Аудиопоток вкладки не передал звук. Проверьте воспроизведение и устройство вывода.");
+                }
+                if (!hasFirstSegment)
+                    throw new InvalidOperationException("Аудиопоток вкладки завершился без звука.");
+
+                if (audio.IsProcessIsolated)
+                {
+                    var loopbackTranslations = Channel.CreateBounded<string>(
+                        new BoundedChannelOptions(VideoDubbingPolicy.MaxBufferedSegments * 2)
+                        {
+                            FullMode = BoundedChannelFullMode.Wait,
+                            SingleReader = true,
+                            SingleWriter = true
+                        });
+                    using var loopbackSpeakerCancellation =
+                        CancellationTokenSource.CreateLinkedTokenSource(session.Token);
+                    var loopbackSpeaker = SpeakQueuedTranslationsAsync(
+                        loopbackTranslations.Reader, loopbackSpeakerCancellation.Token);
+                    try
+                    {
+                        do
+                        {
+                            if (await tab.ShouldStopLiveAudioTranslationAsync()) break;
+                            var segment = capturedSegments.Current;
+                            var text = await TranslateSegmentSafelyAsync(
+                                new LiveAudioSegment(segment.Wav, segment.CapturedAt));
+                            if (!string.IsNullOrWhiteSpace(text))
+                                await loopbackTranslations.Writer.WriteAsync(text, session.Token);
+                        }
+                        while (await capturedSegments.MoveNextAsync());
+                    }
                     finally
                     {
-                        audio.Resume();
-                        await tab.ResumeVideoAfterSpokenTranslationAsync();
+                        loopbackSpeakerCancellation.Cancel();
+                        loopbackTranslations.Writer.TryComplete();
+                        try { await loopbackSpeaker; } catch { }
                     }
+                }
+                else
+                {
+                    do
+                    {
+                        if (await tab.ShouldStopLiveAudioTranslationAsync()) break;
+                        var segment = capturedSegments.Current;
+                        await ProcessSegmentSafelyAsync(
+                            new LiveAudioSegment(segment.Wav, segment.CapturedAt),
+                            () =>
+                            {
+                                audio.SuspendForDubbing();
+                                return Task.CompletedTask;
+                            },
+                            () =>
+                            {
+                                audio.Resume();
+                                return Task.CompletedTask;
+                            });
+                    }
+                    while (await capturedSegments.MoveNextAsync());
                 }
             }
         }
@@ -322,49 +533,15 @@ public partial class LocalAiDockControl : UserControl
         }
         finally
         {
-            VoiceAssistantService.StopSpeaking();
+            VideoDubbingVoiceService.Stop();
             Interlocked.CompareExchange(ref _videoCancellation, null, session);
             session.Dispose();
             try { await tab.ResumeVideoAfterSpokenTranslationAsync(); } catch { }
             try { await tab.EndLiveAudioTranslationAsync(finalStatus); } catch { }
-            VoiceAssistantService.Announce(
-                finalStatus.StartsWith("Ошибка", StringComparison.OrdinalIgnoreCase)
-                    ? "Перевод видео завершился с ошибкой."
-                    : "Перевод видео остановлен.",
-                finalStatus.StartsWith("Ошибка", StringComparison.OrdinalIgnoreCase)
-                    ? VoiceAnnouncementPriority.Critical
-                    : VoiceAnnouncementPriority.Important,
-                tab.IsPrivate);
         }
     }
 
     public void StopVideoTranslation() => Interlocked.Exchange(ref _videoCancellation, null)?.Cancel();
-
-    private static string RemoveTranscriptOverlap(string previous, string current)
-    {
-        current = System.Text.RegularExpressions.Regex.Replace(current ?? string.Empty, @"\s+", " ").Trim();
-        previous = System.Text.RegularExpressions.Regex.Replace(previous ?? string.Empty, @"\s+", " ").Trim();
-        if (current.Length == 0 || previous.Length == 0) return current;
-        if (previous.Equals(current, StringComparison.OrdinalIgnoreCase) ||
-            previous.Contains(current, StringComparison.OrdinalIgnoreCase)) return string.Empty;
-
-        var oldWords = previous.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var newWords = current.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var maximum = Math.Min(Math.Min(oldWords.Length, newWords.Length), 12);
-        for (var overlap = maximum; overlap >= 2; overlap--)
-        {
-            var matches = true;
-            for (var index = 0; index < overlap; index++)
-                if (!oldWords[oldWords.Length - overlap + index].Equals(
-                        newWords[index], StringComparison.OrdinalIgnoreCase))
-                {
-                    matches = false;
-                    break;
-                }
-            if (matches) return string.Join(' ', newWords.Skip(overlap));
-        }
-        return current;
-    }
 
     private static bool ContainsCyrillic(string? text) =>
         !string.IsNullOrWhiteSpace(text) &&

@@ -8,9 +8,6 @@
         <Style x:Key="GuardianButton" TargetType="Button" BasedOn="{StaticResource NexusButton}">
             <Setter Property="Padding" Value="14,8" />
             <Setter Property="Margin" Value="0,0,8,8" />
-            <Setter Property="Foreground" Value="{StaticResource OnAccentBrush}" />
-            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
             <Setter Property="Cursor" Value="Hand" />
         </Style>
         <Style x:Key="StatusCard" TargetType="Border">

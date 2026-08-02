@@ -38,7 +38,6 @@ $requiredAi = @(
     (Join-Path $ai "node\node.exe"),
     (Join-Path $ai "adapters\semantic.mjs"),
     (Join-Path $ai "adapters\translate.mjs"),
-    (Join-Path $ai "voice\nexus-voice-worker.exe"),
     (Join-Path $ai "models\whisper\ggml-base-q5_1.bin"),
     (Join-Path $ai "models\smolvlm-500m\SmolVLM-500M-Instruct-Q8_0.gguf"),
     (Join-Path $ai "models\smolvlm-500m\mmproj-SmolVLM-500M-Instruct-Q8_0.gguf"),
@@ -58,12 +57,6 @@ if (@(Get-ChildItem (Join-Path $ai "whisper") -Filter whisper-cli.exe -Recurse -
 }
 if (@(Get-ChildItem (Join-Path $ai "whisper") -Filter whisper-server.exe -Recurse -ErrorAction SilentlyContinue).Count -eq 0) {
     $missingAi += (Join-Path $ai "whisper\**\whisper-server.exe")
-}
-$voiceModel = Join-Path $ai "models\voice\vosk-tts-ru-multi"
-if (-not (Test-Path (Join-Path $voiceModel "config.json")) -or
-    -not (Test-Path (Join-Path $voiceModel "dictionary") -PathType Leaf) -or
-    -not (Test-Path (Join-Path $voiceModel "model.onnx") -PathType Leaf)) {
-    $missingAi += $voiceModel
 }
 if ($missingAi.Count -gt 0) {
     Write-Host "WARNING: source build does not contain the Full Offline AI payload:" -ForegroundColor Yellow

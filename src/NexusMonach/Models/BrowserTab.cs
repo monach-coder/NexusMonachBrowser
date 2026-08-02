@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Windows;
@@ -91,6 +92,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     public string InitialUrl { get; }
     public WebView2 View { get; }
     public CoreWebView2? Core => View.CoreWebView2;
+    public int WebViewProcessId => Core is { } core ? checked((int)core.BrowserProcessId) : 0;
     public bool IsInitialized => Core is not null;
     public bool IsPrivate => _isPrivate;
     public DateTime LastActivatedUtc { get; private set; } = DateTime.UtcNow;
@@ -535,23 +537,27 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
               const state={entries:new Map()};window.__nexusInteractiveTranslation=state;
               const result=[],seen=new Set();let total=0,index=0;
               const visible=e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0};
+              const roots=[document];for(let i=0;i<roots.length;i++)for(const e of roots[i].querySelectorAll('*'))if(e.shadowRoot)roots.push(e.shadowRoot);
+              const queryDeep=selector=>roots.flatMap(root=>[...root.querySelectorAll(selector)]);
               const language=e=>(e?.closest?.('[lang]')?.getAttribute('lang')||document.documentElement.lang||'').trim();
               const add=(key,text,entry,e)=>{text=(text||'').replace(/\s+/g,' ').trim();if(!text||text.length<1||text.length>500||seen.has(key)||result.length>=90||total+text.length>4200)return;seen.add(key);const id='f'+(++index);state.entries.set(id,entry);result.push({Id:id,Text:text,Language:language(e)});total+=text.length};
               const addAttribute=(e,attribute)=>{const value=e.getAttribute(attribute)||'';if(value.trim())add('a:'+attribute+':'+index+':'+value,value,{kind:'attribute',element:e,attribute,original:value},e)};
               const addText=(root,force=false)=>{if(!root||(!force&&!visible(root)))return;const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let node;while((node=walker.nextNode())){const raw=node.nodeValue||'',text=raw.trim(),parent=node.parentElement;if(!parent||!text||parent.closest('script,style,noscript,input,textarea,[contenteditable="true"]'))continue;add('t:'+index+':'+text,text,{kind:'text',node,original:raw},parent)}};
               const translatableInputTypes=__TRANSLATABLE_INPUT_TYPES__;
-              const controls=[...document.querySelectorAll(__INTERACTIVE_SELECTOR__)].filter(visible).slice(0,100);
+              const translatableAttributes=__TRANSLATABLE_ATTRIBUTES__;
+              const controls=queryDeep(__INTERACTIVE_SELECTOR__).filter(visible).slice(0,140);
               for(const control of controls){
-                for(const attribute of ['placeholder','aria-label','title'])addAttribute(control,attribute);
+                for(const attribute of translatableAttributes)addAttribute(control,attribute);
                 const type=(control.getAttribute('type')||'').toLowerCase();
                 if(control.tagName==='INPUT'&&translatableInputTypes.includes(type))addAttribute(control,'value');
-                if(control.tagName==='BUTTON'||control.tagName==='A'||['button','menuitem','tab'].includes(control.getAttribute('role')||''))addText(control);
+                if(control.tagName==='BUTTON'||control.tagName==='A'||control.tagName==='SUMMARY'||['button','menuitem','tab','option'].includes(control.getAttribute('role')||''))addText(control);
+                for(const image of control.querySelectorAll?.('img[alt],input[type="image"][alt]')||[])addAttribute(image,'alt');
                 for(const label of control.labels||[])addText(label);
                 const parentLabel=control.closest('label');if(parentLabel)addText(parentLabel);
-                const id=control.id;if(id)for(const label of document.querySelectorAll('label[for="'+CSS.escape(id)+'"]'))addText(label);
+                const id=control.id,controlRoot=control.getRootNode?.()||document;if(id)for(const label of controlRoot.querySelectorAll?.('label[for="'+CSS.escape(id)+'"]')||[])addText(label);
                 if(control.tagName==='SELECT')for(const option of [...control.options].slice(0,30))addText(option,true);
               }
-              for(const item of document.querySelectorAll('form legend,[role="form"] legend,form [role="alert"],form [aria-live],form small,form .error,form [class*="hint" i],[role="form"] [role="alert"]'))addText(item);
+              for(const item of queryDeep('form legend,[role="form"] legend,form [role="alert"],form [aria-live],form small,form .error,form [class*="hint" i],[role="form"] [role="alert"]'))addText(item);
               return result;
             })()
             """
@@ -559,6 +565,9 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 JsonSerializer.Serialize(PageTranslationPolicy.InteractiveSelector), StringComparison.Ordinal)
             .Replace("__TRANSLATABLE_INPUT_TYPES__",
                 JsonSerializer.Serialize(PageTranslationPolicy.TranslatableInputValueTypes),
+                StringComparison.Ordinal)
+            .Replace("__TRANSLATABLE_ATTRIBUTES__",
+                JsonSerializer.Serialize(PageTranslationPolicy.TranslatableAttributes),
                 StringComparison.Ordinal);
         var json = await Core.ExecuteScriptAsync(script);
         try { return JsonSerializer.Deserialize<List<TranslationSegment>>(json) ?? []; }
@@ -668,8 +677,8 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
             """);
     }
 
-    public async Task<AudioCaptureResult> CaptureActiveVideoAudioAsync(int seconds,
-        CancellationToken cancellationToken = default)
+    public async Task<AudioCaptureResult> CaptureActiveVideoAudioAsync(int milliseconds,
+        CancellationToken cancellationToken = default, int overlapMilliseconds = 0)
     {
         if (Core is null || UrlService.IsInternal(CurrentUrl))
             return new AudioCaptureResult { Error = "Открой страницу с видео." };
@@ -680,22 +689,42 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                   .sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
                 const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];
                 if(!video) return {Success:false,Error:'Активное HTML5-видео не найдено.',WavBase64:''};
-                const capture=video.captureStream||video.mozCaptureStream;
-                if(!capture) return {Success:false,Error:'Этот проигрыватель не разрешает захват звукового потока.',WavBase64:''};
-                const stream=capture.call(video),tracks=stream.getAudioTracks();
-                if(!tracks.length) return {Success:false,Error:'В видеопотоке нет доступной аудиодорожки или она защищена DRM.',WavBase64:''};
-                const context=new AudioContext(),source=context.createMediaStreamSource(stream);
-                const processor=context.createScriptProcessor(4096,1,1),silent=context.createGain();silent.gain.value=0;
-                const chunks=[];processor.onaudioprocess=e=>chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-                source.connect(processor);processor.connect(silent);silent.connect(context.destination);await context.resume();
-                await new Promise(resolve=>setTimeout(resolve,__MILLISECONDS__));
-                processor.disconnect();source.disconnect();silent.disconnect();tracks.forEach(t=>t.stop());await context.close();
-                const length=chunks.reduce((n,x)=>n+x.length,0),input=new Float32Array(length);let offset=0;
-                for(const chunk of chunks){input.set(chunk,offset);offset+=chunk.length}
-                if(!input.length) return {Success:false,Error:'Браузер не получил аудиосэмплы.',WavBase64:''};
-                let energy=0;for(let i=0;i<input.length;i+=32)energy+=input[i]*input[i];
-                if(Math.sqrt(energy/Math.max(1,input.length/32))<0.0001)return {Success:true,Error:'silence',WavBase64:''};
-                const outRate=16000,ratio=context.sampleRate/outRate,outLength=Math.floor(input.length/ratio),pcm=new Int16Array(outLength);
+                const dispose=state=>{if(!state)return;state.closed=true;try{state.processor.disconnect()}catch{}try{state.source.disconnect()}catch{}try{state.silent.disconnect()}catch{}try{state.tracks.forEach(t=>t.stop())}catch{}try{state.context.close()}catch{}};
+                if(video.paused||video.ended){dispose(window.__nexusLiveAudioCapture);window.__nexusLiveAudioCapture=null;window.__nexusLiveAudioOverlap=null;return {Success:false,WaitingForPlayback:true,Error:'Видео на паузе.',WavBase64:''}}
+                let state=window.__nexusLiveAudioCapture;
+                if(!state||state.closed||state.video!==video){
+                  dispose(state);
+                  const capture=video.captureStream||video.mozCaptureStream;
+                  if(!capture) return {Success:false,Error:'Этот проигрыватель не разрешает захват звукового потока.',WavBase64:''};
+                  const stream=capture.call(video),tracks=stream.getAudioTracks();
+                  if(!tracks.length){tracks.forEach(t=>t.stop());return {Success:false,Error:'В видеопотоке нет доступной аудиодорожки или она защищена DRM.',WavBase64:''}}
+                  const context=new AudioContext(),source=context.createMediaStreamSource(stream);
+                  const processor=context.createScriptProcessor(4096,1,1),silent=context.createGain();silent.gain.value=0;
+                  state={video,context,source,processor,silent,tracks,chunks:[],total:0,sampleRate:context.sampleRate,closed:false};
+                  processor.onaudioprocess=e=>{
+                    if(state.closed)return;
+                    const chunk=new Float32Array(e.inputBuffer.getChannelData(0));state.chunks.push(chunk);state.total+=chunk.length;
+                    const maximum=Math.ceil(state.sampleRate*12);
+                    while(state.total>maximum&&state.chunks.length>1){const removed=state.chunks.shift();state.total-=removed.length}
+                  };
+                  source.connect(processor);processor.connect(silent);silent.connect(context.destination);await context.resume();
+                  window.__nexusLiveAudioCapture=state;
+                }
+                const minimum=Math.floor(state.sampleRate*__MILLISECONDS__/1000),deadline=Date.now()+__MILLISECONDS__+2500;
+                while(state.total<minimum&&Date.now()<deadline){if(video.paused||video.ended||state.closed)break;await new Promise(resolve=>setTimeout(resolve,35))}
+                if(video.paused||video.ended){dispose(state);window.__nexusLiveAudioCapture=null;window.__nexusLiveAudioOverlap=null;return {Success:false,WaitingForPlayback:true,Error:'Видео на паузе.',WavBase64:''}}
+                const chunks=state.chunks;state.chunks=[];const length=state.total;state.total=0;
+                const current=new Float32Array(length);let offset=0;
+                for(const chunk of chunks){current.set(chunk,offset);offset+=chunk.length}
+                if(!current.length) return {Success:false,Error:'Браузер не получил аудиосэмплы.',WavBase64:''};
+                let energy=0;for(let i=0;i<current.length;i+=32)energy+=current[i]*current[i];
+                if(Math.sqrt(energy/Math.max(1,current.length/32))<0.0001){window.__nexusLiveAudioOverlap=null;return {Success:true,Error:'silence',WavBase64:''}}
+                const overlapSamples=Math.min(current.length,Math.floor(state.sampleRate*__OVERLAP__/1000));
+                const previous=window.__nexusLiveAudioOverlap instanceof Float32Array?window.__nexusLiveAudioOverlap:null;
+                window.__nexusLiveAudioOverlap=overlapSamples>0?current.slice(current.length-overlapSamples):null;
+                const input=previous?.length?new Float32Array(previous.length+current.length):current;
+                if(previous?.length){input.set(previous,0);input.set(current,previous.length)}
+                const outRate=16000,ratio=state.sampleRate/outRate,outLength=Math.floor(input.length/ratio),pcm=new Int16Array(outLength);
                 for(let i=0;i<outLength;i++){const start=Math.floor(i*ratio),end=Math.min(input.length,Math.floor((i+1)*ratio));let sum=0;for(let j=start;j<end;j++)sum+=input[j];const value=Math.max(-1,Math.min(1,sum/Math.max(1,end-start)));pcm[i]=value<0?value*32768:value*32767}
                 const bytes=new Uint8Array(44+pcm.length*2),view=new DataView(bytes.buffer),write=(p,s)=>{for(let i=0;i<s.length;i++)view.setUint8(p+i,s.charCodeAt(i))};
                 write(0,'RIFF');view.setUint32(4,36+pcm.length*2,true);write(8,'WAVE');write(12,'fmt ');view.setUint32(16,16,true);view.setUint16(20,1,true);view.setUint16(22,1,true);view.setUint32(24,outRate,true);view.setUint32(28,outRate*2,true);view.setUint16(32,2,true);view.setUint16(34,16,true);write(36,'data');view.setUint32(40,pcm.length*2,true);for(let i=0;i<pcm.length;i++)view.setInt16(44+i*2,pcm[i],true);
@@ -703,7 +732,10 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 return {Success:true,Error:'',WavBase64:btoa(binary)};
               } catch(error) { return {Success:false,Error:error?.message||String(error),WavBase64:''}; }
             })();
-            """.Replace("__MILLISECONDS__", Math.Clamp(seconds, 3, 15).ToString() + "000", StringComparison.Ordinal);
+            """.Replace("__MILLISECONDS__", Math.Clamp(milliseconds, 1_200, 4_000).ToString(),
+                StringComparison.Ordinal)
+            .Replace("__OVERLAP__", Math.Clamp(overlapMilliseconds, 0, 1_200).ToString(),
+                StringComparison.Ordinal);
         var json = await Core.ExecuteScriptAsync(script).WaitAsync(cancellationToken);
         try { return JsonSerializer.Deserialize<AudioCaptureResult>(json) ?? new AudioCaptureResult { Error = "Пустой результат захвата." }; }
         catch { return new AudioCaptureResult { Error = "Не удалось прочитать аудиопоток страницы." }; }
@@ -713,7 +745,14 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     {
         if (Core is null) return;
         await Core.ExecuteScriptAsync("""
-            (()=>{window.__nexusStopAudioTranslation=false;
+            (()=>{const capture=window.__nexusLiveAudioCapture;if(capture){capture.closed=true;try{capture.processor.disconnect()}catch{}try{capture.source.disconnect()}catch{}try{capture.silent.disconnect()}catch{}try{capture.tracks.forEach(t=>t.stop())}catch{}try{capture.context.close()}catch{}}
+              window.__nexusLiveAudioCapture=null;window.__nexusStopAudioTranslation=false;window.__nexusLiveAudioOverlap=null;
+              const previousCaptions=window.__nexusCaptionSuppression;
+              if(previousCaptions){try{previousCaptions.observer.disconnect()}catch{}try{previousCaptions.entries.forEach(x=>{if(x.track)x.track.mode=x.mode})}catch{}try{previousCaptions.style.remove()}catch{}}
+              const captionEntries=[];
+              const disableCaptions=()=>{for(const video of document.querySelectorAll('video')){try{for(const track of video.textTracks){if(!captionEntries.some(x=>x.track===track))captionEntries.push({track,mode:track.mode});track.mode='disabled'}}catch{}}};
+              const captionStyle=document.createElement('style');captionStyle.id='nexus-hide-video-captions';captionStyle.dataset.nexusTranslationUi='true';captionStyle.textContent='video::cue{color:transparent!important;background:transparent!important;opacity:0!important}.ytp-caption-window-container,.ytp-caption-segment,.ytp-caption-window-bottom,.jw-text-track-container,.vjs-text-track-display,.plyr__captions,.shaka-text-container,.dplayer-subtitle,.art-subtitle,.fp-captions{display:none!important;visibility:hidden!important;opacity:0!important}';document.documentElement.append(captionStyle);
+              disableCaptions();const captionObserver=new MutationObserver(disableCaptions);captionObserver.observe(document.documentElement,{childList:true,subtree:true});window.__nexusCaptionSuppression={entries:captionEntries,observer:captionObserver,style:captionStyle};
               let overlay=document.getElementById('nexus-live-voice-status');
               if(!overlay){overlay=document.createElement('div');overlay.id='nexus-live-voice-status';overlay.dataset.nexusTranslationUi='true';overlay.style.cssText='position:fixed;z-index:2147483647;padding:6px 10px;border:1px solid #55d8cc;border-radius:8px;background:#d0101820;color:#eafffc;font:600 12px Segoe UI,sans-serif;pointer-events:none;box-sizing:border-box';document.documentElement.append(overlay)}
               let stop=document.getElementById('nexus-live-translation-stop');
@@ -738,16 +777,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         return bool.TryParse(json, out var stopped) && stopped;
     }
 
-    public async Task PrepareVideoForSpokenTranslationAsync(bool pausePlayback)
-    {
-        if (Core is null) return;
-        await Core.ExecuteScriptAsync("""
-            ((pausePlayback)=>{
-            (()=>{const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];if(!video)return false;
-              if(!window.__nexusSpokenVideoState)window.__nexusSpokenVideoState={video,wasPaused:video.paused,pausedByNexus:pausePlayback};
-              if(pausePlayback)video.pause();return true;})()})(__PAUSE__)
-            """.Replace("__PAUSE__", pausePlayback ? "true" : "false", StringComparison.Ordinal));
-    }
+    public Task PrepareVideoForSpokenTranslationAsync(bool pausePlayback) => Task.CompletedTask;
 
     public async Task EnableVideoDubbingMixAsync()
     {
@@ -756,27 +786,23 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
             (()=>{const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
               const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];if(!video)return false;
               if(!window.__nexusDubbingVideoState)window.__nexusDubbingVideoState={video,muted:video.muted,volume:video.volume};
-              if(!video.muted)video.volume=Math.min(video.volume,.22);return true;})()
-            """);
+              if(!video.muted)video.volume=Math.min(video.volume,__ORIGINAL_VOLUME__);return true;})()
+            """.Replace("__ORIGINAL_VOLUME__",
+                VideoDubbingPolicy.OriginalVolume.ToString(CultureInfo.InvariantCulture),
+                StringComparison.Ordinal));
     }
 
-    public async Task ResumeVideoAfterSpokenTranslationAsync()
-    {
-        if (Core is null) return;
-        await Core.ExecuteScriptAsync("""
-            (()=>{const state=window.__nexusSpokenVideoState;if(!state)return false;window.__nexusSpokenVideoState=null;
-              const video=state.video;if(!video?.isConnected)return false;
-              if(state.pausedByNexus&&!state.wasPaused)try{const pending=video.play();if(pending?.catch)pending.catch(()=>{})}catch{}return true;})()
-            """);
-    }
+    public Task ResumeVideoAfterSpokenTranslationAsync() => Task.CompletedTask;
 
     public async Task EndLiveAudioTranslationAsync(string status)
     {
         if (Core is null) return;
         await Core.ExecuteScriptAsync("""
-            ((status)=>{window.__nexusStopAudioTranslation=true;
-              const state=window.__nexusSpokenVideoState;window.__nexusSpokenVideoState=null;if(state?.pausedByNexus&&state?.video?.isConnected&&!state.wasPaused)try{const pending=state.video.play();if(pending?.catch)pending.catch(()=>{})}catch{}
+            ((status)=>{window.__nexusStopAudioTranslation=true;window.__nexusLiveAudioOverlap=null;
+              const capture=window.__nexusLiveAudioCapture;window.__nexusLiveAudioCapture=null;if(capture){capture.closed=true;try{capture.processor.disconnect()}catch{}try{capture.source.disconnect()}catch{}try{capture.silent.disconnect()}catch{}try{capture.tracks.forEach(t=>t.stop())}catch{}try{capture.context.close()}catch{}}
+              window.__nexusSpokenVideoState=null;
               const dubbing=window.__nexusDubbingVideoState;window.__nexusDubbingVideoState=null;if(dubbing?.video?.isConnected){dubbing.video.muted=dubbing.muted;dubbing.video.volume=dubbing.volume}
+              const captions=window.__nexusCaptionSuppression;window.__nexusCaptionSuppression=null;if(captions){try{captions.observer.disconnect()}catch{}try{captions.entries.forEach(x=>{if(x.track)x.track.mode=x.mode})}catch{}try{captions.style.remove()}catch{}}
               const overlay=document.getElementById('nexus-live-voice-status');if(overlay){overlay.textContent=status;setTimeout(()=>overlay.remove(),1800)}
               document.getElementById('nexus-live-translation-stop')?.remove();
               if(window.__nexusPlaceLiveTranslation){removeEventListener('resize',window.__nexusPlaceLiveTranslation);removeEventListener('scroll',window.__nexusPlaceLiveTranslation)}

@@ -64,3 +64,12 @@ internal sealed class GuardianIntegrityIncidentState
     public string Signature { get; set; } = string.Empty;
     public DateTimeOffset TimestampUtc { get; set; }
 }
+
+internal sealed class PendingGuardianUpdate
+{
+    public int SchemaVersion { get; set; } = 1;
+    public string Version { get; set; } = string.Empty;
+    public string StagingDirectory { get; set; } = string.Empty;
+    public string TargetDirectory { get; set; } = string.Empty;
+    public DateTimeOffset CreatedUtc { get; set; }
+}
