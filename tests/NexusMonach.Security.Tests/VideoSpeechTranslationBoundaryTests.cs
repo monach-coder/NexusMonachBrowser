@@ -26,6 +26,26 @@ public sealed class VideoSpeechTranslationBoundaryTests
     }
 
     [Theory]
+    [InlineData("This is a complete sentence.", 1, true)]
+    [InlineData("but warned that", 1, false)]
+    [InlineData("but warned that inflation remains too high", 2, true)]
+    [InlineData("one two three four five six seven eight nine", 1, true)]
+    public void IncompleteTranscriptFragments_AreCombinedBeforeTranslation(
+        string text, int fragments, bool expected)
+    {
+        Assert.Equal(expected,
+            VideoSpeechTranslationContext.ShouldFlush(text, fragments));
+    }
+
+    [Fact]
+    public void TranscriptFragments_KeepNaturalWordBoundary()
+    {
+        Assert.Equal("but warned that inflation remains high",
+            VideoSpeechTranslationContext.JoinFragments(
+                "but warned that", "inflation remains high"));
+    }
+
+    [Theory]
     [InlineData("Это важная новость из Лондона", "Это важная новость из Лондона!", true)]
     [InlineData("Сегодня рынок заметно вырос", "рынок заметно вырос", true)]
     [InlineData("Президент выступил сегодня утром", "Сегодня утром выступил президент", true)]

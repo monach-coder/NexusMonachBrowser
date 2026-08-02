@@ -16,6 +16,9 @@ from pathlib import Path
 
 SAMPLE_RATE = 48_000
 SPEAKER = "kseniya"
+MAX_SPEECH_CHUNK = 150
+PAUSE_SECONDS = 0.11
+STRESS_MARKER = "\ue000"
 
 LATIN_LETTER_NAMES = {
     "A": "эй", "B": "би", "C": "си", "D": "ди", "E": "и", "F": "эф",
@@ -50,12 +53,16 @@ def _write_wave(path: str, audio) -> None:
 
 
 def _normalize_plain_text(text: str) -> str:
+    # A plus between Cyrillic letters is Silero's documented manual stress
+    # marker. Protect it while ordinary arithmetic plus signs become words.
+    text = re.sub(r"(?<=[А-Яа-яЁё])\+(?=[А-Яа-яЁё])", STRESS_MARKER, text)
     replacements = {
         "%": " процентов ", "+": " плюс ", "&": " и ", "@": " собака ",
         "/": " ", "\\": " ", "№": " номер ", "€": " евро ", "$": " долларов ",
     }
     for source, target in replacements.items():
         text = text.replace(source, target)
+    text = text.replace(STRESS_MARKER, "+")
 
     def pronounce_latin(match: re.Match[str]) -> str:
         token = match.group(0)
@@ -64,8 +71,46 @@ def _normalize_plain_text(text: str) -> str:
         return "".join(LATIN_TRANSLITERATION[letter.lower()] for letter in token)
 
     text = re.sub(r"[A-Za-z]+", pronounce_latin, text)
-    text = re.sub(r"[^0-9A-Za-zА-Яа-яЁё.,!?;:()\-—\s]", " ", text)
+    text = re.sub(r"[^0-9A-Za-zА-Яа-яЁё+.,!?;:()\-—\s]", " ", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _split_speech_chunks(text: str) -> list[str]:
+    chunks: list[str] = []
+    sentences = re.split(r"(?<=[.!?…])\s+", text)
+    current = ""
+    for sentence in sentences:
+        remaining = sentence.strip()
+        if not remaining:
+            continue
+        if len(remaining) <= MAX_SPEECH_CHUNK:
+            combined = f"{current} {remaining}".strip()
+            if len(combined) <= MAX_SPEECH_CHUNK:
+                current = combined
+                continue
+            if current:
+                chunks.append(current)
+            current = remaining
+            continue
+        if current:
+            chunks.append(current)
+            current = ""
+        while len(remaining) > MAX_SPEECH_CHUNK:
+            floor = MAX_SPEECH_CHUNK // 2
+            window = remaining[:MAX_SPEECH_CHUNK + 1]
+            candidates = [window.rfind(mark) for mark in (", ", "; ", ": ", " — ", " ")]
+            split_at = max(position for position in candidates if position >= floor) if any(
+                position >= floor for position in candidates
+            ) else MAX_SPEECH_CHUNK
+            part = remaining[:split_at].strip()
+            if part:
+                chunks.append(part)
+            remaining = remaining[split_at:].strip()
+        if remaining:
+            chunks.append(remaining)
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 def _synthesize(model, text: str, rate: int, style: str):
@@ -85,7 +130,15 @@ def _synthesize(model, text: str, rate: int, style: str):
         "put_accent": True,
         "put_yo": True,
     }
-    return model.apply_tts(text=normalized, **common), True
+    import torch
+
+    chunks = _split_speech_chunks(normalized)
+    audio_parts = []
+    for index, chunk in enumerate(chunks):
+        audio_parts.append(model.apply_tts(text=chunk, **common))
+        if index + 1 < len(chunks):
+            audio_parts.append(torch.zeros(int(SAMPLE_RATE * PAUSE_SECONDS)))
+    return torch.cat(audio_parts), True
 
 
 def main() -> int:

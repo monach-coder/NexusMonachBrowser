@@ -198,7 +198,7 @@ public partial class LocalAiDockControl : UserControl
             await tab.UpdateLiveAudioTranslationStatusAsync(
                 "Слушаю видео · русский перевод озвучивает Nexus Voice");
 
-            var lastTranscript = string.Empty;
+            var translationContext = new VideoSpeechTranslationContext();
             var recentTranscripts = new RecentVideoPhraseGuard(capacity: 8, retentionSeconds: 30);
             var recentTranslations = new RecentVideoPhraseGuard(capacity: 8, retentionSeconds: 40);
             var consecutiveErrors = 0;
@@ -206,10 +206,8 @@ public partial class LocalAiDockControl : UserControl
             async Task<string?> TranslateSegmentAsync(LiveAudioSegment segment)
             {
                 if (!VideoDubbingPolicy.IsFresh(segment.CapturedAt, DateTimeOffset.UtcNow)) return null;
-                var translated = await VideoSpeechTranslationService.TranslateToRussianTextAsync(
-                    segment, lastTranscript, session.Token);
+                var translated = await translationContext.TranslateAsync(segment, session.Token);
                 if (translated is null) return null;
-                lastTranscript = translated.TranscriptWindow;
                 var now = DateTimeOffset.UtcNow;
                 if (!recentTranscripts.IsNovel(translated.Transcript, now)) return null;
                 var text = translated.RussianText;
