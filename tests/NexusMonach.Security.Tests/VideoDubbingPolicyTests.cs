@@ -1,4 +1,5 @@
 using NexusMonach.Services;
+using NexusMonach.Models;
 using NAudio.Wave;
 
 namespace NexusMonach.Security.Tests;
@@ -23,6 +24,41 @@ public sealed class VideoDubbingPolicyTests
     public void EndpointLoopbackFallback_NeverPausesVideo()
     {
         Assert.False(VideoDubbingPolicy.ShouldPausePlayback(directMediaCaptureAvailable: false));
+    }
+
+    [Fact]
+    public void VideoTranslationModes_HaveBoundedContextAndPreparedAudioReserve()
+    {
+        var fast = VideoDubbingPolicy.ForMode(VideoTranslationMode.Fast);
+        var balanced = VideoDubbingPolicy.ForMode(VideoTranslationMode.Balanced);
+        var quality = VideoDubbingPolicy.ForMode(VideoTranslationMode.Quality);
+
+        Assert.Equal(VideoTranslationMode.Balanced, new BrowserSettings().VideoTranslationMode);
+        Assert.InRange(fast.ContextSeconds, 60, 90);
+        Assert.InRange(balanced.ContextSeconds, 60, 90);
+        Assert.InRange(quality.ContextSeconds, 60, 90);
+        Assert.InRange(fast.ContextPhrases, 6, 12);
+        Assert.InRange(balanced.ContextPhrases, 6, 12);
+        Assert.InRange(quality.ContextPhrases, 6, 12);
+        Assert.True(fast.StartupPreparedSeconds < balanced.StartupPreparedSeconds);
+        Assert.True(balanced.StartupPreparedSeconds < quality.StartupPreparedSeconds);
+        Assert.True(fast.SegmentMilliseconds < balanced.SegmentMilliseconds);
+        Assert.True(balanced.SegmentMilliseconds < quality.SegmentMilliseconds);
+    }
+
+    [Fact]
+    public void ReadyAudioReserve_TracksPreparedWavDuration()
+    {
+        var reserve = new ReadyAudioReserve();
+        reserve.Add(TimeSpan.FromSeconds(2.5));
+        reserve.Add(TimeSpan.FromSeconds(3.25));
+
+        Assert.Equal(2, reserve.Snapshot().Phrases);
+        Assert.Equal(5.75, reserve.Snapshot().Seconds, precision: 3);
+
+        reserve.Remove(TimeSpan.FromSeconds(2.5));
+        Assert.Equal(1, reserve.Snapshot().Phrases);
+        Assert.Equal(3.25, reserve.Snapshot().Seconds, precision: 3);
     }
 
     [Fact]

@@ -28,8 +28,10 @@ public sealed class VideoSpeechTranslationBoundaryTests
     [Theory]
     [InlineData("This is a complete sentence.", 1, true)]
     [InlineData("but warned that", 1, false)]
-    [InlineData("but warned that inflation remains too high", 2, true)]
-    [InlineData("one two three four five six seven eight nine", 1, true)]
+    [InlineData("but warned that inflation remains too high", 2, false)]
+    [InlineData("but warned that inflation remains too high", 3, true)]
+    [InlineData("one two three four five six seven eight nine", 1, false)]
+    [InlineData("one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty", 1, true)]
     public void IncompleteTranscriptFragments_AreCombinedBeforeTranslation(
         string text, int fragments, bool expected)
     {
@@ -43,6 +45,23 @@ public sealed class VideoSpeechTranslationBoundaryTests
         Assert.Equal("but warned that inflation remains high",
             VideoSpeechTranslationContext.JoinFragments(
                 "but warned that", "inflation remains high"));
+    }
+
+    [Fact]
+    public void BalancedContextWindow_KeepsEightRecentPhrasesForSeventyFiveSeconds()
+    {
+        var profile = VideoDubbingPolicy.ForMode(NexusMonach.Models.VideoTranslationMode.Balanced);
+        var context = new VideoTranslationContextWindow(profile);
+        var now = DateTimeOffset.UtcNow;
+        for (var index = 0; index < 10; index++)
+            context.Add(new VideoTranslationContextEntry(
+                $"source {index}", $"перевод {index}", "en",
+                now.AddSeconds(index - 10), now.AddSeconds(index - 9)));
+
+        var bounded = context.Snapshot(now);
+        Assert.Equal(8, bounded.Count);
+        Assert.Equal("source 2", bounded[0].Transcript);
+        Assert.Empty(context.Snapshot(now.AddSeconds(profile.ContextSeconds + 1)));
     }
 
     [Theory]

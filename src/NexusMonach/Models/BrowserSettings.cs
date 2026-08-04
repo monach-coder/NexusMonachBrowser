@@ -80,6 +80,13 @@ public enum NeuralVoiceProfile
     Aurora
 }
 
+public enum VideoTranslationMode
+{
+    Fast,
+    Balanced,
+    Quality
+}
+
 public sealed class BrowserSettings
 {
     public SearchEngineKind SearchEngine { get; set; } = SearchEngineKind.DuckDuckGo;
@@ -125,6 +132,7 @@ public sealed class BrowserSettings
     public bool VoiceHandsFreeEnabled { get; set; }
     public int VoiceRate { get; set; } = 0;
     public NeuralVoiceProfile NeuralVoiceProfile { get; set; } = NeuralVoiceProfile.Natasha;
+    public VideoTranslationMode VideoTranslationMode { get; set; } = VideoTranslationMode.Balanced;
 
     public BrowserSettings Clone() => new()
     {
@@ -166,6 +174,7 @@ public sealed class BrowserSettings
         VoiceSpeakAtStartup = VoiceSpeakAtStartup,
         VoiceHandsFreeEnabled = VoiceHandsFreeEnabled,
         VoiceRate = VoiceRate,
-        NeuralVoiceProfile = NeuralVoiceProfile
+        NeuralVoiceProfile = NeuralVoiceProfile,
+        VideoTranslationMode = VideoTranslationMode
     };
 }

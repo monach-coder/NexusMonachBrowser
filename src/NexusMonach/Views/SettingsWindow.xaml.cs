@@ -102,6 +102,12 @@ public partial class SettingsWindow : Window
             new Choice<NeuralVoiceProfile>("Спокойный · мягче и медленнее", NeuralVoiceProfile.Irina),
             new Choice<NeuralVoiceProfile>("Выразительный · больше интонации", NeuralVoiceProfile.Aurora)
         };
+        var videoTranslationChoices = new[]
+        {
+            new Choice<VideoTranslationMode>("Быстрый · минимальная задержка", VideoTranslationMode.Fast),
+            new Choice<VideoTranslationMode>("Сбалансированный · рекомендуется", VideoTranslationMode.Balanced),
+            new Choice<VideoTranslationMode>("Качественный · больше контекста", VideoTranslationMode.Quality)
+        };
         SearchEngineCombo.ItemsSource = searchChoices;
         PrivacyLevelCombo.ItemsSource = privacyChoices;
         ThemeCombo.ItemsSource = themeChoices;
@@ -113,6 +119,7 @@ public partial class SettingsWindow : Window
         CrashReportDestinationCombo.ItemsSource = crashDestinationChoices;
         VoiceModeCombo.ItemsSource = voiceChoices;
         NeuralVoiceCombo.ItemsSource = neuralVoiceChoices;
+        VideoTranslationModeCombo.ItemsSource = videoTranslationChoices;
         SearchEngineCombo.SelectedItem = searchChoices.FirstOrDefault(x => x.Value == settings.SearchEngine) ?? searchChoices[0];
         PrivacyLevelCombo.SelectedItem = privacyChoices.First(x => x.Value == settings.PrivacyLevel);
         ThemeCombo.SelectedItem = themeChoices.First(x => x.Value == settings.Theme);
@@ -124,6 +131,8 @@ public partial class SettingsWindow : Window
         CrashReportDestinationCombo.SelectedItem = crashDestinationChoices.First(x => x.Value == settings.CrashReportDestination);
         VoiceModeCombo.SelectedItem = voiceChoices.First(x => x.Value == settings.VoiceAssistantMode);
         NeuralVoiceCombo.SelectedItem = neuralVoiceChoices.First(x => x.Value == settings.NeuralVoiceProfile);
+        VideoTranslationModeCombo.SelectedItem = videoTranslationChoices.FirstOrDefault(
+            x => x.Value == settings.VideoTranslationMode) ?? videoTranslationChoices[1];
         VoiceEngineStatusText.Text = VoiceAssistantService.EngineStatus;
         HomePageBox.Text = settings.HomePage;
         DntCheck.IsChecked = settings.SendDoNotTrack;
@@ -262,6 +271,8 @@ public partial class SettingsWindow : Window
             ? voiceMode.Value : VoiceAssistantMode.ImportantOnly;
         _settings.NeuralVoiceProfile = NeuralVoiceCombo.SelectedItem is Choice<NeuralVoiceProfile> neuralVoice
             ? neuralVoice.Value : NeuralVoiceProfile.Natasha;
+        _settings.VideoTranslationMode = VideoTranslationModeCombo.SelectedItem is Choice<VideoTranslationMode> videoMode
+            ? videoMode.Value : VideoTranslationMode.Balanced;
         _settings.VoiceSpeakAtStartup = VoiceStartupCheck.IsChecked == true;
         _settings.VoiceHandsFreeEnabled = VoiceHandsFreeCheck.IsChecked == true &&
                                           _settings.VoiceAssistantMode != VoiceAssistantMode.Off;

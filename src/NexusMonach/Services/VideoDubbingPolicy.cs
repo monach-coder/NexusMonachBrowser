@@ -1,4 +1,21 @@
+using NexusMonach.Models;
+
 namespace NexusMonach.Services;
+
+internal sealed record VideoDubbingModeProfile(
+    VideoTranslationMode Mode,
+    int SegmentMilliseconds,
+    int SegmentOverlapMilliseconds,
+    int ContextSeconds,
+    int ContextPhrases,
+    int MaximumPendingParts,
+    int MaximumPendingWords,
+    int MaximumPendingCharacters,
+    int StartupPreparedPhrases,
+    double StartupPreparedSeconds,
+    int StartupMaximumWaitMilliseconds,
+    int RefillWaitMilliseconds,
+    int PreparedQueueCapacity);
 
 /// <summary>
 /// Проверяемые границы закадрового перевода. Ни один путь захвата или озвучивания
@@ -19,6 +36,62 @@ internal static class VideoDubbingPolicy
     public const double TargetRecognitionRms = 0.055;
     public const double MaximumRecognitionGain = 12.0;
     public const bool UsesDomSubtitles = false;
+
+    public static VideoDubbingModeProfile ForMode(VideoTranslationMode mode) => mode switch
+    {
+        VideoTranslationMode.Fast => new(mode,
+            SegmentMilliseconds: 2_400,
+            SegmentOverlapMilliseconds: 500,
+            ContextSeconds: 60,
+            ContextPhrases: 6,
+            MaximumPendingParts: 2,
+            MaximumPendingWords: 14,
+            MaximumPendingCharacters: 110,
+            StartupPreparedPhrases: 1,
+            StartupPreparedSeconds: 2.0,
+            StartupMaximumWaitMilliseconds: 4_000,
+            RefillWaitMilliseconds: 400,
+            PreparedQueueCapacity: 4),
+        VideoTranslationMode.Quality => new(mode,
+            SegmentMilliseconds: 4_000,
+            SegmentOverlapMilliseconds: 1_000,
+            ContextSeconds: 90,
+            ContextPhrases: 12,
+            MaximumPendingParts: 4,
+            MaximumPendingWords: 28,
+            MaximumPendingCharacters: 210,
+            StartupPreparedPhrases: 3,
+            StartupPreparedSeconds: 8.0,
+            StartupMaximumWaitMilliseconds: 14_000,
+            RefillWaitMilliseconds: 1_800,
+            PreparedQueueCapacity: 8),
+        _ => new(VideoTranslationMode.Balanced,
+            SegmentMilliseconds: SegmentMilliseconds,
+            SegmentOverlapMilliseconds: SegmentOverlapMilliseconds,
+            ContextSeconds: 75,
+            ContextPhrases: 8,
+            MaximumPendingParts: 3,
+            MaximumPendingWords: 20,
+            MaximumPendingCharacters: 150,
+            StartupPreparedPhrases: 2,
+            StartupPreparedSeconds: 5.0,
+            StartupMaximumWaitMilliseconds: 9_000,
+            RefillWaitMilliseconds: 1_000,
+            PreparedQueueCapacity: 6)
+    };
+
+    public static bool ShouldFinalizeUtterance(string? text, int fragmentCount,
+        VideoDubbingModeProfile profile)
+    {
+        text = WhisperService.NormalizeTranscript(text);
+        if (text.Length == 0) return false;
+        if (System.Text.RegularExpressions.Regex.IsMatch(text, @"[.!?…][""'»)]?$"))
+            return true;
+        var wordCount = text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+        return wordCount >= profile.MaximumPendingWords ||
+               text.Length >= profile.MaximumPendingCharacters ||
+               fragmentCount >= profile.MaximumPendingParts;
+    }
 
     public static bool ShouldPausePlayback(bool directMediaCaptureAvailable) => false;
 

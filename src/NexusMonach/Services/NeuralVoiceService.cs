@@ -13,6 +13,28 @@ public enum NeuralVoiceLane
     Dubbing
 }
 
+internal sealed class PreparedDubbingSpeech : IDisposable
+{
+    private int _disposed;
+
+    internal PreparedDubbingSpeech(string path, string text, TimeSpan duration)
+    {
+        Path = path;
+        Text = text;
+        Duration = duration;
+    }
+
+    internal string Path { get; }
+    public string Text { get; }
+    public TimeSpan Duration { get; }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        try { File.Delete(Path); } catch { }
+    }
+}
+
 /// <summary>
 /// Persistent, network-free bridge to an installed Silero or Piper TTS worker.
 /// Windows voice fallback is owned by the callers; Vosk is never selected.
@@ -64,6 +86,38 @@ public static class NeuralVoiceService
         {
             try { File.Delete(output); } catch { }
         }
+    }
+
+    internal static async Task<PreparedDubbingSpeech> PrepareDubbingSpeechAsync(
+        string text, NeuralVoiceProfile profile, int rate,
+        CancellationToken cancellationToken = default)
+    {
+        if (!IsAvailable)
+            throw new InvalidOperationException(AiModelCatalog.MissingNeuralVoiceMessage);
+        if (string.IsNullOrWhiteSpace(text))
+            throw new ArgumentException("Текст локальной озвучки пуст.", nameof(text));
+
+        var output = Path.Combine(Path.GetTempPath(),
+            $"nexus-voice-prepared-{Guid.NewGuid():N}.wav");
+        try
+        {
+            await Task.Run(() => SynthesizeToFile(text, profile, rate,
+                NeuralVoiceLane.Dubbing, output, cancellationToken), cancellationToken);
+            using var reader = new WaveFileReader(output);
+            return new PreparedDubbingSpeech(output, text, reader.TotalTime);
+        }
+        catch
+        {
+            try { File.Delete(output); } catch { }
+            throw;
+        }
+    }
+
+    internal static bool TryPlayPreparedDubbingSpeech(PreparedDubbingSpeech speech)
+    {
+        var state = DubbingLane;
+        var generation = Volatile.Read(ref state.StopGeneration);
+        return PlayWave(speech.Path, state, NeuralVoiceLane.Dubbing, generation);
     }
 
     public static bool TrySpeak(string text, NeuralVoiceProfile profile, int rate,

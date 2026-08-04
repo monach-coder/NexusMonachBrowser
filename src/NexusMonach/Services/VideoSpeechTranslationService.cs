@@ -1,3 +1,5 @@
+using NexusMonach.Models;
+
 namespace NexusMonach.Services;
 
 /// <summary>
@@ -13,16 +15,19 @@ internal static class VideoSpeechTranslationService
 
     internal static async Task<VideoSpeechTranslationText?> TranslateToRussianTextAsync(
         LiveAudioSegment segment, string transcript, string transcriptWindow,
-        string sourceLanguage, CancellationToken cancellationToken = default)
+        string sourceLanguage, IReadOnlyList<VideoTranslationContextEntry> context,
+        DateTimeOffset startedAt, DateTimeOffset endedAt,
+        CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(transcript)) return null;
 
-        var translated = await LocalIntelligenceService.TranslateToRussianAsync(
-            transcript, cancellationToken, sourceLanguage);
+        var translated = await LocalIntelligenceService.TranslateVideoPhraseAsync(
+            transcript, context, cancellationToken, sourceLanguage);
         if (string.IsNullOrWhiteSpace(translated)) return null;
 
         return new VideoSpeechTranslationText(
-            transcript, transcriptWindow, translated, sourceLanguage);
+            transcript, transcriptWindow, translated, sourceLanguage,
+            startedAt, endedAt, context.Count);
     }
 
     internal static string RemoveTranscriptOverlap(string previous, string current)
@@ -67,10 +72,20 @@ internal static class VideoSpeechTranslationService
 /// </summary>
 internal sealed class VideoSpeechTranslationContext
 {
+    private readonly VideoDubbingModeProfile _profile;
+    private readonly VideoTranslationContextWindow _context;
     private string _previousWindow = string.Empty;
     private string _pending = string.Empty;
     private string _pendingLanguage = string.Empty;
     private int _pendingParts;
+    private DateTimeOffset? _pendingStartedAt;
+    private DateTimeOffset _pendingEndedAt;
+
+    public VideoSpeechTranslationContext(VideoTranslationMode mode = VideoTranslationMode.Balanced)
+    {
+        _profile = VideoDubbingPolicy.ForMode(mode);
+        _context = new VideoTranslationContextWindow(_profile);
+    }
 
     public async Task<VideoSpeechTranslationText?> TranslateAsync(
         LiveAudioSegment segment, CancellationToken cancellationToken = default)
@@ -87,14 +102,20 @@ internal sealed class VideoSpeechTranslationContext
                 : await TranslatePendingAsync(segment, transcriptWindow,
                     speech.Language, cancellationToken);
 
-        if (_pending.Length == 0) _pendingLanguage = speech.Language;
+        if (_pending.Length == 0)
+        {
+            _pendingLanguage = speech.Language;
+            _pendingStartedAt = segment.CapturedAt;
+        }
         var fresh = VideoSpeechTranslationService.RemoveTranscriptOverlap(_pending, delta);
         if (fresh.Length > 0)
         {
             _pending = JoinFragments(_pending, fresh);
             _pendingParts++;
+            _pendingEndedAt = segment.EndedAt;
         }
-        if (!ShouldFlush(_pending, _pendingParts)) return null;
+        if (!VideoDubbingPolicy.ShouldFinalizeUtterance(_pending, _pendingParts, _profile))
+            return null;
 
         return await TranslatePendingAsync(segment, transcriptWindow,
             speech.Language, cancellationToken);
@@ -108,23 +129,29 @@ internal sealed class VideoSpeechTranslationContext
         var language = string.IsNullOrWhiteSpace(_pendingLanguage)
             ? fallbackLanguage
             : _pendingLanguage;
+        var startedAt = _pendingStartedAt ?? segment.CapturedAt;
+        var endedAt = _pendingEndedAt > startedAt ? _pendingEndedAt : segment.EndedAt;
+        var context = _context.Snapshot(endedAt);
         _pending = string.Empty;
         _pendingLanguage = string.Empty;
         _pendingParts = 0;
-        return await VideoSpeechTranslationService.TranslateToRussianTextAsync(
-            segment, complete, transcriptWindow, language, cancellationToken);
+        _pendingStartedAt = null;
+        _pendingEndedAt = default;
+        var translated = await VideoSpeechTranslationService.TranslateToRussianTextAsync(
+            segment, complete, transcriptWindow, language, context,
+            startedAt, endedAt, cancellationToken);
+        if (translated is not null)
+        {
+            _context.Add(new VideoTranslationContextEntry(
+                translated.Transcript, translated.RussianText, translated.SourceLanguage,
+                translated.StartedAt, translated.EndedAt));
+        }
+        return translated;
     }
 
     internal static bool ShouldFlush(string? text, int fragmentCount)
-    {
-        text = text?.Trim() ?? string.Empty;
-        if (text.Length == 0) return false;
-        if (System.Text.RegularExpressions.Regex.IsMatch(
-                text, @"[.!?…][""'»)]?$"))
-            return true;
-        var wordCount = text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
-        return wordCount >= 9 || text.Length >= 72 || fragmentCount >= 2;
-    }
+        => VideoDubbingPolicy.ShouldFinalizeUtterance(text, fragmentCount,
+            VideoDubbingPolicy.ForMode(VideoTranslationMode.Balanced));
 
     internal static string JoinFragments(string? first, string? second)
     {
@@ -136,13 +163,56 @@ internal sealed class VideoSpeechTranslationContext
     }
 }
 
-internal sealed record LiveAudioSegment(byte[] Wav, DateTimeOffset CapturedAt);
+internal sealed record LiveAudioSegment(byte[] Wav, DateTimeOffset CapturedAt,
+    TimeSpan Duration = default)
+{
+    public DateTimeOffset EndedAt => CapturedAt +
+        (Duration > TimeSpan.Zero
+            ? Duration
+            : TimeSpan.FromMilliseconds(VideoDubbingPolicy.SegmentMilliseconds));
+}
+
+internal sealed record VideoTranslationContextEntry(
+    string Transcript,
+    string RussianText,
+    string SourceLanguage,
+    DateTimeOffset StartedAt,
+    DateTimeOffset EndedAt);
+
+internal sealed class VideoTranslationContextWindow(VideoDubbingModeProfile profile)
+{
+    private readonly Queue<VideoTranslationContextEntry> _entries = new();
+
+    public void Add(VideoTranslationContextEntry entry)
+    {
+        _entries.Enqueue(entry);
+        Trim(entry.EndedAt);
+    }
+
+    public IReadOnlyList<VideoTranslationContextEntry> Snapshot(DateTimeOffset now)
+    {
+        Trim(now);
+        return _entries.ToArray();
+    }
+
+    private void Trim(DateTimeOffset now)
+    {
+        var retention = TimeSpan.FromSeconds(profile.ContextSeconds);
+        while (_entries.TryPeek(out var oldest) && now - oldest.EndedAt > retention)
+            _entries.Dequeue();
+        while (_entries.Count > profile.ContextPhrases)
+            _entries.Dequeue();
+    }
+}
 
 internal sealed record VideoSpeechTranslationText(
     string Transcript,
     string TranscriptWindow,
     string RussianText,
-    string SourceLanguage);
+    string SourceLanguage,
+    DateTimeOffset StartedAt,
+    DateTimeOffset EndedAt,
+    int ContextPhraseCount);
 
 /// <summary>
 /// Suppresses a phrase only while it is still part of the recent rolling audio
