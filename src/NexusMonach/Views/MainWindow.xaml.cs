@@ -68,6 +68,8 @@ public partial class MainWindow : Window
     {
         _isPrivate = isPrivate;
         InitializeComponent();
+        SourceInitialized += (_, _) =>
+            WindowAppearanceService.Apply(this, SettingsService.Current.ThemeMode);
         CrashReportService.Initialize();
         DataContext = this;
         PrivateBadge.Visibility = isPrivate ? Visibility.Visible : Visibility.Collapsed;
@@ -580,7 +582,7 @@ public partial class MainWindow : Window
         var snapshot = tab.GetNetworkSnapshot();
         ShowTopologyDetails("Интернет-соединения",
             $"За текущую загрузку наблюдалось {snapshot.RequestCount} HTTP(S)-запросов к {snapshot.ContactedHosts.Count} узлам.",
-            $"Текущий URL:\n{tab.CurrentUrl}\n\n" +
+            $"Текущий URL без секретных параметров:\n{UrlService.SanitizeForDisplay(tab.CurrentUrl)}\n\n" +
             $"Шифрование основного адреса: {(tab.IsSecureConnection ? "HTTPS / TLS" : "нет HTTPS")}\n" +
             $"Наблюдаемые порты: {FormatList(snapshot.ObservedPorts)}\n\n" +
             $"Все узлы:\n{FormatList(snapshot.ContactedHosts)}");
@@ -593,13 +595,34 @@ public partial class MainWindow : Window
         var snapshot = tab.GetNetworkSnapshot();
         var lowPorts = snapshot.ObservedPorts.Where(x => x <= 1000).ToArray();
         ShowTopologyDetails("Текущий сайт: " + (string.IsNullOrWhiteSpace(tab.CurrentHost) ? tab.Title : tab.CurrentHost),
-            $"Сайт обращался к {snapshot.ThirdPartyHosts.Count} сторонним узлам; заблокировано трекеров: {snapshot.BlockedTrackerHosts.Count}.",
-            $"Адрес:\n{tab.CurrentUrl}\n\n" +
+            $"Сайт обращался к {snapshot.ThirdPartyHosts.Count} сторонним узлам; заблокировано трекеров: {snapshot.BlockedTrackerHosts.Count}." +
+            (snapshot.Truncated ? " Список ограничен безопасным пределом." : string.Empty),
+            $"Адрес без секретных параметров:\n{UrlService.SanitizeForDisplay(tab.CurrentUrl)}\n\n" +
             $"Реально использованные порты до 1000:\n{FormatList(lowPorts)}\n\n" +
-            $"Сторонние получатели запросов:\n{FormatList(snapshot.ThirdPartyHosts)}\n\n" +
+            $"Кто получил сторонние запросы:\n{FormatRecipients(snapshot.Recipients.Where(x => x.IsThirdParty))}\n\n" +
+            $"Узлы самого сайта:\n{FormatRecipients(snapshot.Recipients.Where(x => !x.IsThirdParty))}\n\n" +
             $"Заблокированные трекеры:\n{FormatList(snapshot.BlockedTrackerHosts)}\n\n" +
+            "Показываются только имена узлов, счётчики, типы ресурсов и факт наличия заголовков Cookie/Referer/Origin. " +
+            "Их значения, URL-параметры и содержимое запросов не сохраняются.\n\n" +
             "Важно: сторонний узел может быть CDN, шрифтом, API или трекером; сам факт соединения не доказывает слежку.\n" +
             "Активное сканирование портов чужого сервера не выполняется.");
+    }
+
+    private static string FormatRecipients(IEnumerable<NetworkRecipientSnapshot> recipients)
+    {
+        var lines = recipients.Select(x =>
+        {
+            var labels = new List<string> { $"запросов {x.RequestCount}" };
+            if (x.IsKnownTracker) labels.Add("известный трекер");
+            if (x.WasBlocked) labels.Add("заблокирован");
+            if (x.SentCookies) labels.Add("Cookie: да");
+            if (x.SentReferrer) labels.Add("Referer: да");
+            if (x.SentOrigin) labels.Add("Origin: да");
+            if (x.ResourceKinds.Count > 0)
+                labels.Add("типы: " + string.Join(", ", x.ResourceKinds.Take(6)));
+            return $"{x.Host}\n  {string.Join(" · ", labels)}";
+        }).ToArray();
+        return lines.Length == 0 ? "—" : string.Join("\n", lines);
     }
 
     private static string FormatList<T>(IEnumerable<T> values)
@@ -792,7 +815,8 @@ public partial class MainWindow : Window
         if (tab?.Core is null) return;
         if (tab.CurrentUrl.Equals(UrlService.NewTabUrl, StringComparison.OrdinalIgnoreCase))
         {
-            await tab.Core.ExecuteScriptAsync("window.nexusFocusSearch?.()");
+            AddressBox.Focus();
+            AddressBox.SelectAll();
             return;
         }
         SshTerminalDock.Visibility = Visibility.Collapsed;
@@ -808,6 +832,7 @@ public partial class MainWindow : Window
     private void VoiceStopMenu_Click(object sender, RoutedEventArgs e)
     {
         _voiceListenCancellation?.Cancel();
+        VideoDubbingVoiceService.Stop();
         VoiceAssistantService.StopSpeaking();
         SetVoiceStatus("Голос остановлен", visible: true);
         _ = HideVoiceStatusLaterAsync();
@@ -934,6 +959,7 @@ public partial class MainWindow : Window
         CancellationToken cancellationToken)
     {
         await _voiceListenGate.WaitAsync(cancellationToken);
+        VideoDubbingVoiceService.SuspendPlayback();
         try
         {
             SetVoiceStatus(requireWakeWord ? "Жду «Нексус»…" : "Слушаю команду…", visible: true);
@@ -950,7 +976,11 @@ public partial class MainWindow : Window
             SetVoiceStatus("Команда: " + command.Kind, visible: true);
             await ExecuteVoiceCommandAsync(command);
         }
-        finally { _voiceListenGate.Release(); }
+        finally
+        {
+            VideoDubbingVoiceService.ResumePlayback();
+            _voiceListenGate.Release();
+        }
     }
 
     private async Task ExecuteVoiceCommandAsync(VoiceCommand command)
@@ -959,6 +989,7 @@ public partial class MainWindow : Window
         switch (command.Kind)
         {
             case VoiceCommandKind.StopVoice:
+                VideoDubbingVoiceService.Stop();
                 VoiceAssistantService.StopSpeaking();
                 break;
             case VoiceCommandKind.DisableHandsFree:
@@ -1039,12 +1070,8 @@ public partial class MainWindow : Window
     private void SshTerminal_CloseRequested(object? sender, EventArgs e) =>
         SshTerminalDock.Visibility = Visibility.Collapsed;
 
-    private void ShowDeveloperTools_Click(object sender, RoutedEventArgs e)
-    {
-        if (ActiveTab?.Core is null) return;
-        SshTerminalDock.Visibility = Visibility.Collapsed;
-        ActiveTab.Core.OpenDevToolsWindow();
-    }
+    private void ShowDeveloperTools_Click(object sender, RoutedEventArgs e) =>
+        ActiveTab?.Core?.OpenDevToolsWindow();
 
     private async void ShowPrivacyMonitor_Click(object sender, RoutedEventArgs e)
     {
@@ -1065,7 +1092,8 @@ public partial class MainWindow : Window
         var window = new SettingsWindow(SettingsService.Current.Clone()) { Owner = this };
         if (window.ShowDialog() != true || window.ResultSettings is null) return;
         var extensionsChanged = SettingsService.Current.EnableExtensions != window.ResultSettings.EnableExtensions;
-        var themeChanged = SettingsService.Current.Theme != window.ResultSettings.Theme;
+        var themeChanged = SettingsService.Current.Theme != window.ResultSettings.Theme ||
+                           SettingsService.Current.ThemeMode != window.ResultSettings.ThemeMode;
         var proxyChanged = SettingsService.Current.EnableCustomProxy != window.ResultSettings.EnableCustomProxy ||
                            SettingsService.Current.PreventWebRtcIpLeak != window.ResultSettings.PreventWebRtcIpLeak ||
                            SettingsService.Current.ProxyKind != window.ResultSettings.ProxyKind ||
@@ -1075,6 +1103,11 @@ public partial class MainWindow : Window
         var secureNetworkChanged = SettingsService.Current.SecureDnsMode != window.ResultSettings.SecureDnsMode ||
                                    SettingsService.Current.SecureDnsProvider != window.ResultSettings.SecureDnsProvider;
         await SettingsService.SaveAsync(window.ResultSettings);
+        if (themeChanged)
+        {
+            ThemeService.Apply(SettingsService.Current.Theme, SettingsService.Current.ThemeMode);
+            WindowAppearanceService.Apply(this, SettingsService.Current.ThemeMode);
+        }
         foreach (var tab in Tabs.Where(x => x.IsInitialized))
             await tab.ApplySettingsAsync();
         UpdatePrivacyLabel();
@@ -1088,13 +1121,12 @@ public partial class MainWindow : Window
             if (SettingsService.Current.VoiceHandsFreeEnabled) StartHandsFreeIfEnabled();
             else StopHandsFree();
         }
-        if (extensionsChanged || proxyChanged || secureNetworkChanged || themeChanged)
+        if (extensionsChanged || proxyChanged || secureNetworkChanged)
         {
             var reasons = new List<string>();
             if (extensionsChanged) reasons.Add("поддержка расширений");
             if (proxyChanged) reasons.Add("сетевой прокси");
             if (secureNetworkChanged) reasons.Add("защищённый DNS");
-            if (themeChanged) reasons.Add("цветовая тема");
             var reason = "Изменены: " + string.Join(", ", reasons) + ".";
             GlassDialogWindow.Show(this,
                 reason + " Изменения вступят в силу после полного перезапуска Nexus Monach.",
@@ -1116,8 +1148,9 @@ public partial class MainWindow : Window
         else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.J) { ShowDownloads_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == ModifierKeys.Alt && e.Key == Key.Left) { ActiveTab?.GoBack(); e.Handled = true; }
         else if (Keyboard.Modifiers == ModifierKeys.Alt && e.Key == Key.Right) { ActiveTab?.GoForward(); e.Handled = true; }
-        else if (e.Key == Key.F12 ||
-                 (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.I))
+        else if (e.Key == Key.F12)
+        { ShowDeveloperTools_Click(sender, e); e.Handled = true; }
+        else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.I)
         { ShowDeveloperTools_Click(sender, e); e.Handled = true; }
         else if (e.Key == Key.F5) { ActiveTab?.ReloadOrStop(); e.Handled = true; }
     }
@@ -1159,23 +1192,21 @@ public partial class MainWindow : Window
 
     private void HandleCoreUpdateSnapshot(WebView2RuntimeSnapshot snapshot)
     {
-        if (_isPrivate || _closing || snapshot.State != WebView2RuntimeState.RestartRequired ||
-            _coreUpdatePromptShown || !IsLoaded) return;
+        if (_isPrivate || _closing || _coreUpdatePromptShown || !IsLoaded) return;
+        var localSnapshot = WebView2RuntimeMonitor.Check();
+        if (!WebView2RuntimeMonitor.ShouldOfferRestart(snapshot, localSnapshot)) return;
+
+        // Evergreen WebView2 keeps the environment already used by this window.
+        // Remember that the newer runtime is ready, but never interrupt browsing:
+        // Windows will activate it on the next natural application start.
         _coreUpdatePromptShown = true;
-        var answer = GlassDialogWindow.Show(this,
-            "Microsoft Edge Update уже загрузила и установила новое ядро WebView2. " +
-            "Оно начнёт работать после перезапуска Nexus Monach.\n\n" +
-            $"Активная версия: {snapshot.ActiveVersion}\n" +
-            $"Готовая версия: {snapshot.InstalledVersion}\n\n" +
-            "Перезапустить сейчас? Обычные вкладки и разрешённые непарольные поля будут " +
-            "локально зашифрованы средствами Windows и восстановлены после запуска. " +
-            "Пароли, OTP, платёжные поля и приватные окна не сохраняются.",
-            "Nexus Guardian · обновление ядра готово", MessageBoxButton.YesNo, MessageBoxImage.Information);
-        if (answer == MessageBoxResult.Yes) RequestSecureRestart();
     }
 
     private void Window_StateChanged(object sender, EventArgs e)
     {
+        MainSurface.CornerRadius = WindowState == WindowState.Maximized
+            ? new CornerRadius(0)
+            : new CornerRadius(12);
         MaximizeButton.Content = WindowState == WindowState.Maximized ? "\uE923" : "\uE922";
         MaximizeButton.ToolTip = WindowState == WindowState.Maximized ? "Восстановить" : "Развернуть";
         if (WindowState == WindowState.Maximized)

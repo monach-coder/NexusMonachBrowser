@@ -14,12 +14,12 @@
         </Grid.RowDefinitions>
         <TextBlock Text="Расширения" FontSize="24" FontWeight="SemiBold" />
         <Border Grid.Row="1" Margin="0,12,0,14" Padding="12" CornerRadius="8"
-                Background="#111E2B" BorderBrush="#2A465A" BorderThickness="1">
+                Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
             <TextBlock TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" FontSize="12"
                        Text="Поддерживаются распакованные Chromium-расширения из папки с manifest.json. Расширения, которым нужна собственная кнопка на панели Chrome или закрытые API Chrome Web Store, могут работать не полностью." />
         </Border>
-        <ListView x:Name="ExtensionsList" Grid.Row="2" Background="#101923"
-                  BorderBrush="#2B4054" Foreground="{StaticResource TextBrush}">
+        <ListView x:Name="ExtensionsList" Grid.Row="2" Background="{StaticResource FieldBrush}"
+                  BorderBrush="{StaticResource BorderBrush}" Foreground="{StaticResource TextBrush}">
             <ListView.View>
                 <GridView>
                     <GridViewColumn Header="Название" Width="250" DisplayMemberBinding="{Binding Name}" />

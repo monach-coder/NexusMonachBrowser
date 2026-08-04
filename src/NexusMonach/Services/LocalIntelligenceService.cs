@@ -207,6 +207,41 @@ public static class LocalIntelligenceService
         return translated;
     }
 
+    /// <summary>
+    /// Video-only translation path. Recent finalized dialogue is sent in the same
+    /// bounded local OPUS request, while only the item carrying the current phrase
+    /// is allowed to reach TTS. Page translation continues to use its existing path.
+    /// </summary>
+    internal static async Task<string> TranslateVideoPhraseAsync(string text,
+        IReadOnlyList<VideoTranslationContextEntry> context,
+        CancellationToken cancellationToken = default, string? sourceLanguage = null)
+    {
+        text = WhisperService.NormalizeTranscript(text);
+        if (text.Length == 0) return string.Empty;
+        if (LooksRussian(text)) return text;
+
+        var items = context.TakeLast(12).Select((entry, index) => new TranslationSegment
+        {
+            Id = $"context-{index}",
+            Text = entry.Transcript,
+            Language = entry.SourceLanguage
+        }).Append(new TranslationSegment
+        {
+            Id = "current-video-phrase",
+            Text = text,
+            Language = sourceLanguage?.Trim() ?? string.Empty
+        }).ToArray();
+        var translatedItems = await TranslationService.TranslateSegmentsAsync(
+            items, false, cancellationToken);
+        var translated = ValidateTranslation(translatedItems.FirstOrDefault(
+            item => item.Id.Equals("current-video-phrase", StringComparison.Ordinal))?.Text ?? string.Empty);
+        if (!IsUsableRussianTranslation(text, translated))
+            throw new InvalidOperationException(
+                "OPUS не вернул проверенный русский перевод законченной видеореплики.");
+        LocalTranslationDictionary.Remember(text, translated);
+        return translated;
+    }
+
     public static async Task<string> TranslateEnglishToRussianAsync(string text,
         CancellationToken cancellationToken = default)
     {

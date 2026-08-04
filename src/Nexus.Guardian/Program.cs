@@ -18,7 +18,9 @@ internal static class Program
              args[0].Equals("--generate-report-key", StringComparison.OrdinalIgnoreCase) ||
              args[0].Equals("--decrypt-report", StringComparison.OrdinalIgnoreCase) ||
              args[0].Equals("--create-manifest", StringComparison.OrdinalIgnoreCase) ||
-             args[0].Equals("--verify-only", StringComparison.OrdinalIgnoreCase));
+             args[0].Equals("--verify-only", StringComparison.OrdinalIgnoreCase) ||
+             args[0].Equals("--background-update-check", StringComparison.OrdinalIgnoreCase) ||
+             args[0].Equals("--apply-pending-update", StringComparison.OrdinalIgnoreCase));
 
         try
         {
@@ -60,6 +62,22 @@ internal static class Program
                 return result.State == IntegrityState.Verified ? 0 : 4;
             }
 
+            if (args.Length > 1 && args[0].Equals("--background-update-check",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                if (!IntegrityVerifier.UsesEmbeddedTrust) return 4;
+                return SilentUpdateCoordinator.CheckAndStageAsync(args[1], GuardianRoot)
+                    .GetAwaiter().GetResult();
+            }
+
+            if (args.Length > 1 && args[0].Equals("--apply-pending-update",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                _ = int.TryParse(args[1], out var parentProcessId);
+                return SilentUpdateCoordinator.ApplyPendingUpdate(GuardianRoot, parentProcessId,
+                    args.Any(x => x.Equals("--relaunch", StringComparison.OrdinalIgnoreCase)));
+            }
+
             var full = args.Any(x => x.Equals("--full-integrity-check", StringComparison.OrdinalIgnoreCase));
             return LaunchBrowser(full, args.Where(x => !x.Equals("--full-integrity-check", StringComparison.OrdinalIgnoreCase)).ToArray());
         }
@@ -88,6 +106,10 @@ internal static class Program
             return 2;
         }
 
+        if (IntegrityVerifier.UsesEmbeddedTrust &&
+            SilentUpdateCoordinator.TryLaunchPendingApply(root, GuardianRoot, relaunch: true))
+            return 0;
+
         var integrity = IntegrityVerifier.Verify(root, full);
         WriteIntegrityIncident(integrity);
         if (!integrity.CanLaunch)
@@ -113,6 +135,9 @@ internal static class Program
                 "Nexus Guardian", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
+        if (integrity.State == IntegrityState.Verified && IntegrityVerifier.UsesEmbeddedTrust)
+            SilentUpdateCoordinator.StartBackgroundCheck(root, GuardianRoot);
+
         Directory.CreateDirectory(Path.Combine(GuardianRoot, "Sessions"));
         var sessionId = Guid.NewGuid().ToString("N");
         var info = new ProcessStartInfo(browser)
@@ -132,6 +157,8 @@ internal static class Program
         RecordExit(normalExit);
         if (!normalExit && !HasManagedFatalReport(sessionId))
             WriteNativeCrashReport(sessionId, process.ExitCode, integrity.CompactStatus, safeMode);
+        if (normalExit && IntegrityVerifier.UsesEmbeddedTrust)
+            SilentUpdateCoordinator.TryLaunchPendingApply(root, GuardianRoot, relaunch: false);
         return process.ExitCode;
     }
 

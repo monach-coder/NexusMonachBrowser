@@ -1,19 +1,124 @@
+using NexusMonach.Models;
+
 namespace NexusMonach.Services;
 
+internal sealed record VideoDubbingModeProfile(
+    VideoTranslationMode Mode,
+    int SegmentMilliseconds,
+    int SegmentOverlapMilliseconds,
+    int ContextSeconds,
+    int ContextPhrases,
+    int MaximumPendingParts,
+    int MaximumPendingWords,
+    int MaximumPendingCharacters,
+    int StartupPreparedPhrases,
+    double StartupPreparedSeconds,
+    int StartupMaximumWaitMilliseconds,
+    int RefillWaitMilliseconds,
+    int PreparedQueueCapacity);
+
 /// <summary>
-/// Проверяемые границы закадрового перевода. Основной HTML5-путь не останавливает
-/// видео; очередь короткая и вытесняет устаревшую речь вместо роста задержки.
-/// Пауза разрешена только резервному loopback-пути, где иначе SAPI попадёт в
-/// собственный вход Whisper.
+/// Проверяемые границы закадрового перевода. Ни один путь захвата или озвучивания
+/// не имеет права останавливать либо перематывать пользовательское видео.
 /// </summary>
 internal static class VideoDubbingPolicy
 {
-    public const int DirectSegmentSeconds = 3;
-    public const int MaxBufferedSegments = 2;
-    public const int SpeechRate = 1;
-    public const double OriginalVolume = 0.22;
+    public const int SegmentMilliseconds = 3_200;
+    public const int SegmentOverlapMilliseconds = 800;
+    public const int MaxBufferedSegments = 3;
+    public const int MaxSegmentAgeMilliseconds = 9_000;
+    public const int PlaybackProbeMilliseconds = 180;
+    public const int DirectSilenceProbeLimit = 3;
+    public const int FirstLoopbackSegmentTimeoutMilliseconds = 12_000;
+    public const double OriginalVolume = 0.12;
+    public const double MinimumAudibleRms = 0.00018;
+    public const double MinimumAudiblePeak = 0.0015;
+    public const double TargetRecognitionRms = 0.055;
+    public const double MaximumRecognitionGain = 12.0;
     public const bool UsesDomSubtitles = false;
 
-    public static bool ShouldPausePlayback(bool directMediaCaptureAvailable) =>
-        !directMediaCaptureAvailable;
+    public static VideoDubbingModeProfile ForMode(VideoTranslationMode mode) => mode switch
+    {
+        VideoTranslationMode.Fast => new(mode,
+            SegmentMilliseconds: 2_400,
+            SegmentOverlapMilliseconds: 500,
+            ContextSeconds: 60,
+            ContextPhrases: 6,
+            MaximumPendingParts: 2,
+            MaximumPendingWords: 14,
+            MaximumPendingCharacters: 110,
+            StartupPreparedPhrases: 1,
+            StartupPreparedSeconds: 2.0,
+            StartupMaximumWaitMilliseconds: 4_000,
+            RefillWaitMilliseconds: 400,
+            PreparedQueueCapacity: 4),
+        VideoTranslationMode.Quality => new(mode,
+            SegmentMilliseconds: 4_000,
+            SegmentOverlapMilliseconds: 1_000,
+            ContextSeconds: 90,
+            ContextPhrases: 12,
+            MaximumPendingParts: 4,
+            MaximumPendingWords: 28,
+            MaximumPendingCharacters: 210,
+            StartupPreparedPhrases: 3,
+            StartupPreparedSeconds: 8.0,
+            StartupMaximumWaitMilliseconds: 14_000,
+            RefillWaitMilliseconds: 1_800,
+            PreparedQueueCapacity: 8),
+        _ => new(VideoTranslationMode.Balanced,
+            SegmentMilliseconds: SegmentMilliseconds,
+            SegmentOverlapMilliseconds: SegmentOverlapMilliseconds,
+            ContextSeconds: 75,
+            ContextPhrases: 8,
+            MaximumPendingParts: 3,
+            MaximumPendingWords: 20,
+            MaximumPendingCharacters: 150,
+            StartupPreparedPhrases: 2,
+            StartupPreparedSeconds: 5.0,
+            StartupMaximumWaitMilliseconds: 9_000,
+            RefillWaitMilliseconds: 1_000,
+            PreparedQueueCapacity: 6)
+    };
+
+    public static bool ShouldFinalizeUtterance(string? text, int fragmentCount,
+        VideoDubbingModeProfile profile)
+    {
+        text = WhisperService.NormalizeTranscript(text);
+        if (text.Length == 0) return false;
+        if (System.Text.RegularExpressions.Regex.IsMatch(text, @"[.!?…][""'»)]?$"))
+            return true;
+        var wordCount = text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+        return wordCount >= profile.MaximumPendingWords ||
+               text.Length >= profile.MaximumPendingCharacters ||
+               fragmentCount >= profile.MaximumPendingParts;
+    }
+
+    public static bool ShouldPausePlayback(bool directMediaCaptureAvailable) => false;
+
+    public static bool SupportsProcessLoopback(Version windowsVersion, int targetProcessId) =>
+        targetProcessId > 0 && windowsVersion >= new Version(10, 0, 20348);
+
+    public static bool IsFresh(DateTimeOffset capturedAt, DateTimeOffset now) =>
+        capturedAt <= now && now - capturedAt <= TimeSpan.FromMilliseconds(MaxSegmentAgeMilliseconds);
+
+    public static bool HasUsableDirectAudio(bool success, string? wavBase64) =>
+        success && !string.IsNullOrWhiteSpace(wavBase64);
+
+    public static bool IsSilentDirectCapture(bool success, string? wavBase64) =>
+        success && string.IsNullOrWhiteSpace(wavBase64);
+
+    public static bool IsAudible(double rms, double peak) =>
+        rms >= MinimumAudibleRms || peak >= MinimumAudiblePeak;
+
+    public static double SelectRecognitionGain(double rms, double peak)
+    {
+        if (!IsAudible(rms, peak) || rms <= 0 || peak <= 0) return 1;
+        var rmsGain = TargetRecognitionRms / rms;
+        var clippingGain = 0.94 / peak;
+        return Math.Clamp(Math.Min(rmsGain, clippingGain), 1, MaximumRecognitionGain);
+    }
+
+    // Live dubbing always keeps Kseniya's native tempo. Artificial speed-up
+    // makes consonants and short words indistinct and does not solve backlog.
+    public static int SelectSpeechRate(int characterCount) => 0;
 }

@@ -16,7 +16,7 @@
     </Window.Resources>
     <Grid Loaded="Grid_Loaded">
         <Ellipse x:Name="Glow" Width="322" Height="322" Fill="#5036D7C4" />
-        <Ellipse Width="294" Height="294" Fill="#F20B1018" Stroke="#5536D7C4" StrokeThickness="2" />
+        <Ellipse Width="294" Height="294" Fill="#D90B1018" Stroke="#5536D7C4" StrokeThickness="2" />
         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
             <Image Width="150" Height="150" Source="/Assets/nexus-monach-512.png"
                    RenderTransformOrigin="0.5,0.5">

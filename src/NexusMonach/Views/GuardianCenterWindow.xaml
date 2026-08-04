@@ -5,17 +5,14 @@
         MinWidth="860" MinHeight="620" WindowStartupLocation="CenterOwner"
         Icon="/Assets/nexus-monach.ico" Style="{StaticResource GlassPopupWindow}">
     <Window.Resources>
-        <Style x:Key="GuardianButton" TargetType="Button">
+        <Style x:Key="GuardianButton" TargetType="Button" BasedOn="{StaticResource NexusButton}">
             <Setter Property="Padding" Value="14,8" />
             <Setter Property="Margin" Value="0,0,8,8" />
-            <Setter Property="Foreground" Value="White" />
-            <Setter Property="Background" Value="#285F67" />
-            <Setter Property="BorderBrush" Value="#557F83" />
             <Setter Property="Cursor" Value="Hand" />
         </Style>
         <Style x:Key="StatusCard" TargetType="Border">
-            <Setter Property="Background" Value="#33101010" />
-            <Setter Property="BorderBrush" Value="#55FFFFFF" />
+            <Setter Property="Background" Value="{StaticResource PanelBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="12" />
             <Setter Property="Padding" Value="14,10" />
@@ -38,7 +35,7 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
             <Border Width="54" Height="54" CornerRadius="27" BorderBrush="{StaticResource AccentBrush}"
-                    BorderThickness="1.5" Background="#22101010" Margin="0,0,14,0">
+                    BorderThickness="1.5" Background="{StaticResource FieldBrush}" Margin="0,0,14,0">
                 <TextBlock Text="G" FontSize="25" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}"
                            HorizontalAlignment="Center" VerticalAlignment="Center" />
             </Border>
@@ -76,7 +73,7 @@
             </Border>
         </Grid>
 
-        <Border Grid.Row="2" Background="#33101010" BorderBrush="#55FFFFFF"
+        <Border Grid.Row="2" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
                 BorderThickness="1" CornerRadius="12" Padding="14,11" Margin="0,0,0,16">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -113,7 +110,7 @@
                 <ColumnDefinition Width="12" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <Border Background="#33101010" BorderBrush="#55FFFFFF" BorderThickness="1" CornerRadius="12">
+            <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="12">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -125,7 +122,7 @@
                              SelectionChanged="ReportsList_SelectionChanged">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <Border Padding="10,8" Margin="0,2" Background="#25101010" CornerRadius="8">
+                                <Border Padding="10,8" Margin="0,2" Background="{StaticResource FieldBrush}" CornerRadius="8">
                                     <StackPanel>
                                         <TextBlock Text="{Binding Title}" TextWrapping="Wrap" FontWeight="SemiBold" />
                                         <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" Margin="0,3,0,0"
@@ -138,7 +135,7 @@
                 </Grid>
             </Border>
 
-            <Border Grid.Column="2" Background="#33101010" BorderBrush="#55FFFFFF"
+            <Border Grid.Column="2" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
                     BorderThickness="1" CornerRadius="12" Padding="12">
                 <TextBox x:Name="DetailsBox" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
                          VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
@@ -161,8 +158,8 @@
                 <Button Content="Отправить по почте" Style="{StaticResource GuardianButton}"
                         Click="SendEmail_Click" />
                 <Button Content="Открыть папку" Style="{StaticResource GuardianButton}" Click="OpenFolder_Click" />
-                <Button Content="Удалить" Style="{StaticResource GuardianButton}" Background="#594044"
-                        BorderBrush="#8A6268" Click="Delete_Click" />
+                <Button Content="Удалить" Style="{StaticResource GuardianButton}"
+                        Foreground="White" Background="#8A3542" BorderBrush="#B75B68" Click="Delete_Click" />
             </WrapPanel>
         </DockPanel>
     </Grid>

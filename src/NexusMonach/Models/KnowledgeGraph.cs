@@ -117,6 +117,7 @@ public sealed class TranslationResponse
 public sealed class AudioCaptureResult
 {
     public bool Success { get; set; }
+    public bool WaitingForPlayback { get; set; }
     public string Error { get; set; } = string.Empty;
     public string WavBase64 { get; set; } = string.Empty;
 }

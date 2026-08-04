@@ -17,6 +17,9 @@ const koreanToEnglishPath = path.resolve(process.argv[4]);
 let multilingualToEnglish;
 let englishToRussian;
 let koreanToEnglish;
+const generationOptions = {
+  max_new_tokens: 384,
+};
 
 async function getMultilingualToEnglish() {
   multilingualToEnglish ??= await pipeline('translation', multilingualToEnglishPath, {
@@ -57,18 +60,12 @@ async function translateOne(item) {
     const firstTranslator = item?.source === 'ko'
       ? await getKoreanToEnglish()
       : await getMultilingualToEnglish();
-    const firstStage = await firstTranslator(original, {
-      max_new_tokens: 384,
-      num_beams: 1,
-    });
+    const firstStage = await firstTranslator(original, generationOptions);
     english = translatedText(firstStage);
     if (!english) throw new Error('The multilingual translation stage returned no text.');
   }
 
-  const secondStage = await (await getEnglishToRussian())(english, {
-    max_new_tokens: 384,
-    num_beams: 1,
-  });
+  const secondStage = await (await getEnglishToRussian())(english, generationOptions);
   const russian = translatedText(secondStage);
   if (!russian) throw new Error('The Russian translation stage returned no text.');
   return { id: String(item?.id ?? ''), text: russian };
@@ -89,17 +86,11 @@ async function translateBatch(items) {
   let english = originals;
   if (!allEnglish) {
     const firstTranslator = allKorean ? await getKoreanToEnglish() : await getMultilingualToEnglish();
-    const firstStage = await firstTranslator(originals, {
-      max_new_tokens: 384,
-      num_beams: 1,
-    });
+    const firstStage = await firstTranslator(originals, generationOptions);
     english = originals.map((_, index) => translatedAt(firstStage, index));
     if (english.some(text => !text)) throw new Error('The multilingual translation batch returned incomplete text.');
   }
-  const secondStage = await (await getEnglishToRussian())(english, {
-    max_new_tokens: 384,
-    num_beams: 1,
-  });
+  const secondStage = await (await getEnglishToRussian())(english, generationOptions);
   const russian = originals.map((_, index) => translatedAt(secondStage, index));
   if (russian.some(text => !text)) throw new Error('The Russian translation batch returned incomplete text.');
   return items.map((item, index) => ({ id: String(item?.id ?? ''), text: russian[index] }));

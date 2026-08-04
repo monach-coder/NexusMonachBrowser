@@ -25,15 +25,27 @@ public static class TranslationService
         {
             try
             {
-                // The browser is already visible at this point. Preload only the
-                // smaller English -> Russian stage used by live video captions;
-                // the multilingual stage stays lazy until a page needs it.
                 await Task.Delay(TimeSpan.FromSeconds(3));
                 using var budget = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-                await TranslateToRussianAsync("Translation service is ready.", true, budget.Token);
+                await WarmUpForLiveVideoAsync(includeAllSourceRoutes: false, budget.Token);
             }
             catch { /* Readiness is reported when the user explicitly translates. */ }
         });
+    }
+
+    public static async Task WarmUpForLiveVideoAsync(bool includeAllSourceRoutes = true,
+        CancellationToken cancellationToken = default)
+    {
+        if (!AiModelCatalog.TranslationReady)
+            throw new InvalidOperationException(AiModelCatalog.MissingTranslationRuntimeMessage);
+
+        await TranslateToRussianAsync("Translation service is ready.", true, cancellationToken);
+        if (!includeAllSourceRoutes) return;
+
+        // Live dubbing must not pay the one-time ONNX load cost after the first
+        // scene has already passed. Preload every source route before capture.
+        await TranslateToRussianAsync("Guten Tag.", false, cancellationToken, "de");
+        await TranslateToRussianAsync("안녕하세요.", false, cancellationToken, "ko");
     }
 
     public static async Task<string> TranslateToRussianAsync(string text, bool sourceIsEnglish = false,

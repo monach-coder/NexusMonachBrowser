@@ -56,7 +56,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $ai = 'src/NexusMonach/AI'
-          New-Item -ItemType Directory -Force "$ai/llama","$ai/whisper","$ai/node","$ai/models/qwen3-0.6b","$ai/models/whisper","$ai/models/smolvlm-500m","$ai/models/multilingual-e5-small/onnx","$ai/models/translation/mul-en/onnx","$ai/models/translation/ko-en/onnx","$ai/models/translation/en-ru/onnx" | Out-Null
+          New-Item -ItemType Directory -Force "$ai/llama","$ai/whisper","$ai/node","$ai/voice","$ai/models/qwen3-0.6b","$ai/models/whisper","$ai/models/voice/vosk-tts-ru-multi","$ai/models/smolvlm-500m","$ai/models/multilingual-e5-small/onnx","$ai/models/translation/mul-en/onnx","$ai/models/translation/ko-en/onnx","$ai/models/translation/en-ru/onnx" | Out-Null
           function Get-Asset([string]$Url, [string]$Out, [string]$Sha256 = '') {
             curl.exe -L --fail --retry 5 --retry-delay 3 $Url -o $Out
             if ($LASTEXITCODE) { throw "Download failed: $Url" }
@@ -287,7 +287,7 @@ jobs:
           Nexus Monach $env:NEXUS_VERSION Full Offline
 
           Includes pinned local Qwen3 0.6B, Whisper base q5_1, SmolVLM 500M,
-          multilingual-e5-small and dedicated OPUS multilingual/Korean/Russian translation models.
+          multilingual-e5-small, Windows local speech and dedicated OPUS multilingual/Korean/Russian translation models.
           Model hashes are verified before every build. No model is downloaded while the browser is running.
           The open Nexus Intelligence Fabric is built from the same repository and includes deep page analysis,
           controlled same-origin research and an agent summary with sources, conflicts and missing information.

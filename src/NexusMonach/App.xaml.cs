@@ -53,15 +53,17 @@ public partial class App : Application
             if (!SettingsService.Current.ThemeSelectionCompleted)
             {
                 splash.Hide();
-                var themePicker = new ThemeSelectionWindow(SettingsService.Current.Theme);
+                var themePicker = new ThemeSelectionWindow(
+                    SettingsService.Current.Theme, SettingsService.Current.ThemeMode);
                 themePicker.ShowDialog();
                 var firstRunSettings = SettingsService.Current.Clone();
                 firstRunSettings.Theme = themePicker.ResultTheme;
+                firstRunSettings.ThemeMode = themePicker.ResultMode;
                 firstRunSettings.ThemeSelectionCompleted = true;
                 await SettingsService.SaveAsync(firstRunSettings);
                 splash.Show();
             }
-            ThemeService.Apply(SettingsService.Current.Theme);
+            ThemeService.Apply(SettingsService.Current.Theme, SettingsService.Current.ThemeMode);
             CrashReportService.AddBreadcrumb("startup", "settings-ready");
             if (SettingsService.Current.VoiceSpeakAtStartup &&
                 SettingsService.Current.VoiceAssistantMode != Models.VoiceAssistantMode.Off)
@@ -107,9 +109,9 @@ public partial class App : Application
         catch (Exception ex)
         {
             CrashReportService.RecordFatal(ex, "startup", "startup-failed");
+            var runtimeSnapshot = WebView2RuntimeMonitor.Check();
             GlassDialogWindow.Show(
-                "Nexus Monach не смог запуститься.\n\n" + ex.Message +
-                "\n\nПроверьте наличие актуального Microsoft Edge WebView2 Runtime.",
+                WebView2RuntimeMonitor.FormatStartupFailure(ex, runtimeSnapshot),
                 "Ошибка запуска",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -128,6 +130,7 @@ public partial class App : Application
         WhisperService.Shutdown();
         TranslationService.Stop();
         LocalAiService.Shutdown();
+        VideoDubbingVoiceService.Shutdown();
         VoiceAssistantService.Shutdown();
         CrashReportService.MarkCleanExit();
         base.OnExit(e);

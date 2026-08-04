@@ -23,6 +23,7 @@ public static class PhishingProtectionService
     {
         "accounts.google.com",
         "accounts.google.ru",
+        "accounts.google.se",
         "accounts.youtube.com",
         "myaccount.google.com",
         "consent.google.com"
@@ -30,7 +31,7 @@ public static class PhishingProtectionService
 
     private static readonly Dictionary<string, string[]> OfficialBrands = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["google"] = ["google.com", "google.ru", "google.co.uk", "google.de", "google.fr", "googleusercontent.com"],
+        ["google"] = ["google.com", "google.ru", "google.se", "google.co.uk", "google.de", "google.fr", "googleusercontent.com"],
         ["microsoft"] = ["microsoft.com", "microsoftonline.com", "live.com", "office.com"],
         ["github"] = ["github.com", "githubusercontent.com"],
         ["paypal"] = ["paypal.com"],

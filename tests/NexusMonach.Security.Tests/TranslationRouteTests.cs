@@ -7,8 +7,10 @@ public sealed class TranslationRouteTests
     [Theory]
     [InlineData("This browser protects your privacy.", "", false, "en")]
     [InlineData("Neutral text", "en-US", false, "en")]
+    [InlineData("A very short phrase", "english", false, "en")]
     [InlineData("이 브라우저는 로컬에서 번역합니다.", "", false, "ko")]
     [InlineData("Neutral text", "ko-KR", false, "ko")]
+    [InlineData("Neutral text", "korean", false, "ko")]
     [InlineData("Diese Seite enthält wichtige Informationen.", "de", false, "auto")]
     [InlineData("これは重要な情報です。", "ja", false, "auto")]
     [InlineData("Neutral text", "", true, "en")]
@@ -24,5 +26,18 @@ public sealed class TranslationRouteTests
     {
         Assert.Equal(string.Empty,
             await TranslationService.TranslateToRussianAsync("   "));
+    }
+
+    [Fact]
+    public void WhisperVerboseJson_PreservesDetectedLanguageAndNormalizesSegments()
+    {
+        const string payload = """
+            {"language":"english","detected_language":"en","text":"  One short\n phrase.  "}
+            """;
+
+        var transcript = WhisperService.ParseResponse(payload);
+
+        Assert.Equal("One short phrase.", transcript.Text);
+        Assert.Equal("en", transcript.Language);
     }
 }
