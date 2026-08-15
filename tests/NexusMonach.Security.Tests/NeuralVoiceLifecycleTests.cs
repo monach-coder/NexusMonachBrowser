@@ -46,6 +46,13 @@ public sealed class NeuralVoiceLifecycleTests
     }
 
     [Fact]
+    public void FailureAfterIntentionalWorkerStopIsNotReported()
+    {
+        Assert.True(NeuralVoiceService.ShouldReportSynthesisFailure(7, 7));
+        Assert.False(NeuralVoiceService.ShouldReportSynthesisFailure(7, 8));
+    }
+
+    [Fact]
     public void CommandsAndDubbingUseIndependentWhisperServersAndInferenceGates()
     {
         Assert.True(WhisperService.UsesIndependentRecognitionLanes);

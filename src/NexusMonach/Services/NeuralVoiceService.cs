@@ -61,6 +61,8 @@ public static class NeuralVoiceService
         !ReferenceEquals(AssistantLane.RequestSync, DubbingLane.RequestSync);
     internal static TimeSpan DubbingColdStartBudget => DubbingColdSynthesisTimeout;
     internal static TimeSpan WarmRequestBudget => WarmSynthesisTimeout;
+    internal static bool ShouldReportSynthesisFailure(int requestGeneration, int currentGeneration) =>
+        requestGeneration == currentGeneration;
 
     public static async Task WarmUpAsync(NeuralVoiceLane lane,
         CancellationToken cancellationToken = default)
@@ -135,8 +137,9 @@ public static class NeuralVoiceService
         }
         catch (Exception ex)
         {
-            CrashReportService.RecordNonFatal("voice",
-                "neural-tts-" + state.Name, ex);
+            if (ShouldReportSynthesisFailure(generation, Volatile.Read(ref state.StopGeneration)))
+                CrashReportService.RecordNonFatal("voice",
+                    "neural-tts-" + state.Name, ex);
             StopWorker(state);
             return false;
         }

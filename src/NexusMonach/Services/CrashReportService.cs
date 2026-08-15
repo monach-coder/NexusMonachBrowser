@@ -335,7 +335,7 @@ public static partial class CrashReportService
                 Stage = LimitToken(stage),
                 ExceptionType = exception.GetType().FullName ?? exception.GetType().Name,
                 Message = SanitizeForReport(exception.Message),
-                StackTrace = SanitizeForReport(exception.StackTrace ?? string.Empty),
+                StackTrace = FormatExceptionForReport(exception),
                 IntegrityStatus = GuardianRuntime.IntegrityStatus,
                 SafeMode = GuardianRuntime.IsSafeMode,
                 GuardianSession = GuardianRuntime.SessionId,
@@ -389,6 +389,9 @@ public static partial class CrashReportService
         return sanitized.Length > 16_000 ? sanitized[..16_000] : sanitized;
     }
 
+    internal static string FormatExceptionForReport(Exception exception) =>
+        SanitizeForReport(exception.ToString());
+
     [GeneratedRegex("https?://[^\\s\\\"'<>]+", RegexOptions.IgnoreCase)]
     private static partial Regex UrlRegex();
 
@@ -404,7 +407,7 @@ public static partial class CrashReportService
     [GeneratedRegex(@"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")]
     private static partial Regex JwtRegex();
 
-    [GeneratedRegex(@"(?i)\b[A-Z]:\\[^\r\n:]+")]
+    [GeneratedRegex(@"(?i)\b[A-Z]:\\[^\r\n:'\x22]+")]
     private static partial Regex WindowsPathRegex();
 
     private sealed class CrashReport
