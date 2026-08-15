@@ -13,8 +13,8 @@ public sealed class VideoDubbingPolicyTests
         Assert.False(VideoDubbingPolicy.ShouldPausePlayback(directMediaCaptureAvailable: true));
         Assert.InRange(VideoDubbingPolicy.SegmentMilliseconds, 3_000, 3_500);
         Assert.InRange(VideoDubbingPolicy.SegmentOverlapMilliseconds, 700, 900);
-        Assert.InRange(VideoDubbingPolicy.MaxBufferedSegments, 2, 4);
-        Assert.InRange(VideoDubbingPolicy.MaxSegmentAgeMilliseconds, 7_000, 10_000);
+        Assert.InRange(VideoDubbingPolicy.MaxBufferedSegments, 5, 8);
+        Assert.InRange(VideoDubbingPolicy.MaxSegmentAgeMilliseconds, 10_000, 15_000);
         Assert.InRange(VideoDubbingPolicy.OriginalVolume, 0.08, 0.16);
         Assert.InRange(VideoDubbingPolicy.DirectSilenceProbeLimit, 2, 4);
         Assert.InRange(VideoDubbingPolicy.FirstLoopbackSegmentTimeoutMilliseconds, 8_000, 15_000);
@@ -44,6 +44,24 @@ public sealed class VideoDubbingPolicyTests
         Assert.True(balanced.StartupPreparedSeconds < quality.StartupPreparedSeconds);
         Assert.True(fast.SegmentMilliseconds < balanced.SegmentMilliseconds);
         Assert.True(balanced.SegmentMilliseconds < quality.SegmentMilliseconds);
+        Assert.Equal(2, fast.MaximumPendingParts);
+        Assert.Equal(14, fast.MaximumPendingWords);
+        Assert.All(new[] { fast, balanced, quality }, profile =>
+            Assert.Equal(1, profile.StartupPreparedPhrases));
+    }
+
+    [Theory]
+    [InlineData("The camera is ready.", 1, true)]
+    [InlineData("camera we have ever made.", 1, false)]
+    [InlineData("camera we have ever made. for everyone.", 2, true)]
+    [InlineData("iPhone is ready.", 1, true)]
+    public void LowercaseOverlapTails_WaitForOneFollowingWindow(
+        string text, int parts, bool expected)
+    {
+        var fast = VideoDubbingPolicy.ForMode(VideoTranslationMode.Fast);
+
+        Assert.Equal(expected,
+            VideoDubbingPolicy.ShouldFinalizeUtterance(text, parts, fast));
     }
 
     [Fact]

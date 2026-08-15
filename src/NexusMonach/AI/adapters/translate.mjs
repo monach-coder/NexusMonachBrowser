@@ -17,9 +17,24 @@ const koreanToEnglishPath = path.resolve(process.argv[4]);
 let multilingualToEnglish;
 let englishToRussian;
 let koreanToEnglish;
-const generationOptions = {
-  max_new_tokens: 384,
-};
+function generationOptionsFor(values) {
+  const longestWords = Math.max(1, ...values.map(value =>
+    String(value ?? '').trim().split(/\s+/u).filter(Boolean).length));
+  const longestCharacters = Math.max(1, ...values.map(value => String(value ?? '').trim().length));
+
+  // Marian otherwise keeps generating after a short phrase has already ended.
+  // A 384-token allowance turned an eight-word subtitle into hundreds of dots
+  // and repeated single letters. Keep enough room for Russian tokenisation while
+  // making runaway output physically impossible.
+  const estimated = Math.max(longestWords * 3 + 8, Math.ceil(longestCharacters * 0.65));
+  return {
+    max_new_tokens: Math.max(18, Math.min(384, estimated)),
+    do_sample: false,
+    num_beams: 1,
+    repetition_penalty: 1.12,
+    no_repeat_ngram_size: 3,
+  };
+}
 
 async function getMultilingualToEnglish() {
   multilingualToEnglish ??= await pipeline('translation', multilingualToEnglishPath, {
@@ -60,12 +75,13 @@ async function translateOne(item) {
     const firstTranslator = item?.source === 'ko'
       ? await getKoreanToEnglish()
       : await getMultilingualToEnglish();
-    const firstStage = await firstTranslator(original, generationOptions);
+    const firstStage = await firstTranslator(original, generationOptionsFor([original]));
     english = translatedText(firstStage);
     if (!english) throw new Error('The multilingual translation stage returned no text.');
   }
 
-  const secondStage = await (await getEnglishToRussian())(english, generationOptions);
+  const secondStage = await (await getEnglishToRussian())(
+    english, generationOptionsFor([english]));
   const russian = translatedText(secondStage);
   if (!russian) throw new Error('The Russian translation stage returned no text.');
   return { id: String(item?.id ?? ''), text: russian };
@@ -86,11 +102,12 @@ async function translateBatch(items) {
   let english = originals;
   if (!allEnglish) {
     const firstTranslator = allKorean ? await getKoreanToEnglish() : await getMultilingualToEnglish();
-    const firstStage = await firstTranslator(originals, generationOptions);
+    const firstStage = await firstTranslator(originals, generationOptionsFor(originals));
     english = originals.map((_, index) => translatedAt(firstStage, index));
     if (english.some(text => !text)) throw new Error('The multilingual translation batch returned incomplete text.');
   }
-  const secondStage = await (await getEnglishToRussian())(english, generationOptions);
+  const secondStage = await (await getEnglishToRussian())(
+    english, generationOptionsFor(english));
   const russian = originals.map((_, index) => translatedAt(secondStage, index));
   if (russian.some(text => !text)) throw new Error('The Russian translation batch returned incomplete text.');
   return items.map((item, index) => ({ id: String(item?.id ?? ''), text: russian[index] }));

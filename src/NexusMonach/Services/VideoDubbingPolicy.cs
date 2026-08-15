@@ -29,8 +29,8 @@ internal static class VideoDubbingPolicy
     public const double LongFormMinimumSeconds = 30 * 60;
     public const int SegmentMilliseconds = 3_200;
     public const int SegmentOverlapMilliseconds = 800;
-    public const int MaxBufferedSegments = 3;
-    public const int MaxSegmentAgeMilliseconds = 9_000;
+    public const int MaxBufferedSegments = 6;
+    public const int MaxSegmentAgeMilliseconds = 12_000;
     public const int PlaybackProbeMilliseconds = 180;
     public const int DirectSilenceProbeLimit = 3;
     public const int FirstLoopbackSegmentTimeoutMilliseconds = 12_000;
@@ -44,20 +44,20 @@ internal static class VideoDubbingPolicy
     public static VideoDubbingModeProfile ForMode(VideoTranslationMode mode) => mode switch
     {
         VideoTranslationMode.Fast => new(mode,
-            SegmentMilliseconds: 2_400,
-            SegmentOverlapMilliseconds: 500,
+            SegmentMilliseconds: 3_000,
+            SegmentOverlapMilliseconds: 600,
             ContextSeconds: 60,
             ContextPhrases: 6,
             MaximumPendingParts: 2,
             MaximumPendingWords: 14,
             MaximumPendingCharacters: 110,
             StartupPreparedPhrases: 1,
-            StartupPreparedSeconds: 2.0,
-            StartupMaximumWaitMilliseconds: 4_000,
-            RefillWaitMilliseconds: 400,
+            StartupPreparedSeconds: 0.35,
+            StartupMaximumWaitMilliseconds: 3_000,
+            RefillWaitMilliseconds: 300,
             PreparedQueueCapacity: 4,
-            MaximumTtsCharacters: 80,
-            MaximumPreparedAudioSeconds: 7),
+            MaximumTtsCharacters: 110,
+            MaximumPreparedAudioSeconds: 9),
         VideoTranslationMode.Quality => new(mode,
             SegmentMilliseconds: 4_000,
             SegmentOverlapMilliseconds: 1_000,
@@ -66,10 +66,10 @@ internal static class VideoDubbingPolicy
             MaximumPendingParts: 4,
             MaximumPendingWords: 28,
             MaximumPendingCharacters: 210,
-            StartupPreparedPhrases: 3,
-            StartupPreparedSeconds: 8.0,
-            StartupMaximumWaitMilliseconds: 14_000,
-            RefillWaitMilliseconds: 1_800,
+            StartupPreparedPhrases: 1,
+            StartupPreparedSeconds: 0.65,
+            StartupMaximumWaitMilliseconds: 4_500,
+            RefillWaitMilliseconds: 650,
             PreparedQueueCapacity: 8,
             MaximumTtsCharacters: 140,
             MaximumPreparedAudioSeconds: 12),
@@ -81,10 +81,10 @@ internal static class VideoDubbingPolicy
             MaximumPendingParts: 3,
             MaximumPendingWords: 20,
             MaximumPendingCharacters: 150,
-            StartupPreparedPhrases: 2,
-            StartupPreparedSeconds: 5.0,
-            StartupMaximumWaitMilliseconds: 9_000,
-            RefillWaitMilliseconds: 1_000,
+            StartupPreparedPhrases: 1,
+            StartupPreparedSeconds: 0.5,
+            StartupMaximumWaitMilliseconds: 3_500,
+            RefillWaitMilliseconds: 450,
             PreparedQueueCapacity: 6,
             MaximumTtsCharacters: 110,
             MaximumPreparedAudioSeconds: 9)
@@ -137,7 +137,11 @@ internal static class VideoDubbingPolicy
     {
         text = WhisperService.NormalizeTranscript(text);
         if (text.Length == 0) return false;
-        if (System.Text.RegularExpressions.Regex.IsMatch(text, @"[.!?…][""'»)]?$"))
+        var beginsLikeContinuation = text.Length > 1 &&
+                                     char.IsLower(text[0]) &&
+                                     char.IsLower(text[1]);
+        if (!beginsLikeContinuation &&
+            System.Text.RegularExpressions.Regex.IsMatch(text, @"[.!?…][""'»)]?$"))
             return true;
         var wordCount = text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
         return wordCount >= profile.MaximumPendingWords ||

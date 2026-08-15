@@ -74,6 +74,7 @@ internal sealed class VideoSpeechTranslationContext
 {
     private readonly VideoDubbingModeProfile _profile;
     private readonly VideoTranslationContextWindow _context;
+    private readonly VideoSourceLanguageTracker _language = new();
     private string _previousWindow = string.Empty;
     private string _pending = string.Empty;
     private string _pendingLanguage = string.Empty;
@@ -93,6 +94,7 @@ internal sealed class VideoSpeechTranslationContext
         var speech = await NexusFabricRuntime.TranscribeSpeechDetailedAsync(
             segment.Wav, cancellationToken, WhisperLane.Dubbing);
         var transcriptWindow = WhisperService.NormalizeTranscript(speech.Text);
+        var sourceLanguage = _language.Observe(transcriptWindow, speech.Language);
         var delta = VideoSpeechTranslationService.RemoveTranscriptOverlap(
             _previousWindow, transcriptWindow);
         _previousWindow = transcriptWindow;
@@ -100,11 +102,11 @@ internal sealed class VideoSpeechTranslationContext
             return _pending.Length == 0
                 ? null
                 : await TranslatePendingAsync(segment, transcriptWindow,
-                    speech.Language, cancellationToken);
+                    sourceLanguage, cancellationToken);
 
         if (_pending.Length == 0)
         {
-            _pendingLanguage = speech.Language;
+            _pendingLanguage = sourceLanguage;
             _pendingStartedAt = segment.CapturedAt;
         }
         var fresh = VideoSpeechTranslationService.RemoveTranscriptOverlap(_pending, delta);
@@ -118,7 +120,7 @@ internal sealed class VideoSpeechTranslationContext
             return null;
 
         return await TranslatePendingAsync(segment, transcriptWindow,
-            speech.Language, cancellationToken);
+            sourceLanguage, cancellationToken);
     }
 
     private async Task<VideoSpeechTranslationText?> TranslatePendingAsync(
@@ -178,6 +180,100 @@ internal sealed record VideoTranslationContextEntry(
     string SourceLanguage,
     DateTimeOffset StartedAt,
     DateTimeOffset EndedAt);
+
+/// <summary>
+/// Whisper language detection is noisy on two-second windows. Two agreeing
+/// phrases lock the route for the current video, while a strong script change
+/// can still move a genuinely multilingual stream to another model.
+/// </summary>
+internal sealed class VideoSourceLanguageTracker
+{
+    private static readonly HashSet<string> EnglishHints = new(StringComparer.Ordinal)
+    {
+        "a", "an", "and", "are", "as", "at", "be", "for", "from", "in", "is", "it",
+        "of", "on", "or", "so", "that", "the", "this", "to", "we", "with", "you", "your"
+    };
+
+    private readonly Dictionary<string, int> _votes = new(StringComparer.Ordinal);
+    private string _locked = string.Empty;
+    private string _conflict = string.Empty;
+    private int _conflictVotes;
+
+    public string Observe(string transcript, string? detectedLanguage)
+    {
+        var candidate = NormalizeLanguage(detectedLanguage);
+        var script = DetectStrongScript(transcript);
+        if (script.Length > 0) candidate = script;
+        else if (LooksPredominantlyEnglish(transcript)) candidate = "en";
+
+        if (_locked.Length > 0)
+        {
+            if (candidate.Length > 0 && candidate != _locked && script.Length > 0)
+            {
+                if (_conflict == candidate) _conflictVotes++;
+                else
+                {
+                    _conflict = candidate;
+                    _conflictVotes = 1;
+                }
+                if (_conflictVotes >= 3)
+                {
+                    _locked = candidate;
+                    _conflict = string.Empty;
+                    _conflictVotes = 0;
+                }
+            }
+            else
+            {
+                _conflict = string.Empty;
+                _conflictVotes = 0;
+            }
+            return _locked;
+        }
+
+        if (candidate.Length == 0) return detectedLanguage?.Trim() ?? string.Empty;
+        _votes[candidate] = _votes.GetValueOrDefault(candidate) + 1;
+        var ordered = _votes.OrderByDescending(pair => pair.Value).ToArray();
+        if (ordered[0].Value >= 2 &&
+            (ordered.Length == 1 || ordered[0].Value > ordered[1].Value))
+            _locked = ordered[0].Key;
+        return _locked.Length > 0 ? _locked : candidate;
+    }
+
+    private static string NormalizeLanguage(string? value)
+    {
+        value = value?.Trim().ToLowerInvariant() ?? string.Empty;
+        if (value.StartsWith("en", StringComparison.Ordinal) || value == "english") return "en";
+        if (value.StartsWith("de", StringComparison.Ordinal) || value == "german") return "de";
+        if (value.StartsWith("ko", StringComparison.Ordinal) || value == "korean") return "ko";
+        if (value.StartsWith("zh", StringComparison.Ordinal) || value == "chinese") return "zh";
+        if (value.StartsWith("ja", StringComparison.Ordinal) || value == "japanese") return "ja";
+        if (value.StartsWith("ru", StringComparison.Ordinal) || value == "russian") return "ru";
+        return value;
+    }
+
+    private static string DetectStrongScript(string value)
+    {
+        var letters = value.Count(char.IsLetter);
+        if (letters < 3) return string.Empty;
+        if (value.Count(ch => ch is >= '\uAC00' and <= '\uD7AF') >= Math.Max(2, letters / 2)) return "ko";
+        if (value.Count(ch => ch is >= '\u3400' and <= '\u9FFF') >= Math.Max(2, letters / 2)) return "zh";
+        if (value.Count(ch => ch is >= '\u3040' and <= '\u30FF') >= Math.Max(2, letters / 2)) return "ja";
+        if (value.Count(ch => ch is >= '\u0400' and <= '\u04FF') >= Math.Max(2, letters / 2)) return "ru";
+        return string.Empty;
+    }
+
+    private static bool LooksPredominantlyEnglish(string value)
+    {
+        var latin = value.Count(ch => ch is >= 'A' and <= 'Z' or >= 'a' and <= 'z');
+        var letters = value.Count(char.IsLetter);
+        if (latin < 4 || latin < letters * 0.75) return false;
+        var words = System.Text.RegularExpressions.Regex.Matches(
+                value.ToLowerInvariant(), @"[a-z]+")
+            .Select(match => match.Value).ToArray();
+        return words.Count(EnglishHints.Contains) >= 2;
+    }
+}
 
 internal sealed class VideoTranslationContextWindow(VideoDubbingModeProfile profile)
 {
@@ -252,6 +348,11 @@ internal sealed class RecentVideoPhraseGuard(int capacity = 8,
 
         var shorter = first.Length <= second.Length ? first : second;
         var longer = first.Length > second.Length ? first : second;
+        var shorterWordCount = shorter.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+        if (shorter.Length >= 4 && shorterWordCount <= 3 &&
+            $" {longer} ".Contains($" {shorter} ", StringComparison.Ordinal))
+            return true;
+
         if (shorter.Length >= 12 && longer.Contains(shorter, StringComparison.Ordinal) &&
             shorter.Length / (double)longer.Length >= 0.65)
             return true;

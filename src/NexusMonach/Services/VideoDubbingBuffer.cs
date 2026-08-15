@@ -297,6 +297,13 @@ internal sealed class VideoDubbingDiagnosticLog : IAsyncDisposable
             _writer = new StreamWriter(FilePath, append: false,
                 new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)) { AutoFlush = true };
             Mode = mode;
+            _writer.WriteLine(JsonSerializer.Serialize(new
+            {
+                TimestampUtc = DateTimeOffset.UtcNow,
+                Stage = "session-start",
+                Mode = Mode.ToString()
+            }));
+            _writer.Flush();
         }
         catch (Exception ex)
         {
@@ -330,7 +337,11 @@ internal sealed class VideoDubbingDiagnosticLog : IAsyncDisposable
             ReadyAudioSeconds = reserve.Seconds
         });
         await _gate.WaitAsync().ConfigureAwait(false);
-        try { await _writer.WriteLineAsync(payload).ConfigureAwait(false); }
+        try
+        {
+            await _writer.WriteLineAsync(payload).ConfigureAwait(false);
+            await _writer.FlushAsync().ConfigureAwait(false);
+        }
         catch (Exception ex)
         {
             CrashReportService.RecordNonFatal("video-translation",

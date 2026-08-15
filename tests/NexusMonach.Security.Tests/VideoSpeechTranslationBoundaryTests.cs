@@ -86,4 +86,63 @@ public sealed class VideoSpeechTranslationBoundaryTests
         Assert.False(guard.IsNovel("Первая длинная переведенная фраза!", now.AddSeconds(2)));
         Assert.True(guard.IsNovel("Первая длинная переведённая фраза", now.AddSeconds(11)));
     }
+
+    [Theory]
+    [InlineData("This is the most durable iPhone ever", "iPhone")]
+    [InlineData("Ceramic Shield protects the front", "front")]
+    [InlineData("It is more scratch resistant", "resistant")]
+    public void RecentPhraseGuard_BlocksShortOverlapTails(string completePhrase, string overlapTail)
+    {
+        var guard = new RecentVideoPhraseGuard();
+        var now = DateTimeOffset.UtcNow;
+
+        Assert.True(guard.IsNovel(completePhrase, now));
+        Assert.False(guard.IsNovel(overlapTail, now.AddSeconds(1)));
+    }
+
+    [Theory]
+    [InlineData("The camera is ready.", "Камера готова.", true)]
+    [InlineData("The camera is ready.", "Камера готова........В В В В В В В В В В", false)]
+    [InlineData("For vivid images and sharp details.",
+        "Для ярких изображений и деталей............................................................", false)]
+    [InlineData("Use the applications you already know.",
+        "Используйте приложения, которые вы уже знаете.", true)]
+    public void VideoTranslationQuality_RejectsRunawayModelOutput(
+        string source, string translated, bool expected)
+    {
+        Assert.Equal(expected,
+            LocalIntelligenceService.ValidateVideoTranslation(source, translated).Length > 0);
+    }
+
+    [Fact]
+    public void VideoLanguageTracker_LocksEnglishAcrossNoisyShortWindows()
+    {
+        var tracker = new VideoSourceLanguageTracker();
+
+        Assert.Equal("en", tracker.Observe("We had to start again.", "english"));
+        Assert.Equal("en", tracker.Observe("The camera is ready.", "english"));
+        Assert.Equal("en", tracker.Observe("走 So, it wakes fast.", "chinese"));
+        Assert.Equal("en", tracker.Observe("So das mag Bookmail.", "german"));
+    }
+
+    [Fact]
+    public void VideoLanguageTracker_DoesNotForceFirstGermanPhraseToEnglish()
+    {
+        var tracker = new VideoSourceLanguageTracker();
+
+        Assert.Equal("de", tracker.Observe("Guten Tag und willkommen.", "german"));
+    }
+
+    [Fact]
+    public void VideoTranslation_SplitsMultipleSentencesWithoutLosingTheirOrder()
+    {
+        var units = LocalIntelligenceService.SplitVideoTranslationUnits(
+            "Payment is made on site. Somebody will wait for you there. Really?");
+
+        Assert.Equal(3, units.Count);
+        Assert.Equal("Payment is made on site.", units[0]);
+        Assert.Equal("Somebody will wait for you there.", units[1]);
+        Assert.Equal("Really?", units[2]);
+    }
+
 }

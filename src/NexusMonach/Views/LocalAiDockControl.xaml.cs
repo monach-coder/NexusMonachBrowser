@@ -199,16 +199,28 @@ public partial class LocalAiDockControl : UserControl
         var finalStatus = "Перевод звука остановлен.";
         var profile = VideoDubbingPolicy.ForMode(videoMode);
         await using var diagnostics = new VideoDubbingDiagnosticLog(videoMode);
+        IContinuousAudioCaptureSession? earlyLoopback = null;
         try
         {
             CrashReportService.AddBreadcrumb("video-translation", "warmup-started");
             await tab.UpdateLiveAudioTranslationStatusAsync(
-                "Один раз прогреваю Whisper, OPUS и русский голос…");
-            await Task.WhenAll(
+                "Слушаю начало видео · параллельно прогреваю локальные модели…");
+
+            // Capture starts before model warm-up. The old ordering let the video
+            // continue for five to ten seconds and permanently lost its opening.
+            var firstDirectStartedAt = DateTimeOffset.UtcNow;
+            var firstDirectTask = tab.CaptureActiveVideoAudioAsync(
+                profile.SegmentMilliseconds, session.Token,
+                profile.SegmentOverlapMilliseconds);
+            var earlyLoopbackTask = StartEarlyLoopbackAsync();
+            var warmupTask = Task.WhenAll(
                 WhisperService.WarmUpAsync(WhisperLane.Dubbing, session.Token),
                 TranslationService.WarmUpForLiveVideoAsync(
                     includeAllSourceRoutes: false, cancellationToken: session.Token),
                 VideoDubbingVoiceService.WarmUpAsync(session.Token));
+            var firstDirect = await firstDirectTask;
+            earlyLoopback = await earlyLoopbackTask;
+            await warmupTask;
             CrashReportService.AddBreadcrumb("video-translation", "warmup-completed");
             await tab.EnableVideoDubbingMixAsync();
             await tab.UpdateLiveAudioTranslationStatusAsync(
@@ -254,16 +266,19 @@ public partial class LocalAiDockControl : UserControl
                 }
             }
 
-            AudioCaptureResult firstDirect;
-            var firstDirectStartedAt = DateTimeOffset.UtcNow;
             var silentDirectProbes = 0;
             var useLoopback = false;
+            var useCapturedOpening = true;
             while (true)
             {
-                firstDirectStartedAt = DateTimeOffset.UtcNow;
-                firstDirect = await tab.CaptureActiveVideoAudioAsync(
-                    profile.SegmentMilliseconds, session.Token,
-                    profile.SegmentOverlapMilliseconds);
+                if (!useCapturedOpening)
+                {
+                    firstDirectStartedAt = DateTimeOffset.UtcNow;
+                    firstDirect = await tab.CaptureActiveVideoAudioAsync(
+                        profile.SegmentMilliseconds, session.Token,
+                        profile.SegmentOverlapMilliseconds);
+                }
+                useCapturedOpening = false;
                 if (firstDirect.WaitingForPlayback)
                 {
                     await tab.UpdateLiveAudioTranslationStatusAsync(
@@ -276,6 +291,11 @@ public partial class LocalAiDockControl : UserControl
                 if (VideoDubbingPolicy.IsSilentDirectCapture(
                         firstDirect.Success, firstDirect.WavBase64))
                 {
+                    if (earlyLoopback?.IsProcessIsolated == true)
+                    {
+                        useLoopback = true;
+                        break;
+                    }
                     silentDirectProbes++;
                     if (silentDirectProbes < VideoDubbingPolicy.DirectSilenceProbeLimit)
                     {
@@ -292,6 +312,11 @@ public partial class LocalAiDockControl : UserControl
             if (VideoDubbingPolicy.HasUsableDirectAudio(
                     firstDirect.Success, firstDirect.WavBase64))
             {
+                if (earlyLoopback is not null)
+                {
+                    await earlyLoopback.DisposeAsync();
+                    earlyLoopback = null;
+                }
                 CrashReportService.AddBreadcrumb("video-translation", "direct-capture-selected");
                 await tab.UpdateLiveAudioTranslationStatusAsync(
                     "Прямой перевод · распознавание не пропускает речь во время озвучки");
@@ -400,11 +425,15 @@ public partial class LocalAiDockControl : UserControl
                 // исключительно захват общего аудиоустройства.
                 await tab.UpdateLiveAudioTranslationStatusAsync(
                     "Подключаю изолированный аудиопоток WebView2…");
-                await using var audio = await SystemAudioCaptureService.StartPreferredContinuousCaptureAsync(
-                    tab.WebViewProcessId,
-                    segmentMilliseconds: profile.SegmentMilliseconds,
-                    overlapMilliseconds: profile.SegmentOverlapMilliseconds,
-                    cancellationToken: session.Token);
+                var audio = earlyLoopback ??
+                            await SystemAudioCaptureService.StartPreferredContinuousCaptureAsync(
+                                tab.WebViewProcessId,
+                                segmentMilliseconds: profile.SegmentMilliseconds,
+                                overlapMilliseconds: profile.SegmentOverlapMilliseconds,
+                                cancellationToken: session.Token);
+                earlyLoopback = null;
+                await using (audio)
+                {
                 await tab.UpdateLiveAudioTranslationStatusAsync(audio.IsProcessIsolated
                     ? "Закадровый перевод · изолированный поток WebView2 · непрерывное видео"
                     : "Совместимый перевод · видео воспроизводится непрерывно");
@@ -487,6 +516,26 @@ public partial class LocalAiDockControl : UserControl
                     }
                     finally { await dubbingBuffer.CompleteAsync(); }
                 }
+                }
+            }
+
+            async Task<IContinuousAudioCaptureSession?> StartEarlyLoopbackAsync()
+            {
+                try
+                {
+                    return await SystemAudioCaptureService.StartPreferredContinuousCaptureAsync(
+                        tab.WebViewProcessId,
+                        segmentMilliseconds: profile.SegmentMilliseconds,
+                        overlapMilliseconds: profile.SegmentOverlapMilliseconds,
+                        cancellationToken: session.Token);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    CrashReportService.RecordNonFatal("video-translation",
+                        "early-loopback-unavailable", ex);
+                    return null;
+                }
             }
         }
         catch (OperationCanceledException) { finalStatus = "Перевод звука остановлен."; }
@@ -497,6 +546,8 @@ public partial class LocalAiDockControl : UserControl
         }
         finally
         {
+            if (earlyLoopback is not null)
+                try { await earlyLoopback.DisposeAsync(); } catch { }
             VideoDubbingVoiceService.Stop();
             Interlocked.CompareExchange(ref _videoCancellation, null, session);
             session.Dispose();
