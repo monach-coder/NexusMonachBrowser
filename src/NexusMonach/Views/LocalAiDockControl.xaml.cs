@@ -5,6 +5,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Text.Json;
 using System.Diagnostics;
+using System.Net.Http;
 using System.Threading.Channels;
 using Microsoft.Win32;
 using NexusMonach.Intelligence;
@@ -24,6 +25,7 @@ public partial class LocalAiDockControl : UserControl
     private IReadOnlyList<string> _lastResearchNotes = [];
     private string _lastResearchQuery = string.Empty;
     private string? _shoppingImagePath;
+    private bool _shoppingAllowsCrossSiteResults;
     private readonly Dictionary<string, NexusSearchReport> _backgroundResearch =
         new(StringComparer.OrdinalIgnoreCase);
     private bool _showingBackgroundResearch;
@@ -502,14 +504,20 @@ public partial class LocalAiDockControl : UserControl
         ShoppingAgentPanel.Visibility = Visibility.Visible;
         ShoppingQueryBox.Text = "Что нужно найти?";
         _shoppingImagePath = null;
+        _shoppingAllowsCrossSiteResults = false;
         ShoppingImageNameText.Text = "Фото не выбрано";
+        var surface = GetShoppingSurface(tab);
         if (_backgroundResearch.TryGetValue(tab.CurrentUrl, out var research))
             ShowTextResult(FormatBackgroundResearch(research) +
                 "\n\nНиже можно отдельно найти товары в каталоге этого сайта.");
+        else if (surface is "new-tab" or "search-provider")
+            ShowTextResult("Введите товар и нажмите «Начать поиск» или Enter. Следопыт запросит настроенную поисковую машину, прочитает найденные страницы и локально соберёт сравнение. Ничего не покупается и не добавляется в корзину.");
         else
-            ShowTextResult("Введите описание товара или выберите фотографию, затем нажмите «Начать поиск». Nexus просмотрит до пяти страниц текущего сайта и покажет 3–5 наиболее подходящих карточек. Корзина, вход и оформление заказа не затрагиваются.");
+            ShowTextResult("Введите описание товара или выберите фотографию, затем нажмите «Начать поиск» или Enter. Следопыт сначала использует поиск этого сайта и просмотрит до пяти страниц. Если каталог не читается, он выполнит резервный поиск только по этому домену. Корзина, вход и оформление заказа не затрагиваются.");
         StatusText.Text = NexusFabricRuntime.IsAvailable
-            ? "Nexus Intelligence Fabric готов к поиску."
+            ? surface is "new-tab" or "search-provider"
+                ? "Режим: поиск через настроенную поисковую машину. Запуск — по кнопке или Enter."
+                : "Режим: поиск и сравнение на текущем сайте. Запуск — по кнопке или Enter."
             : NexusFabricRuntime.Status.Message;
         ShoppingQueryBox.Focus();
         ShoppingQueryBox.SelectAll();
@@ -732,130 +740,220 @@ public partial class LocalAiDockControl : UserControl
 
     private async Task RunShoppingAgentAsync()
     {
-        if (_tab is null || UrlService.IsInternal(_tab.CurrentUrl))
-        { StatusText.Text = "Открой сайт магазина или каталога."; return; }
+        var tab = _tab;
+        var surface = tab is null ? "unknown" : GetShoppingSurface(tab);
+        var runId = SledopytDiagnosticsService.Begin("shopping", "button-or-enter", surface);
+        if (tab is null)
+        {
+            SledopytDiagnosticsService.Record("shopping", "blocked", "failed", code: "tab-unavailable",
+                runId: runId, trigger: "button-or-enter", surface: surface);
+            StatusText.Text = "Активная вкладка недоступна.";
+            return;
+        }
         var query = ShoppingQueryBox.Text.Trim();
         if (query.StartsWith("Что нужно", StringComparison.Ordinal)) query = string.Empty;
         if (string.IsNullOrWhiteSpace(query) && string.IsNullOrWhiteSpace(_shoppingImagePath))
-        { StatusText.Text = "Введите описание товара или выберите фотографию."; return; }
-        if (_model is null) { await EnsureModelAsync(); if (_model is null) return; }
-        _cancellation?.Cancel(); _cancellation = new CancellationTokenSource();
+        {
+            SledopytDiagnosticsService.Record("shopping", "blocked", "failed", code: "missing-query",
+                runId: runId, trigger: "button-or-enter", surface: surface);
+            StatusText.Text = "Введите описание товара или выберите фотографию.";
+            return;
+        }
+        if (_model is null)
+        {
+            await EnsureModelAsync();
+            if (_model is null)
+            {
+                SledopytDiagnosticsService.Record("shopping", "blocked", "failed", code: "model-unavailable",
+                    runId: runId, trigger: "button-or-enter", surface: surface);
+                return;
+            }
+        }
+        _cancellation?.Cancel();
+        var operation = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        _cancellation = operation;
         CancelButton.IsEnabled = true; ResultBox.Clear();
         var stopwatch = Stopwatch.StartNew();
         var rawCount = 0;
         var pagesViewed = 0;
-        SledopytDiagnosticsService.Record("shopping", "started", "success");
+        var globalSearch = surface is "new-tab" or "search-provider";
+        _shoppingAllowsCrossSiteResults = globalSearch;
+        SledopytDiagnosticsService.Record("shopping", "started", "success", runId: runId,
+            trigger: "button-or-enter", surface: surface);
         CrashReportService.AddBreadcrumb("sledopyt", "shopping-started");
-        VoiceAssistantService.Announce("Следопыт начал анализ каталога.",
-            VoiceAnnouncementPriority.Important, _tab.IsPrivate);
+        VoiceAssistantService.Announce(globalSearch
+                ? "Следопыт начал поиск товаров через поисковую машину."
+                : "Следопыт начал анализ каталога.",
+            VoiceAnnouncementPriority.Important, tab.IsPrivate);
         try
         {
             if (!string.IsNullOrWhiteSpace(_shoppingImagePath))
             {
-                StatusText.Text = "Nexus Vision локально распознаёт товар на фото…";
-                var imageInfo = new FileInfo(_shoppingImagePath);
-                if (!imageInfo.Exists || imageInfo.Length > 20 * 1024 * 1024)
-                    throw new InvalidOperationException("Изображение не найдено или превышает безопасный лимит 20 МБ.");
-                var imageAnswer = await NexusFabricRuntime.UnderstandImageAsync(
-                    await File.ReadAllBytesAsync(_shoppingImagePath, _cancellation.Token), _cancellation.Token);
-                using var imageDocument = JsonDocument.Parse(LocalIntelligenceService.ExtractJson(imageAnswer));
-                var imageQuery = imageDocument.RootElement.TryGetProperty("query", out var q) ? q.GetString() : null;
-                if (string.IsNullOrWhiteSpace(imageQuery))
-                    throw new InvalidOperationException("Nexus Vision не смог составить запрос по фотографии.");
-                query = string.IsNullOrWhiteSpace(query) ? imageQuery : query + ". По фотографии: " + imageQuery;
-                ShoppingQueryBox.Text = query;
+                try
+                {
+                    StatusText.Text = "Nexus Vision локально распознаёт товар на фото…";
+                    var imageInfo = new FileInfo(_shoppingImagePath);
+                    if (!imageInfo.Exists || imageInfo.Length > 20 * 1024 * 1024)
+                        throw new InvalidOperationException("Изображение не найдено или превышает безопасный лимит 20 МБ.");
+                    var imageAnswer = await NexusFabricRuntime.UnderstandImageAsync(
+                        await File.ReadAllBytesAsync(_shoppingImagePath, operation.Token), operation.Token);
+                    using var imageDocument = JsonDocument.Parse(LocalIntelligenceService.ExtractJson(imageAnswer));
+                    var imageQuery = imageDocument.RootElement.TryGetProperty("query", out var q) ? q.GetString() : null;
+                    if (string.IsNullOrWhiteSpace(imageQuery))
+                        throw new InvalidOperationException("Nexus Vision не смог составить запрос по фотографии.");
+                    query = string.IsNullOrWhiteSpace(query) ? imageQuery : query + ". По фотографии: " + imageQuery;
+                    ShoppingQueryBox.Text = query;
+                    SledopytDiagnosticsService.Record("shopping", "vision", "success",
+                        stopwatch.ElapsedMilliseconds, resultCount: 1, runId: runId,
+                        trigger: "button-or-enter", surface: surface);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    var code = !AiModelCatalog.VisionReady ? "vision-unavailable" : "vision-failed";
+                    SledopytDiagnosticsService.Record("shopping", "vision", "failed",
+                        stopwatch.ElapsedMilliseconds, code: code, runId: runId,
+                        trigger: "button-or-enter", surface: surface);
+                    throw;
+                }
             }
-            StatusText.Text = "Nexus Следопыт находит каталог и ждёт обновления DOM…";
-            var searched = await _tab.SearchCurrentSiteForAgentAsync(query, _cancellation.Token);
-            if (!searched)
-                StatusText.Text = "Поле поиска не найдено — анализирую открытый каталог и его страницы…";
             var rawItems = new List<string>();
             var itemKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { _tab.CurrentUrl };
             var pages = 0;
             var previewCount = 0;
             ShoppingReport? preview = null;
+            string CardsJson() => "[" + string.Join(",", rawItems) + "]";
+            void AppendCardsJson(string json)
+            {
+                try
+                {
+                    using var document = JsonDocument.Parse(json);
+                    if (document.RootElement.ValueKind != JsonValueKind.Array) return;
+                    foreach (var item in document.RootElement.EnumerateArray())
+                    {
+                        var key = item.TryGetProperty("url", out var url) && !string.IsNullOrWhiteSpace(url.GetString())
+                            ? url.GetString()!
+                            : item.TryGetProperty("name", out var name) ? name.GetString() ?? string.Empty : string.Empty;
+                        if (string.IsNullOrWhiteSpace(key) || !itemKeys.Add(key)) continue;
+                        rawItems.Add(item.GetRawText());
+                        if (rawItems.Count >= 150) break;
+                    }
+                }
+                catch (JsonException) { }
+            }
             void UpdatePreview()
             {
                 if (rawItems.Count == 0 || rawItems.Count == previewCount) return;
-                var json = "[" + string.Join(",", rawItems) + "]";
-                var candidate = LocalIntelligenceService.BuildShoppingPreview(query, json);
+                var candidate = LocalIntelligenceService.BuildShoppingPreview(query, CardsJson());
                 if (candidate.Items.Count == 0) return;
                 preview = candidate;
                 previewCount = rawItems.Count;
                 ShowShoppingCards(candidate);
                 StatusText.Text = $"Уже найдено карточек: {candidate.Items.Count} · продолжаю обход каталога…";
             }
-            for (var page = 1; page <= 5 && rawItems.Count < 150; page++)
+
+            if (globalSearch)
             {
-                pages = page;
-                pagesViewed = page;
-                StatusText.Text = $"Сбор результатов: страница {page} из 5…";
-                async Task AppendCurrentPageAsync()
-                {
-                    var json = await _tab.ExtractShoppingCardsAsync();
-                    try
-                    {
-                        using var document = JsonDocument.Parse(json);
-                        if (document.RootElement.ValueKind != JsonValueKind.Array) return;
-                        foreach (var item in document.RootElement.EnumerateArray())
-                        {
-                            var key = item.TryGetProperty("url", out var url) && !string.IsNullOrWhiteSpace(url.GetString())
-                                ? url.GetString()!
-                                : item.TryGetProperty("name", out var name) ? name.GetString() ?? string.Empty : string.Empty;
-                            if (string.IsNullOrWhiteSpace(key) || !itemKeys.Add(key)) continue;
-                            rawItems.Add(item.GetRawText());
-                            if (rawItems.Count >= 150) break;
-                        }
-                    }
-                    catch (JsonException) { }
-                }
-                await AppendCurrentPageAsync();
+                StatusText.Text = "Поисковая машина находит страницы товаров; Nexus читает их локально…";
+                var progress = new Progress<string>(message => StatusText.Text = message);
+                var discovery = await NexusSearchService.SearchShoppingAsync(query, null, progress,
+                    operation.Token);
+                AppendCardsJson(discovery.CardsJson);
+                rawCount = rawItems.Count;
+                pages = discovery.DiscoveryCount;
+                pagesViewed = discovery.DiscoveryCount;
+                SledopytDiagnosticsService.Record("shopping", "provider-search",
+                    rawCount > 0 ? "success" : "failed", stopwatch.ElapsedMilliseconds,
+                    discovery.DiscoveryCount, rawCount, rawCount > 0 ? "ok" : "no-cards",
+                    runId, "button-or-enter", surface);
                 UpdatePreview();
-                for (var scrollRound = 0; scrollRound < 6 && rawItems.Count < 150; scrollRound++)
+            }
+            else
+            {
+                StatusText.Text = "Nexus Следопыт находит поиск сайта и ждёт обновления DOM…";
+                var searched = await tab.SearchCurrentSiteForAgentAsync(query, operation.Token);
+                SledopytDiagnosticsService.Record("shopping", "search-submit",
+                    searched ? "success" : "partial", stopwatch.ElapsedMilliseconds,
+                    code: searched ? "site-search-confirmed" : "search-field-not-found",
+                    runId: runId, trigger: "button-or-enter", surface: surface);
+                if (!searched)
+                    StatusText.Text = "Поле поиска не найдено — читаю открытый каталог, затем проверю домен через поисковую машину…";
+                var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { tab.CurrentUrl };
+                for (var page = 1; page <= 5 && rawItems.Count < 150; page++)
                 {
-                    var catalogChanged = await _tab.ScrollShoppingResultsAsync();
+                    pages = page;
+                    pagesViewed = page;
+                    StatusText.Text = $"Сбор результатов: страница {page} из 5…";
+                    async Task AppendCurrentPageAsync()
+                    {
+                        AppendCardsJson(await tab.ExtractShoppingCardsAsync());
+                    }
                     await AppendCurrentPageAsync();
                     UpdatePreview();
-                    if (!catalogChanged) break;
+                    SledopytDiagnosticsService.Record("shopping", "page-extracted",
+                        rawItems.Count > 0 ? "success" : "partial", stopwatch.ElapsedMilliseconds,
+                        rawItems.Count, code: $"page-{page}", runId: runId,
+                        trigger: "button-or-enter", surface: surface);
+                    for (var scrollRound = 0; scrollRound < 6 && rawItems.Count < 150; scrollRound++)
+                    {
+                        var catalogChanged = await tab.ScrollShoppingResultsAsync();
+                        await AppendCurrentPageAsync();
+                        UpdatePreview();
+                        if (!catalogChanged) break;
+                    }
+                    var next = await tab.GetNextShoppingPageUrlAsync();
+                    if (page == 5) break;
+                    if (string.IsNullOrWhiteSpace(next))
+                    {
+                        StatusText.Text = $"Поиск кнопки следующей страницы после {page}…";
+                        if (!await tab.TryClickNextShoppingPageAsync()) break;
+                        continue;
+                    }
+                    if (!visited.Add(next)) break;
+                    StatusText.Text = $"Переход к странице {page + 1}…";
+                    if (!await tab.NavigateAndWaitAsync(next, TimeSpan.FromSeconds(20))) break;
+                    await Task.Delay(1200, operation.Token);
                 }
-                var next = await _tab.GetNextShoppingPageUrlAsync();
-                if (page == 5) break;
-                if (string.IsNullOrWhiteSpace(next))
+
+                if (rawItems.Count == 0)
                 {
-                    StatusText.Text = $"Поиск кнопки следующей страницы после {page}…";
-                    if (!await _tab.TryClickNextShoppingPageAsync()) break;
-                    continue;
+                    StatusText.Text = "Карточки сайта не прочитаны — выполняю резервный поиск только по этому домену…";
+                    var progress = new Progress<string>(message => StatusText.Text = message);
+                    var discovery = await NexusSearchService.SearchShoppingAsync(query, tab.CurrentHost, progress,
+                        operation.Token);
+                    AppendCardsJson(discovery.CardsJson);
+                    SledopytDiagnosticsService.Record("shopping", "site-fallback",
+                        rawItems.Count > 0 ? "success" : "failed", stopwatch.ElapsedMilliseconds,
+                        discovery.DiscoveryCount, rawItems.Count, rawItems.Count > 0 ? "ok" : "no-cards",
+                        runId, "button-or-enter", surface);
+                    UpdatePreview();
                 }
-                if (!visited.Add(next)) break;
-                StatusText.Text = $"Переход к странице {page + 1}…";
-                if (!await _tab.NavigateAndWaitAsync(next, TimeSpan.FromSeconds(20))) break;
-                await Task.Delay(1200, _cancellation.Token);
             }
             var count = rawItems.Count;
             rawCount = count;
             if (count == 0)
             {
-                StatusText.Text = "Локальный AI определяет, что показал сайт…";
-                var visibleText = await _tab.GetReadablePageTextAsync();
-                var diagnosis = await LocalIntelligenceService.DiagnoseAgentPageAsync(
-                    query, _tab.Title, _tab.CurrentUrl, visibleText, _cancellation.Token);
+                var diagnosis = globalSearch
+                    ? "Поисковая машина не вернула страниц, которые можно безопасно использовать как карточки товаров."
+                    : "Ни DOM каталога, ни ограниченный поиск по домену не дали проверяемых карточек товаров.";
                 throw new InvalidOperationException("Карточки товаров не извлечены. " + diagnosis);
             }
-            var cards = "[" + string.Join(",", rawItems) + "]";
+            var cards = CardsJson();
             preview ??= LocalIntelligenceService.BuildShoppingPreview(query, cards);
             if (preview.Items.Count > 0) ShowShoppingCards(preview);
             StatusText.Text = $"Карточки готовы · уточняю итог среди {count} вариантов локально…";
+            SledopytDiagnosticsService.Record("shopping", "ranking", "success",
+                stopwatch.ElapsedMilliseconds, count, preview.Items.Count, runId: runId,
+                trigger: "button-or-enter", surface: surface);
             ShoppingReport report = preview;
-            using (var rankingBudget = CancellationTokenSource.CreateLinkedTokenSource(_cancellation.Token))
+            using (var rankingBudget = CancellationTokenSource.CreateLinkedTokenSource(operation.Token))
             {
                 rankingBudget.CancelAfter(TimeSpan.FromSeconds(45));
                 try
                 {
                     report = await LocalIntelligenceService.AnalyzeShoppingResultsAsync(
-                        query, _tab.CurrentHost, cards, rankingBudget.Token);
+                        query, globalSearch ? "поисковая машина" : tab.CurrentHost, cards, rankingBudget.Token);
                 }
-                catch (OperationCanceledException) when (!_cancellation.IsCancellationRequested)
+                catch (OperationCanceledException) when (!operation.IsCancellationRequested)
                 {
                     // Deterministic cards are already visible; a slow optional
                     // recommendation must not make the search appear unfinished.
@@ -866,41 +964,69 @@ public partial class LocalAiDockControl : UserControl
                 throw new InvalidOperationException(
                     "Каталог открыт, но карточек, связанных с запросом, не найдено. " +
                     "Следопыт не будет подменять результат несвязанными товарами.");
-            if (!_tab.IsPrivate)
-                await KnowledgeGraphService.RecordShoppingResearchAsync(report, _cancellation.Token);
+            if (!tab.IsPrivate)
+                await KnowledgeGraphService.RecordShoppingResearchAsync(report, operation.Token);
             ShowShoppingCards(report);
-            StatusText.Text = $"Готово. Просмотрено страниц: {pages}; вариантов в выводе: {report.Items.Count}.";
+            StatusText.Text = globalSearch
+                ? $"Готово. Поиском изучено источников: {pages}; вариантов в выводе: {report.Items.Count}."
+                : $"Готово. Просмотрено страниц: {pages}; вариантов в выводе: {report.Items.Count}.";
             SledopytDiagnosticsService.Record("shopping", "completed", "success",
-                stopwatch.ElapsedMilliseconds, rawCount, report.Items.Count, $"pages-{pagesViewed}");
+                stopwatch.ElapsedMilliseconds, rawCount, report.Items.Count, $"pages-{pagesViewed}",
+                runId, "button-or-enter", surface);
             CrashReportService.AddBreadcrumb("sledopyt", "shopping-completed");
             var top = report.Items.FirstOrDefault();
             VoiceAssistantService.Announce(
                 $"Анализ каталога завершён. Найдено вариантов: {report.Items.Count}. " +
                 (top is null ? string.Empty : $"Первый вариант: {top.Name}. Цена: {top.Price}."),
-                VoiceAnnouncementPriority.Important, _tab.IsPrivate);
+                VoiceAnnouncementPriority.Important, tab.IsPrivate);
+        }
+        catch (OperationCanceledException) when (operation.IsCancellationRequested)
+        {
+            SledopytDiagnosticsService.Record("shopping", "cancelled", "partial",
+                stopwatch.ElapsedMilliseconds, rawCount, code: "user-or-timeout", runId: runId,
+                trigger: "button-or-enter", surface: surface);
+            StatusText.Text = "Сбор остановлен.";
         }
         catch (OperationCanceledException)
         {
-            SledopytDiagnosticsService.Record("shopping", "cancelled", "partial",
-                stopwatch.ElapsedMilliseconds, rawCount, code: "user-or-timeout");
-            StatusText.Text = "Сбор остановлен.";
+            SledopytDiagnosticsService.Record("shopping", "failed", "failed",
+                stopwatch.ElapsedMilliseconds, rawCount, code: "stage-timeout", runId: runId,
+                trigger: "button-or-enter", surface: surface);
+            ResultBox.Text = "Один из сетевых этапов превысил лимит времени. Попробуйте повторить запрос или сменить поисковую систему.";
+            StatusText.Text = "Nexus Следопыт не завершил сетевой этап.";
         }
         catch (Exception ex)
         {
             SledopytDiagnosticsService.Record("shopping", "failed", "failed",
-                stopwatch.ElapsedMilliseconds, rawCount, code: ClassifyShoppingFailure(ex));
+                stopwatch.ElapsedMilliseconds, rawCount, code: ClassifyShoppingFailure(ex), runId: runId,
+                trigger: "button-or-enter", surface: surface);
             CrashReportService.AddBreadcrumb("sledopyt", "shopping-failed");
             ResultBox.Text = ex.Message;
             StatusText.Text = "Nexus Следопыт не собрал сравнение.";
             VoiceAssistantService.Announce("Следопыт не смог собрать сравнение товаров.",
-                VoiceAnnouncementPriority.Critical, _tab.IsPrivate);
+                VoiceAnnouncementPriority.Critical, tab.IsPrivate);
         }
-        finally { CancelButton.IsEnabled = false; }
+        finally
+        {
+            if (ReferenceEquals(_cancellation, operation)) _cancellation = null;
+            operation.Dispose();
+            CancelButton.IsEnabled = false;
+        }
+    }
+
+    private static string GetShoppingSurface(BrowserTab tab)
+    {
+        if (tab.CurrentUrl.Equals(UrlService.NewTabUrl, StringComparison.OrdinalIgnoreCase)) return "new-tab";
+        if (UrlService.IsSearchProviderUrl(tab.CurrentUrl) ||
+            tab.CurrentUrl.StartsWith("https://nexus.local/search.html", StringComparison.OrdinalIgnoreCase))
+            return "search-provider";
+        return UrlService.IsInternal(tab.CurrentUrl) ? "new-tab" : "site";
     }
 
     private static string ClassifyShoppingFailure(Exception ex) => ex switch
     {
         TimeoutException => "timeout",
+        HttpRequestException => "network",
         JsonException => "invalid-response",
         InvalidOperationException => "catalog-unavailable",
         _ => "operation-error"
@@ -1017,10 +1143,12 @@ public partial class LocalAiDockControl : UserControl
     {
         if (sender is not Button { Tag: string url } || _tab?.Core is null) return;
         if (!Uri.TryCreate(url, UriKind.Absolute, out var target) ||
-            !Uri.TryCreate(_tab.CurrentUrl, UriKind.Absolute, out var current) ||
-            !(target.Host.Equals(current.Host, StringComparison.OrdinalIgnoreCase) ||
-              target.Host.EndsWith('.' + current.Host, StringComparison.OrdinalIgnoreCase) ||
-              current.Host.EndsWith('.' + target.Host, StringComparison.OrdinalIgnoreCase))) return;
+            !NexusSearchService.IsAllowedResultUrl(target.AbsoluteUri)) return;
+        if (!_shoppingAllowsCrossSiteResults &&
+            (!Uri.TryCreate(_tab.CurrentUrl, UriKind.Absolute, out var current) ||
+             !(target.Host.Equals(current.Host, StringComparison.OrdinalIgnoreCase) ||
+               target.Host.EndsWith('.' + current.Host, StringComparison.OrdinalIgnoreCase) ||
+               current.Host.EndsWith('.' + target.Host, StringComparison.OrdinalIgnoreCase)))) return;
         if (!_tab.IsPrivate)
             _ = KnowledgeGraphService.RecordResearchChoiceAsync(ShoppingQueryBox.Text.Trim(), target.AbsoluteUri);
         _tab.Core.Navigate(target.AbsoluteUri);

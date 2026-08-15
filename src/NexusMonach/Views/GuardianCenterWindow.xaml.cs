@@ -10,6 +10,7 @@ namespace NexusMonach.Views;
 public partial class GuardianCenterWindow : Window
 {
     private readonly ObservableCollection<GuardianReportSnapshot> _reports = [];
+    private bool _showingSledopytJournal;
 
     public GuardianCenterWindow()
     {
@@ -55,8 +56,12 @@ public partial class GuardianCenterWindow : Window
         _ => "Не проверена в dev-запуске"
     };
 
-    private void ReportsList_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e) =>
-        DetailsBox.Text = SelectedReport?.Details ?? string.Empty;
+    private void ReportsList_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (SelectedReport is not null) _showingSledopytJournal = false;
+        DetailsBox.Text = SelectedReport?.Details ??
+                          (_showingSledopytJournal ? SledopytDiagnosticsService.FormatForDisplay() : string.Empty);
+    }
 
     private void CreateTestReport_Click(object sender, RoutedEventArgs e)
     {
@@ -131,6 +136,7 @@ public partial class GuardianCenterWindow : Window
 
     private void SledopytJournal_Click(object sender, RoutedEventArgs e)
     {
+        _showingSledopytJournal = true;
         ReportsList.SelectedItem = null;
         DetailsBox.Text = SledopytDiagnosticsService.FormatForDisplay();
         DetailsBox.ScrollToHome();
@@ -215,8 +221,11 @@ public partial class GuardianCenterWindow : Window
 
     private void Copy_Click(object sender, RoutedEventArgs e)
     {
-        if (SelectedReport is null) return;
-        try { Clipboard.SetText(SelectedReport.Details); }
+        var text = _showingSledopytJournal
+            ? SledopytDiagnosticsService.FormatForDisplay()
+            : SelectedReport?.Details;
+        if (string.IsNullOrWhiteSpace(text)) return;
+        try { Clipboard.SetText(text); }
         catch (Exception ex)
         {
             GlassDialogWindow.Show(this, "Не удалось скопировать рапорт:\n\n" + ex.Message, "Nexus Guardian",
@@ -226,6 +235,21 @@ public partial class GuardianCenterWindow : Window
 
     private void Export_Click(object sender, RoutedEventArgs e)
     {
+        if (_showingSledopytJournal)
+        {
+            var journalDialog = new SaveFileDialog
+            {
+                Title = "Экспорт полного рапорта Nexus Следопыт",
+                FileName = $"nexus-sledopyt-report-{DateTime.Now:yyyyMMdd-HHmmss}.json",
+                DefaultExt = ".json",
+                Filter = "Sledopyt report (*.json)|*.json|Все файлы (*.*)|*.*"
+            };
+            if (journalDialog.ShowDialog(this) != true) return;
+            if (!SledopytDiagnosticsService.Export(journalDialog.FileName))
+                GlassDialogWindow.Show(this, "Не удалось экспортировать рапорт Следопыта.", "Nexus Guardian",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
         if (SelectedReport is null) return;
         var dialog = new SaveFileDialog
         {
@@ -287,8 +311,11 @@ public partial class GuardianCenterWindow : Window
     {
         try
         {
-            Directory.CreateDirectory(CrashReportService.VaultPath);
-            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{CrashReportService.VaultPath}\"")
+            var folder = _showingSledopytJournal
+                ? Path.GetDirectoryName(AppPaths.SledopytDiagnosticsFile)!
+                : CrashReportService.VaultPath;
+            Directory.CreateDirectory(folder);
+            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{folder}\"")
             {
                 UseShellExecute = true
             });

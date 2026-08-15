@@ -41,7 +41,7 @@ public static class AiModelCatalog
     public static string? TextModel => FindFile(TextRoot, "*.gguf");
     public static string? WhisperModel => FindFile(SpeechRoot, "ggml-base-q5_1.bin") ??
                                           FindFile(SpeechRoot, "ggml-small-q5_1.bin");
-    public static string? VisionModel => FindFile(VisionRoot, "*SmolVLM*Q8_0.gguf");
+    public static string? VisionModel => FindFile(VisionRoot, "SmolVLM*Q8_0.gguf");
     public static string? VisionProjector => FindFile(VisionRoot, "mmproj*.gguf");
     public static string? NodeExecutable => FindFile(NodeRoot, "node.exe");
     public static string SemanticAdapter => Path.Combine(AdapterRoot, "semantic.mjs");

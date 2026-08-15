@@ -48,7 +48,7 @@ public partial class MainWindow : Window
     private bool _localPortsAvailable;
     private readonly Dictionary<BrowserTab, string> _lastKnowledgeUrl = [];
     private readonly Dictionary<BrowserTab, CancellationTokenSource> _searchOperations = [];
-    private readonly Dictionary<BrowserTab, string> _pendingSearchFollowUp = [];
+    private readonly Dictionary<BrowserTab, PendingSiteResearch> _pendingSearchFollowUp = [];
     private readonly Dictionary<BrowserTab, SiteResearchContext> _siteResearchContexts = [];
     private readonly Dictionary<BrowserTab, CancellationTokenSource> _siteResearchOperations = [];
     private readonly SemaphoreSlim _voiceListenGate = new(1, 1);
@@ -62,7 +62,8 @@ public partial class MainWindow : Window
 
     public ObservableCollection<BrowserTab> Tabs { get; } = [];
     private BrowserTab? ActiveTab => TabsList.SelectedItem as BrowserTab;
-    private sealed record SiteResearchContext(string Query, string Host);
+    private sealed record PendingSiteResearch(string Query, string RunId, string Trigger);
+    private sealed record SiteResearchContext(string Query, string Host, string RunId, string Trigger);
 
     public MainWindow(bool isPrivate)
     {
@@ -160,18 +161,19 @@ public partial class MainWindow : Window
                 _lastKnowledgeUrl[tab] = current;
                 _ = IndexKnowledgeAsync(tab, current, previous);
             }
-            if (_pendingSearchFollowUp.TryGetValue(tab, out var searchQuery) &&
+            if (_pendingSearchFollowUp.TryGetValue(tab, out var pending) &&
                 !UrlService.IsInternal(tab.CurrentUrl) && !UrlService.IsSearchProviderUrl(tab.CurrentUrl))
             {
                 _pendingSearchFollowUp.Remove(tab);
-                _siteResearchContexts[tab] = new SiteResearchContext(searchQuery, tab.CurrentHost);
-                ScheduleSelectedSiteResearch(tab, searchQuery);
+                var context = new SiteResearchContext(pending.Query, tab.CurrentHost, pending.RunId, pending.Trigger);
+                _siteResearchContexts[tab] = context;
+                ScheduleSelectedSiteResearch(tab, context);
             }
             else if (_siteResearchContexts.TryGetValue(tab, out var context))
             {
                 if (IsSameSite(context.Host, tab.CurrentHost) &&
                     !UrlService.IsInternal(tab.CurrentUrl) && !UrlService.IsSearchProviderUrl(tab.CurrentUrl))
-                    ScheduleSelectedSiteResearch(tab, context.Query);
+                    ScheduleSelectedSiteResearch(tab, context);
                 else
                     StopSelectedSiteResearch(tab, forgetContext: true);
             }
@@ -184,12 +186,18 @@ public partial class MainWindow : Window
             else
                 NavigateActive(e.Value);
         };
-        tab.NexusSearchRequested += async (_, e) => await RunNexusSearchAsync(tab, e.Value);
+        tab.NexusSearchRequested += async (_, e) =>
+        {
+            BeginPendingSiteResearch(tab, e.Value, "nexus-search", "search-provider");
+            await RunNexusSearchAsync(tab, e.Value);
+        };
         tab.SearchResultRequested += async (_, e) =>
         {
             if (!NexusSearchService.IsAllowedResultUrl(e.Url) || !Uri.TryCreate(e.Url, UriKind.Absolute, out var target)) return;
             if (!_isPrivate) await NexusSearchService.RecordChoiceAsync(e.Query, target.AbsoluteUri);
-            _pendingSearchFollowUp[tab] = e.Query;
+            if (!_pendingSearchFollowUp.TryGetValue(tab, out var pending) ||
+                !pending.Query.Equals(e.Query, StringComparison.OrdinalIgnoreCase))
+                BeginPendingSiteResearch(tab, e.Query, "nexus-search", "search-provider");
             tab.Navigate(target.AbsoluteUri);
         };
         tab.SettingsRequested += (_, _) => Dispatcher.Invoke(ShowSettings);
@@ -255,7 +263,7 @@ public partial class MainWindow : Window
         if (UrlService.IsSearchQuery(input))
         {
             var query = input.Trim();
-            _pendingSearchFollowUp[tab] = query;
+            BeginPendingSiteResearch(tab, query, "omnibox", "search-provider");
             tab.Navigate(UrlService.Resolve(query));
         }
         else
@@ -263,12 +271,24 @@ public partial class MainWindow : Window
         return Task.CompletedTask;
     }
 
-    private void ScheduleSelectedSiteResearch(BrowserTab tab, string query)
+    private void BeginPendingSiteResearch(BrowserTab tab, string query, string trigger, string surface)
+    {
+        if (_pendingSearchFollowUp.Remove(tab, out var previous))
+            SledopytDiagnosticsService.Record("site-research", "cancelled", "partial",
+                code: "superseded-query", runId: previous.RunId, trigger: previous.Trigger,
+                surface: "search-provider");
+        var runId = SledopytDiagnosticsService.Begin("site-research", trigger, surface);
+        _pendingSearchFollowUp[tab] = new PendingSiteResearch(query.Trim(), runId, trigger);
+        SledopytDiagnosticsService.Record("site-research", "preflight", "success", code: "waiting-result",
+            runId: runId, trigger: trigger, surface: surface);
+    }
+
+    private void ScheduleSelectedSiteResearch(BrowserTab tab, SiteResearchContext context)
     {
         StopSelectedSiteResearch(tab, forgetContext: false);
         var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(90));
         _siteResearchOperations[tab] = cancellation;
-        _ = AnalyzeSelectedSearchResultAsync(tab, query, tab.CurrentUrl, cancellation);
+        _ = AnalyzeSelectedSearchResultAsync(tab, context, tab.CurrentUrl, cancellation);
     }
 
     private void StopSelectedSiteResearch(BrowserTab tab, bool forgetContext)
@@ -280,18 +300,26 @@ public partial class MainWindow : Window
         if (forgetContext) _siteResearchContexts.Remove(tab);
     }
 
-    private async Task AnalyzeSelectedSearchResultAsync(BrowserTab tab, string query, string sourceUrl,
+    private async Task AnalyzeSelectedSearchResultAsync(BrowserTab tab, SiteResearchContext context, string sourceUrl,
         CancellationTokenSource cancellation)
     {
+        var query = context.Query;
         var stopwatch = Stopwatch.StartNew();
         var candidateCount = 0;
-        SledopytDiagnosticsService.Record("site-research", "started", "success");
+        SledopytDiagnosticsService.Record("site-research", "started", "success", runId: context.RunId,
+            trigger: context.Trigger, surface: "site");
         CrashReportService.AddBreadcrumb("sledopyt", "site-research-started");
         try
         {
             await Task.Delay(TimeSpan.FromSeconds(2), cancellation.Token);
             if (!sourceUrl.Equals(tab.CurrentUrl, StringComparison.OrdinalIgnoreCase) ||
-                UrlService.IsInternal(tab.CurrentUrl) || UrlService.IsSearchProviderUrl(tab.CurrentUrl)) return;
+                UrlService.IsInternal(tab.CurrentUrl) || UrlService.IsSearchProviderUrl(tab.CurrentUrl))
+            {
+                SledopytDiagnosticsService.Record("site-research", "cancelled", "partial",
+                    stopwatch.ElapsedMilliseconds, code: "page-changed-before-start", runId: context.RunId,
+                    trigger: context.Trigger, surface: "site");
+                return;
+            }
             var sourceTitle = tab.Title;
             Dispatcher.Invoke(() =>
             {
@@ -300,18 +328,20 @@ public partial class MainWindow : Window
             });
             var pageText = await tab.GetReadablePageTextAsync();
             SledopytDiagnosticsService.Record("site-research", "page-read", "success",
-                stopwatch.ElapsedMilliseconds);
+                stopwatch.ElapsedMilliseconds, runId: context.RunId, trigger: context.Trigger, surface: "site");
             var links = await tab.GetResearchLinksAsync(query, 8);
             candidateCount = links.Count + 1;
             SledopytDiagnosticsService.Record("site-research", "links-read", "success",
-                stopwatch.ElapsedMilliseconds, candidateCount);
+                stopwatch.ElapsedMilliseconds, candidateCount, runId: context.RunId,
+                trigger: context.Trigger, surface: "site");
             var progress = new Progress<string>(message => LocalAiDock.UpdateBackgroundResearchProgress(tab, message));
             var report = await NexusSearchService.AnalyzeSelectedSiteAsync(
                 query, sourceTitle, sourceUrl, pageText, links, progress, cancellation.Token);
             if (!_isPrivate)
                 await KnowledgeGraphService.RecordResearchAsync(report, cancellation.Token, "исследование выбранного сайта");
             SledopytDiagnosticsService.Record("site-research", "completed", "success",
-                stopwatch.ElapsedMilliseconds, candidateCount, report.Items.Count);
+                stopwatch.ElapsedMilliseconds, candidateCount, report.Items.Count, runId: context.RunId,
+                trigger: context.Trigger, surface: "site");
             CrashReportService.AddBreadcrumb("sledopyt", "site-research-completed");
             Dispatcher.Invoke(() =>
             {
@@ -324,7 +354,8 @@ public partial class MainWindow : Window
         catch (OperationCanceledException)
         {
             SledopytDiagnosticsService.Record("site-research", "cancelled", "partial",
-                stopwatch.ElapsedMilliseconds, candidateCount, code: "navigation-or-timeout");
+                stopwatch.ElapsedMilliseconds, candidateCount, code: "navigation-or-timeout",
+                runId: context.RunId, trigger: context.Trigger, surface: "site");
             if (!_siteResearchOperations.TryGetValue(tab, out var active) || !ReferenceEquals(active, cancellation))
                 return;
             Dispatcher.Invoke(() =>
@@ -335,7 +366,8 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             SledopytDiagnosticsService.Record("site-research", "failed", "failed",
-                stopwatch.ElapsedMilliseconds, candidateCount, code: ClassifySledopytFailure(ex));
+                stopwatch.ElapsedMilliseconds, candidateCount, code: ClassifySledopytFailure(ex),
+                runId: context.RunId, trigger: context.Trigger, surface: "site");
             CrashReportService.AddBreadcrumb("sledopyt", "site-research-failed");
             Dispatcher.Invoke(() =>
             {
@@ -813,12 +845,6 @@ public partial class MainWindow : Window
     {
         var tab = ActiveTab;
         if (tab?.Core is null) return;
-        if (tab.CurrentUrl.Equals(UrlService.NewTabUrl, StringComparison.OrdinalIgnoreCase))
-        {
-            AddressBox.Focus();
-            AddressBox.SelectAll();
-            return;
-        }
         SshTerminalDock.Visibility = Visibility.Collapsed;
         await LocalAiDock.PrepareShoppingAgentAsync(tab);
     }
@@ -1142,6 +1168,7 @@ public partial class MainWindow : Window
         else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.W && ActiveTab is not null) { CloseTab(ActiveTab); e.Handled = true; }
         else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.L) { AddressBox.Focus(); AddressBox.SelectAll(); e.Handled = true; }
         else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.N) { NewPrivateWindow_Click(sender, e); e.Handled = true; }
+        else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.B) { ShowBookmarks_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.K) { ShowSmartCapsules_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.G) { ShowKnowledgeGraph_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.D) { Bookmark_Click(sender, e); e.Handled = true; }

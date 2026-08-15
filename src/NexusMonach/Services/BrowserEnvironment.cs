@@ -83,7 +83,8 @@ public static class BrowserEnvironment
     {
         foreach (var profile in Profiles.Values.Distinct().ToList())
         {
-            try { await profile.ClearBrowsingDataAsync(); }
+            try { await profile.ClearBrowsingDataAsync().WaitAsync(TimeSpan.FromSeconds(12)); }
+            catch (TimeoutException) { /* Закрытие браузера не должно зависеть от зависшего WebView2 profile. */ }
             catch { /* Профиль мог быть уже закрыт вместе с последней вкладкой. */ }
         }
     }
@@ -96,7 +97,8 @@ public static class BrowserEnvironment
             CoreWebView2BrowsingDataKinds.DiskCache;
         foreach (var profile in Profiles.Values.Distinct().ToList())
         {
-            try { await profile.ClearBrowsingDataAsync(ephemeral); }
+            try { await profile.ClearBrowsingDataAsync(ephemeral).WaitAsync(TimeSpan.FromSeconds(12)); }
+            catch (TimeoutException) { /* Очистка best effort; окно должно закрыться предсказуемо. */ }
             catch { /* Профиль мог быть уже закрыт вместе с последней вкладкой. */ }
         }
     }
