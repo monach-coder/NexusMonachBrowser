@@ -677,6 +677,26 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
             """);
     }
 
+    public async Task<double?> GetActiveVideoDurationAsync()
+    {
+        if (Core is null || UrlService.IsInternal(CurrentUrl)) return null;
+        try
+        {
+            var json = await Core.ExecuteScriptAsync("""
+                (()=>{const videos=[...document.querySelectorAll('video')]
+                  .filter(video=>video.getClientRects().length>0)
+                  .sort((left,right)=>(right.clientWidth*right.clientHeight)-(left.clientWidth*left.clientHeight));
+                  const video=videos.find(item=>!item.paused&&!item.ended)||videos[0];
+                  return video&&Number.isFinite(video.duration)&&video.duration>0?video.duration:null})()
+                """);
+            return double.TryParse(json, NumberStyles.Float, CultureInfo.InvariantCulture,
+                out var duration) && double.IsFinite(duration) && duration > 0
+                ? duration
+                : null;
+        }
+        catch { return null; }
+    }
+
     public async Task<AudioCaptureResult> CaptureActiveVideoAudioAsync(int milliseconds,
         CancellationToken cancellationToken = default, int overlapMilliseconds = 0)
     {
@@ -747,6 +767,8 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         await Core.ExecuteScriptAsync("""
             (()=>{const capture=window.__nexusLiveAudioCapture;if(capture){capture.closed=true;try{capture.processor.disconnect()}catch{}try{capture.source.disconnect()}catch{}try{capture.silent.disconnect()}catch{}try{capture.tracks.forEach(t=>t.stop())}catch{}try{capture.context.close()}catch{}}
               window.__nexusLiveAudioCapture=null;window.__nexusStopAudioTranslation=false;window.__nexusLiveAudioOverlap=null;
+              const sessionVideos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
+              window.__nexusLiveVideoSession={href:location.href,video:sessionVideos.find(v=>!v.paused&&!v.ended)||sessionVideos[0]||null};
               const previousCaptions=window.__nexusCaptionSuppression;
               if(previousCaptions){try{previousCaptions.observer.disconnect()}catch{}try{previousCaptions.entries.forEach(x=>{if(x.track)x.track.mode=x.mode})}catch{}try{previousCaptions.style.remove()}catch{}}
               const captionEntries=[];
@@ -773,7 +795,13 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     public async Task<bool> ShouldStopLiveAudioTranslationAsync()
     {
         if (Core is null) return true;
-        var json = await Core.ExecuteScriptAsync("Boolean(window.__nexusStopAudioTranslation)");
+        var json = await Core.ExecuteScriptAsync("""
+            (()=>{if(window.__nexusStopAudioTranslation)return true;
+              const session=window.__nexusLiveVideoSession;if(!session)return false;
+              if(session.href!==location.href)return true;
+              const video=session.video;
+              return Boolean(video&&(!video.isConnected||video.ended))})()
+            """);
         return bool.TryParse(json, out var stopped) && stopped;
     }
 
@@ -798,7 +826,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     {
         if (Core is null) return;
         await Core.ExecuteScriptAsync("""
-            ((status)=>{window.__nexusStopAudioTranslation=true;window.__nexusLiveAudioOverlap=null;
+            ((status)=>{window.__nexusStopAudioTranslation=true;window.__nexusLiveAudioOverlap=null;window.__nexusLiveVideoSession=null;
               const capture=window.__nexusLiveAudioCapture;window.__nexusLiveAudioCapture=null;if(capture){capture.closed=true;try{capture.processor.disconnect()}catch{}try{capture.source.disconnect()}catch{}try{capture.silent.disconnect()}catch{}try{capture.tracks.forEach(t=>t.stop())}catch{}try{capture.context.close()}catch{}}
               window.__nexusSpokenVideoState=null;
               const dubbing=window.__nexusDubbingVideoState;window.__nexusDubbingVideoState=null;if(dubbing?.video?.isConnected){dubbing.video.muted=dubbing.muted;dubbing.video.volume=dubbing.volume}

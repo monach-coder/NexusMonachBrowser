@@ -19,4 +19,15 @@ public sealed class PageNarrationPolicyTests
             chunk.Length, 1, PageNarrationPolicy.MaximumSpeechCharacters));
         Assert.StartsWith("Первый абзац", chunks[0], StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void OperationTimeout_GrowsForLongArticlesButRemainsBounded()
+    {
+        var shortPage = PageNarrationPolicy.SelectOperationTimeout(100, 2);
+        var longPage = PageNarrationPolicy.SelectOperationTimeout(9_000, 48);
+
+        Assert.Equal(PageNarrationPolicy.MinimumOperationTimeout, shortPage);
+        Assert.True(longPage > shortPage);
+        Assert.True(longPage <= PageNarrationPolicy.MaximumOperationTimeout);
+    }
 }

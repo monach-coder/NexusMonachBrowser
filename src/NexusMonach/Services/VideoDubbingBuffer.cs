@@ -54,6 +54,8 @@ internal sealed class VideoDubbingBuffer : IAsyncDisposable
     public ValueTask QueueAsync(VideoSpeechTranslationText translation) =>
         _translations.Writer.WriteAsync(translation, _stop.Token);
 
+    public void Stop() => _stop.Cancel();
+
     public async Task CompleteAsync()
     {
         if (Interlocked.Exchange(ref _completed, 1) == 0)
@@ -70,7 +72,7 @@ internal sealed class VideoDubbingBuffer : IAsyncDisposable
         {
             await foreach (var translation in _translations.Reader.ReadAllAsync(_stop.Token))
             {
-                var ttsText = VoiceAssistantService.SanitizeForSpeech(translation.RussianText);
+                var ttsText = VideoDubbingPolicy.PrepareTtsText(translation.RussianText, _profile);
                 if (ttsText.Length == 0) continue;
                 PreparedDubbingSpeech? speech = null;
                 var addedToReserve = false;
@@ -79,6 +81,21 @@ internal sealed class VideoDubbingBuffer : IAsyncDisposable
                     speech = await VideoDubbingVoiceService.PrepareAsync(ttsText,
                         VideoDubbingPolicy.SelectSpeechRate(ttsText.Length), _stop.Token)
                         .ConfigureAwait(false);
+                    if (!VideoDubbingPolicy.IsPreparedAudioAcceptable(speech.Duration, _profile))
+                    {
+                        speech.Dispose();
+                        ttsText = VideoDubbingPolicy.PrepareTtsText(ttsText, _profile,
+                            Math.Max(40, _profile.MaximumTtsCharacters / 2));
+                        speech = await VideoDubbingVoiceService.PrepareAsync(ttsText,
+                            VideoDubbingPolicy.SelectSpeechRate(ttsText.Length), _stop.Token)
+                            .ConfigureAwait(false);
+                    }
+                    if (!VideoDubbingPolicy.IsPreparedAudioAcceptable(speech.Duration, _profile))
+                    {
+                        speech.Dispose();
+                        speech = null;
+                        continue;
+                    }
                     _reserve.Add(speech.Duration);
                     addedToReserve = true;
                     var item = new PreparedItem(translation, ttsText, speech);

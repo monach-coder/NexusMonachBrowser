@@ -7,6 +7,17 @@ namespace NexusMonach.Services;
 internal static partial class PageNarrationPolicy
 {
     public const int MaximumSpeechCharacters = 240;
+    public static readonly TimeSpan MinimumOperationTimeout = TimeSpan.FromMinutes(3);
+    public static readonly TimeSpan MaximumOperationTimeout = TimeSpan.FromMinutes(20);
+
+    public static TimeSpan SelectOperationTimeout(int articleCharacters, int articleSegments)
+    {
+        articleCharacters = Math.Max(0, articleCharacters);
+        articleSegments = Math.Max(0, articleSegments);
+        var processingAndSpeechSeconds = 120 + articleCharacters / 10d + articleSegments * 1.5;
+        return TimeSpan.FromSeconds(Math.Clamp(processingAndSpeechSeconds,
+            MinimumOperationTimeout.TotalSeconds, MaximumOperationTimeout.TotalSeconds));
+    }
 
     public static IReadOnlyList<string> CreateSpeechChunks(IEnumerable<string> fragments,
         int maximumCharacters = MaximumSpeechCharacters)

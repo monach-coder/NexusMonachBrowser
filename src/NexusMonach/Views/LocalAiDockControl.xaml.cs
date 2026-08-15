@@ -61,6 +61,8 @@ public partial class LocalAiDockControl : UserControl
 
     public async Task TranslateCurrentPageAsync(BrowserTab tab)
     {
+        StopVideoTranslation();
+        VideoDubbingVoiceService.Stop();
         VoiceAssistantService.Announce("Перевожу интерфейс и готовлю озвучивание статьи.",
             VoiceAnnouncementPriority.Important, tab.IsPrivate);
         Visibility = Visibility.Collapsed;
@@ -74,7 +76,6 @@ public partial class LocalAiDockControl : UserControl
         }
         _cancellation?.Cancel();
         _cancellation = new CancellationTokenSource();
-        _cancellation.CancelAfter(TimeSpan.FromMinutes(3));
         var completed = 0;
         var spokenFragments = 0;
         var translatedControls = 0;
@@ -84,6 +85,8 @@ public partial class LocalAiDockControl : UserControl
         {
             articleSegments = await tab.CaptureTranslationSegmentsAsync();
             interactiveSegments = await tab.CaptureInteractiveTranslationSegmentsAsync();
+            _cancellation.CancelAfter(PageNarrationPolicy.SelectOperationTimeout(
+                articleSegments.Sum(segment => segment.Text.Length), articleSegments.Count));
             if (articleSegments.Count == 0 && interactiveSegments.Count == 0)
                 throw new InvalidOperationException(
                     "На странице не найдено основное содержание или элементы интерфейса для перевода.");
@@ -99,6 +102,8 @@ public partial class LocalAiDockControl : UserControl
                 translatedControls += await tab.ApplyInteractiveTranslationSegmentsAsync(
                     translated, translatedControls, interactiveSegments.Count);
             }
+            await tab.UpdateSpokenPageTranslationStatusAsync(
+                spokenFragments, articleSegments.Count, translatedControls);
 
             // Основная статья переводится в памяти и отдаётся только женскому
             // голосу. Меню, реклама, боковые панели и формы были исключены ещё
@@ -160,8 +165,11 @@ public partial class LocalAiDockControl : UserControl
 
     public async Task TranslateVideoAudioAsync(BrowserTab tab)
     {
+        _cancellation?.Cancel();
+        VoiceAssistantService.StopSpeaking();
         Visibility = Visibility.Collapsed;
         _tab = tab;
+        _pageUrl = tab.CurrentUrl;
         if (!AiModelCatalog.TranslationReady)
         {
             GlassDialogWindow.Show(AiModelCatalog.MissingTranslationRuntimeMessage,
@@ -183,9 +191,12 @@ public partial class LocalAiDockControl : UserControl
         StopVideoTranslation();
         var session = new CancellationTokenSource();
         _videoCancellation = session;
+        var configuredVideoMode = SettingsService.Current.VideoTranslationMode;
+        var durationSeconds = await tab.GetActiveVideoDurationAsync();
+        var videoMode = VideoDubbingPolicy.SelectEffectiveMode(
+            configuredVideoMode, durationSeconds);
         await tab.BeginLiveAudioTranslationAsync();
         var finalStatus = "Перевод звука остановлен.";
-        var videoMode = SettingsService.Current.VideoTranslationMode;
         var profile = VideoDubbingPolicy.ForMode(videoMode);
         await using var diagnostics = new VideoDubbingDiagnosticLog(videoMode);
         try
@@ -201,7 +212,7 @@ public partial class LocalAiDockControl : UserControl
             CrashReportService.AddBreadcrumb("video-translation", "warmup-completed");
             await tab.EnableVideoDubbingMixAsync();
             await tab.UpdateLiveAudioTranslationStatusAsync(
-                $"Слушаю видео · режим {VideoModeLabel(videoMode)} · готовлю запас Nexus Voice");
+                $"Слушаю видео · режим {VideoModeLabel(videoMode, videoMode != configuredVideoMode)} · готовлю запас Nexus Voice");
 
             var translationContext = new VideoSpeechTranslationContext(videoMode);
             var recentTranscripts = new RecentVideoPhraseGuard(
@@ -362,7 +373,11 @@ public partial class LocalAiDockControl : UserControl
                 {
                     await foreach (var segment in directSegments.Reader.ReadAllAsync(session.Token))
                     {
-                        if (await tab.ShouldStopLiveAudioTranslationAsync()) break;
+                        if (await tab.ShouldStopLiveAudioTranslationAsync())
+                        {
+                            dubbingBuffer.Stop();
+                            throw new OperationCanceledException(session.Token);
+                        }
                         var translation = await TranslateSegmentSafelyAsync(segment);
                         if (translation is not null)
                             await dubbingBuffer.QueueAsync(translation);
@@ -419,7 +434,11 @@ public partial class LocalAiDockControl : UserControl
                     {
                         do
                         {
-                            if (await tab.ShouldStopLiveAudioTranslationAsync()) break;
+                            if (await tab.ShouldStopLiveAudioTranslationAsync())
+                            {
+                                dubbingBuffer.Stop();
+                                throw new OperationCanceledException(session.Token);
+                            }
                             var segment = capturedSegments.Current;
                             var translation = await TranslateSegmentSafelyAsync(
                                 new LiveAudioSegment(segment.Wav, segment.CapturedAt,
@@ -452,7 +471,11 @@ public partial class LocalAiDockControl : UserControl
                     {
                         do
                         {
-                            if (await tab.ShouldStopLiveAudioTranslationAsync()) break;
+                            if (await tab.ShouldStopLiveAudioTranslationAsync())
+                            {
+                                dubbingBuffer.Stop();
+                                throw new OperationCanceledException(session.Token);
+                            }
                             var segment = capturedSegments.Current;
                             var translation = await TranslateSegmentSafelyAsync(
                                 new LiveAudioSegment(segment.Wav, segment.CapturedAt,
@@ -484,12 +507,13 @@ public partial class LocalAiDockControl : UserControl
 
     public void StopVideoTranslation() => Interlocked.Exchange(ref _videoCancellation, null)?.Cancel();
 
-    private static string VideoModeLabel(VideoTranslationMode mode) => mode switch
+    private static string VideoModeLabel(VideoTranslationMode mode, bool automatic = false) =>
+        (mode switch
     {
         VideoTranslationMode.Fast => "Быстрый",
         VideoTranslationMode.Quality => "Качественный",
         _ => "Сбалансированный"
-    };
+    }) + (automatic ? " · авто по длительности" : string.Empty);
 
     private static bool ContainsCyrillic(string? text) =>
         !string.IsNullOrWhiteSpace(text) &&
@@ -573,6 +597,16 @@ public partial class LocalAiDockControl : UserControl
 
     public void HandleNavigation(BrowserTab tab)
     {
+        if (ReferenceEquals(_tab, tab) &&
+            !string.IsNullOrWhiteSpace(_pageUrl) &&
+            !string.Equals(_pageUrl, tab.CurrentUrl, StringComparison.Ordinal))
+        {
+            _cancellation?.Cancel();
+            StopVideoTranslation();
+            VideoDubbingVoiceService.Stop();
+            VoiceAssistantService.StopSpeaking();
+            _pageUrl = tab.CurrentUrl;
+        }
         if (!_showingBackgroundResearch) return;
         if (ReferenceEquals(_tab, tab) && IsSameSite(_backgroundResearchHost, tab.CurrentHost)) return;
         _showingBackgroundResearch = false;

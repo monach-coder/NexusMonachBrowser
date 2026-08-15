@@ -125,13 +125,14 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        NexusFabricRuntime.Shutdown();
-        SemanticEmbeddingService.Stop();
-        WhisperService.Shutdown();
-        TranslationService.Stop();
-        LocalAiService.Shutdown();
-        VideoDubbingVoiceService.Shutdown();
-        VoiceAssistantService.Shutdown();
+        var timeout = TimeSpan.FromSeconds(2);
+        ShutdownCoordinator.RunStep("fabric", NexusFabricRuntime.Shutdown, timeout);
+        ShutdownCoordinator.RunStep("semantics", SemanticEmbeddingService.Stop, timeout);
+        ShutdownCoordinator.RunStep("whisper", WhisperService.Shutdown, timeout);
+        ShutdownCoordinator.RunStep("translation", TranslationService.Stop, timeout);
+        ShutdownCoordinator.RunStep("local-ai", LocalAiService.Shutdown, timeout);
+        ShutdownCoordinator.RunStep("video-voice", VideoDubbingVoiceService.Shutdown, timeout);
+        ShutdownCoordinator.RunStep("assistant-voice", VoiceAssistantService.Shutdown, timeout);
         CrashReportService.MarkCleanExit();
         base.OnExit(e);
     }

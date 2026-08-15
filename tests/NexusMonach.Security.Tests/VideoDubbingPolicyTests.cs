@@ -47,6 +47,37 @@ public sealed class VideoDubbingPolicyTests
     }
 
     [Fact]
+    public void BalancedMode_AdaptsToShortClipsAndFeatureLengthVideo()
+    {
+        Assert.Equal(VideoTranslationMode.Fast,
+            VideoDubbingPolicy.SelectEffectiveMode(VideoTranslationMode.Balanced, 19));
+        Assert.Equal(VideoTranslationMode.Balanced,
+            VideoDubbingPolicy.SelectEffectiveMode(VideoTranslationMode.Balanced, 10 * 60));
+        Assert.Equal(VideoTranslationMode.Quality,
+            VideoDubbingPolicy.SelectEffectiveMode(VideoTranslationMode.Balanced, 2 * 60 * 60));
+        Assert.Equal(VideoTranslationMode.Fast,
+            VideoDubbingPolicy.SelectEffectiveMode(VideoTranslationMode.Fast, 2 * 60 * 60));
+        Assert.Equal(VideoTranslationMode.Balanced,
+            VideoDubbingPolicy.SelectEffectiveMode(VideoTranslationMode.Balanced, null));
+    }
+
+    [Theory]
+    [InlineData(VideoTranslationMode.Fast)]
+    [InlineData(VideoTranslationMode.Balanced)]
+    [InlineData(VideoTranslationMode.Quality)]
+    public void LiveTtsTextAndAudio_AreBounded(VideoTranslationMode mode)
+    {
+        var profile = VideoDubbingPolicy.ForMode(mode);
+        var text = VideoDubbingPolicy.PrepareTtsText(new string('я', 360), profile);
+
+        Assert.InRange(text.Length, 1, profile.MaximumTtsCharacters + 1);
+        Assert.True(VideoDubbingPolicy.IsPreparedAudioAcceptable(
+            TimeSpan.FromSeconds(profile.MaximumPreparedAudioSeconds), profile));
+        Assert.False(VideoDubbingPolicy.IsPreparedAudioAcceptable(
+            TimeSpan.FromSeconds(profile.MaximumPreparedAudioSeconds + 0.01), profile));
+    }
+
+    [Fact]
     public void ReadyAudioReserve_TracksPreparedWavDuration()
     {
         var reserve = new ReadyAudioReserve();

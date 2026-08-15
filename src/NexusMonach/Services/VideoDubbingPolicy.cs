@@ -15,7 +15,9 @@ internal sealed record VideoDubbingModeProfile(
     double StartupPreparedSeconds,
     int StartupMaximumWaitMilliseconds,
     int RefillWaitMilliseconds,
-    int PreparedQueueCapacity);
+    int PreparedQueueCapacity,
+    int MaximumTtsCharacters,
+    double MaximumPreparedAudioSeconds);
 
 /// <summary>
 /// Проверяемые границы закадрового перевода. Ни один путь захвата или озвучивания
@@ -23,6 +25,8 @@ internal sealed record VideoDubbingModeProfile(
 /// </summary>
 internal static class VideoDubbingPolicy
 {
+    public const double ShortClipMaximumSeconds = 5 * 60;
+    public const double LongFormMinimumSeconds = 30 * 60;
     public const int SegmentMilliseconds = 3_200;
     public const int SegmentOverlapMilliseconds = 800;
     public const int MaxBufferedSegments = 3;
@@ -51,7 +55,9 @@ internal static class VideoDubbingPolicy
             StartupPreparedSeconds: 2.0,
             StartupMaximumWaitMilliseconds: 4_000,
             RefillWaitMilliseconds: 400,
-            PreparedQueueCapacity: 4),
+            PreparedQueueCapacity: 4,
+            MaximumTtsCharacters: 80,
+            MaximumPreparedAudioSeconds: 7),
         VideoTranslationMode.Quality => new(mode,
             SegmentMilliseconds: 4_000,
             SegmentOverlapMilliseconds: 1_000,
@@ -64,7 +70,9 @@ internal static class VideoDubbingPolicy
             StartupPreparedSeconds: 8.0,
             StartupMaximumWaitMilliseconds: 14_000,
             RefillWaitMilliseconds: 1_800,
-            PreparedQueueCapacity: 8),
+            PreparedQueueCapacity: 8,
+            MaximumTtsCharacters: 140,
+            MaximumPreparedAudioSeconds: 12),
         _ => new(VideoTranslationMode.Balanced,
             SegmentMilliseconds: SegmentMilliseconds,
             SegmentOverlapMilliseconds: SegmentOverlapMilliseconds,
@@ -77,8 +85,52 @@ internal static class VideoDubbingPolicy
             StartupPreparedSeconds: 5.0,
             StartupMaximumWaitMilliseconds: 9_000,
             RefillWaitMilliseconds: 1_000,
-            PreparedQueueCapacity: 6)
+            PreparedQueueCapacity: 6,
+            MaximumTtsCharacters: 110,
+            MaximumPreparedAudioSeconds: 9)
     };
+
+    /// <summary>
+    /// Balanced is the automatic everyday mode: short clips prioritize first
+    /// speech latency, while feature-length material gets a deeper context and
+    /// prepared reserve. Explicit Fast/Quality choices are never overridden.
+    /// </summary>
+    public static VideoTranslationMode SelectEffectiveMode(VideoTranslationMode configuredMode,
+        double? durationSeconds)
+    {
+        if (configuredMode != VideoTranslationMode.Balanced ||
+            durationSeconds is null || !double.IsFinite(durationSeconds.Value) ||
+            durationSeconds <= 0)
+            return configuredMode;
+        if (durationSeconds <= ShortClipMaximumSeconds) return VideoTranslationMode.Fast;
+        if (durationSeconds >= LongFormMinimumSeconds) return VideoTranslationMode.Quality;
+        return VideoTranslationMode.Balanced;
+    }
+
+    public static string PrepareTtsText(string? text, VideoDubbingModeProfile profile,
+        int? maximumCharacters = null)
+    {
+        text = VoiceAssistantService.SanitizeForSpeech(text);
+        var limit = Math.Clamp(maximumCharacters ?? profile.MaximumTtsCharacters, 40, 240);
+        if (text.Length <= limit) return text;
+        var minimum = Math.Max(20, limit / 2);
+        var split = -1;
+        for (var index = Math.Min(limit, text.Length - 1); index >= minimum; index--)
+        {
+            if (text[index] is '.' or '!' or '?' or '…' or ';' or ':' ||
+                char.IsWhiteSpace(text[index]))
+            {
+                split = index + (char.IsWhiteSpace(text[index]) ? 0 : 1);
+                break;
+            }
+        }
+        if (split < minimum) split = limit;
+        return text[..split].TrimEnd(' ', ',', ';', ':', '-', '—') + "…";
+    }
+
+    public static bool IsPreparedAudioAcceptable(TimeSpan duration,
+        VideoDubbingModeProfile profile) =>
+        duration > TimeSpan.Zero && duration.TotalSeconds <= profile.MaximumPreparedAudioSeconds;
 
     public static bool ShouldFinalizeUtterance(string? text, int fragmentCount,
         VideoDubbingModeProfile profile)

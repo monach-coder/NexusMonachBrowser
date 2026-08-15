@@ -7,6 +7,7 @@ Data/
 *.user
 *.suo
 *_wpftmp.csproj
+.tmp-translation-smoke/
 
 # Веса и нативные runtime публикуются только в проверенном Full Offline release,
 # чтобы случайно не принять в git неподтверждённый многосотмегабайтный файл.

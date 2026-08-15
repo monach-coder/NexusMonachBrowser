@@ -127,6 +127,7 @@ internal static class ProcessAudioCaptureService
                 while (!_stop.IsCancellationRequested)
                 {
                     if (!_sampleReady.WaitOne(120)) continue;
+                    if (_stop.IsCancellationRequested) break;
                     DrainAvailablePackets();
                 }
             }
@@ -204,9 +205,11 @@ internal static class ProcessAudioCaptureService
                 _disposed = true;
             }
             _stop.Cancel();
-            try { _audioClient.Stop(); } catch { }
             _sampleReady.Set();
             try { await _captureLoop; } catch { }
+            // IAudioClient.Stop invalidates the packet currently owned by
+            // IAudioCaptureClient. Never race it against GetBuffer/ReleaseBuffer.
+            try { _audioClient.Stop(); } catch { }
             try { await _segmentLoop; } catch { }
             _sampleReady.Dispose();
             _raw.Dispose();
