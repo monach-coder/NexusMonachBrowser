@@ -1690,6 +1690,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
 
     private void HandleDownload(CoreWebView2DownloadStartingEventArgs e)
     {
+        CrashReportService.AddBreadcrumb("downloads", "starting");
         var operation = e.DownloadOperation;
         var path = operation.ResultFilePath;
         if (string.IsNullOrWhiteSpace(path))
@@ -1749,12 +1750,16 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
             };
             if (operation.State == CoreWebView2DownloadState.Completed)
             {
+                CrashReportService.AddBreadcrumb("downloads", "completed");
                 _ = InspectAndScanAsync(item);
                 VoiceAssistantService.Announce("Загрузка завершена. Файл проверяется локально.",
                     VoiceAnnouncementPriority.Important, _isPrivate);
             }
             else if (operation.State == CoreWebView2DownloadState.Interrupted)
+            {
+                CrashReportService.AddBreadcrumb("downloads", "interrupted");
                 VoiceAssistantService.Announce("Загрузка прервана.", VoiceAnnouncementPriority.Critical, _isPrivate);
+            }
         });
     }
 

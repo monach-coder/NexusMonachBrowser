@@ -1452,6 +1452,9 @@ public partial class MainWindow : Window
     private async void Window_Closing(object? sender, CancelEventArgs e)
     {
         if (_closeReady) return;
+        CrashReportService.AddBreadcrumb("shutdown", _restartRequested
+            ? "window-closing-restart"
+            : "window-closing");
         e.Cancel = true;
         if (_closing) return;
         _closing = true;

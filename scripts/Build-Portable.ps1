@@ -1,5 +1,6 @@
 param(
     [switch]$OfficialGuardianBuild,
+    [switch]$SkipArchive,
     [string]$GuardianReportEndpoint = $env:NEXUS_GUARDIAN_REPORT_ENDPOINT,
     [string]$GuardianReportIngestKey = $env:NEXUS_GUARDIAN_REPORT_INGEST_KEY,
     [ValidateSet('ask', 'automatic')]
@@ -196,8 +197,12 @@ if (-not $OfficialGuardianBuild) {
     }
 }
 
-Compress-Archive -Path (Join-Path $publish "*") -DestinationPath $archive -CompressionLevel Optimal
+if (-not $SkipArchive) {
+    Compress-Archive -Path (Join-Path $publish "*") -DestinationPath $archive -CompressionLevel Optimal
+} else {
+    Write-Host "Skipping the portable archive (-SkipArchive)." -ForegroundColor Yellow
+}
 
-Write-Host "" 
+Write-Host ""
 Write-Host "Done:" -ForegroundColor Green
-Write-Host $archive
+if (-not $SkipArchive) { Write-Host $archive } else { Write-Host $publish }
