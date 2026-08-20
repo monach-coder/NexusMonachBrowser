@@ -115,11 +115,18 @@ public partial class App : Application
                 "Ошибка запуска",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
-            Shutdown(-1);
+            // A fatal error can happen while WPF is still inside its asynchronous
+            // startup continuation. Shutdown() is not reliable in that state: the
+            // dispatcher may survive with no windows and keep Guardian waiting.
+            // The report above is persisted synchronously, so a hard process exit
+            // is safe and guarantees that the taskbar icon disappears.
+            try { splash.Close(); } catch { }
+            Environment.Exit(-1);
         }
         finally
         {
-            splash.Close();
+            if (splash.IsLoaded)
+                splash.Close();
         }
     }
 
@@ -172,7 +179,9 @@ public partial class App : Application
             var info = new ProcessStartInfo(guardian) { UseShellExecute = false, WorkingDirectory = AppContext.BaseDirectory };
             foreach (var arg in args) info.ArgumentList.Add(arg);
             Process.Start(info);
-            Current.Shutdown();
+            // This process is only a portable redirect stub. With no WPF window
+            // ever opened, OnLastWindowClose cannot terminate its dispatcher.
+            Environment.Exit(0);
             return true;
         }
         catch { return false; }

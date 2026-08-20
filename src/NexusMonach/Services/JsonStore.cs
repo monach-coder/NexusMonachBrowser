@@ -73,7 +73,9 @@ public static class JsonStore
                 File.Move(temp, destination, overwrite: true);
                 return;
             }
-            catch (IOException) when (attempt < ReplaceAttempts - 1)
+            catch (Exception exception) when (
+                attempt < ReplaceAttempts - 1 &&
+                exception is IOException or UnauthorizedAccessException)
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(25 * (1 << attempt)));
             }

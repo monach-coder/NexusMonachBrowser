@@ -78,8 +78,26 @@ internal static class Program
                     args.Any(x => x.Equals("--relaunch", StringComparison.OrdinalIgnoreCase)));
             }
 
+            var forwardedArgs = args
+                .Where(x => !x.Equals("--full-integrity-check", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            var waitForPreviousInstance = RemoveRestartHandoffArgument(forwardedArgs);
+            using var singleInstance = GuardianSingleInstance.TryAcquire(
+                AppContext.BaseDirectory,
+                waitForPreviousInstance ? TimeSpan.FromSeconds(45) : TimeSpan.Zero);
+            if (singleInstance is null)
+            {
+                MessageBox.Show(
+                    waitForPreviousInstance
+                        ? "Предыдущий экземпляр Nexus Monach не завершился за 45 секунд. Перезапуск отменён."
+                        : "Nexus Monach уже запускается или запущен.\n\n" +
+                          "Повторный экземпляр не создан, чтобы portable-профиль и настройки оставались целыми.",
+                    "Nexus Monach", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return 0;
+            }
+
             var full = args.Any(x => x.Equals("--full-integrity-check", StringComparison.OrdinalIgnoreCase));
-            return LaunchBrowser(full, args.Where(x => !x.Equals("--full-integrity-check", StringComparison.OrdinalIgnoreCase)).ToArray());
+            return LaunchBrowser(full, forwardedArgs.ToArray());
         }
         catch (Exception ex)
         {
@@ -93,6 +111,18 @@ internal static class Program
                 "Nexus Guardian", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 70;
         }
+    }
+
+    private static bool RemoveRestartHandoffArgument(List<string> arguments)
+    {
+        for (var index = 0; index < arguments.Count; index++)
+        {
+            if (!arguments[index].Equals("--wait-for-previous-instance", StringComparison.OrdinalIgnoreCase))
+                continue;
+            arguments.RemoveAt(index);
+            return true;
+        }
+        return false;
     }
 
     private static int LaunchBrowser(bool full, string[] forwardedArgs)

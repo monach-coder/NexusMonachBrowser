@@ -1431,6 +1431,7 @@ public partial class MainWindow : Window
             if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase) && commandLine.Length > 0)
                 info.ArgumentList.Add(commandLine[0]);
             foreach (var argument in commandLine.Skip(1)) info.ArgumentList.Add(argument);
+            info.ArgumentList.Add("--wait-for-previous-instance");
             Process.Start(info);
         }
         catch { /* Если Windows запретила перезапуск, текущее окно всё равно корректно закроется. */ }
