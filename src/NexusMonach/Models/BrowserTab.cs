@@ -1703,22 +1703,13 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         var fileName = Path.GetFileName(path);
         var safeSource = DownloadSecurityService.SanitizeSourceForDisplay(operation.Uri);
         var assessment = DownloadSecurityService.Assess(fileName, safeSource);
-        if (assessment.Level == DownloadRiskLevel.High)
-        {
-            var owner = Window.GetWindow(View);
-            var message = $"Файл: {fileName}\nИсточник: {safeSource}\n\n{assessment.Description}.\n\nПродолжить загрузку?";
-            var decision = owner is null
-                ? GlassDialogWindow.Show(message, "Опасная загрузка", MessageBoxButton.YesNo, MessageBoxImage.Warning)
-                : GlassDialogWindow.Show(owner, message, "Опасная загрузка", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-            if (decision != MessageBoxResult.Yes)
-            {
-                e.Cancel = true;
-                return;
-            }
-        }
+        // Risk information is shown next to the file in the downloads flyout;
+        // downloads are never interrupted by a modal warning. The local
+        // Defender scan after completion is the active protection stage.
 
-        // Оставляем стандартную панель загрузок WebView2 видимой для понятного UX.
-        e.Handled = false;
+        // The built-in WebView2 download shelf stays open after completion
+        // until dismissed; the Nexus indicator and hover flyout replace it.
+        e.Handled = true;
         var item = new DownloadItem
         {
             FileName = Path.GetFileName(path),
@@ -1758,13 +1749,26 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
             };
             if (operation.State == CoreWebView2DownloadState.Completed)
             {
-                _ = DownloadSecurityService.InspectCompletedAsync(item);
+                _ = InspectAndScanAsync(item);
                 VoiceAssistantService.Announce("Загрузка завершена. Файл проверяется локально.",
                     VoiceAnnouncementPriority.Important, _isPrivate);
             }
             else if (operation.State == CoreWebView2DownloadState.Interrupted)
                 VoiceAssistantService.Announce("Загрузка прервана.", VoiceAnnouncementPriority.Critical, _isPrivate);
         });
+    }
+
+    private static async Task InspectAndScanAsync(DownloadItem item)
+    {
+        try
+        {
+            await DownloadSecurityService.InspectCompletedAsync(item);
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("downloads", "inspect-completed", ex);
+        }
+        await AntivirusScanService.ScanAsync(item);
     }
 
     private static string MakeUniquePath(string path)

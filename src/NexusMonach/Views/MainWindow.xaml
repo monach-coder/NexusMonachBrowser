@@ -3,6 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         xmlns:views="clr-namespace:NexusMonach.Views"
+        xmlns:models="clr-namespace:NexusMonach.Models"
+        xmlns:services="clr-namespace:NexusMonach.Services"
         Title="Nexus Monach"
         Width="1280" Height="880" MinWidth="900" MinHeight="650"
         Background="{StaticResource BackgroundBrush}"
@@ -40,6 +42,7 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="42" />
                 <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="38" />
                 <ColumnDefinition Width="38" />
@@ -118,19 +121,33 @@
                 </ListBox.ItemTemplate>
             </ListBox>
 
-            <Border x:Name="PrivateBadge" Grid.Column="2" Margin="5,8,8,5" Padding="10,0"
+            <Border x:Name="PrivateBadge" Grid.Column="2" Margin="5,8,0,5" Padding="10,0"
                     CornerRadius="12" Background="#2C1D46" BorderBrush="#7653A6" BorderThickness="1"
                     Visibility="Collapsed">
                 <TextBlock Text="ПРИВАТНО" FontSize="10" FontWeight="SemiBold"
                            Foreground="#D7C0FF" VerticalAlignment="Center" />
             </Border>
 
-            <Button Grid.Column="3" Content="&#xE921;" Style="{StaticResource TitleButtonStyle}"
+            <Border x:Name="DownloadsIndicator" Grid.Column="3" Margin="6,8,8,5" Padding="9,0"
+                    MinWidth="64" CornerRadius="12" Background="{StaticResource PanelBrush}"
+                    BorderBrush="{StaticResource GoldBrush}" BorderThickness="1" Cursor="Hand"
+                    Visibility="Collapsed" ToolTip="Загрузки — наведите, чтобы открыть список"
+                    MouseEnter="DownloadsIndicator_MouseEnter" MouseLeave="DownloadsIndicator_MouseLeave">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock x:Name="DownloadsIndicatorGlyph" Text="&#xE896;"
+                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"
+                               Foreground="{StaticResource GoldBrush}" VerticalAlignment="Center" />
+                    <TextBlock x:Name="DownloadsIndicatorText" Text="0%" Margin="7,0,0,0"
+                               FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" />
+                </StackPanel>
+            </Border>
+
+            <Button Grid.Column="4" Content="&#xE921;" Style="{StaticResource TitleButtonStyle}"
                     ToolTip="Свернуть" Click="Minimize_Click" />
-            <Button x:Name="MaximizeButton" Grid.Column="4" Content="&#xE922;"
+            <Button x:Name="MaximizeButton" Grid.Column="5" Content="&#xE922;"
                     Style="{StaticResource TitleButtonStyle}" ToolTip="Развернуть"
                     Click="Maximize_Click" />
-            <Button Grid.Column="5" Content="&#xE72C;" Style="{StaticResource TitleButtonStyle}"
+            <Button Grid.Column="6" Content="&#xE72C;" Style="{StaticResource TitleButtonStyle}"
                     Foreground="{StaticResource AccentBrush}" ToolTip="Перезапустить Nexus Monach"
                     Click="RestartWindow_Click" />
         </Grid>
@@ -371,6 +388,121 @@
         </Border>
 
         <views:PrivacyDockControl x:Name="PrivacyDock" Grid.Row="5" />
+
+        <Popup x:Name="DownloadsPopup" AllowsTransparency="True" IsOpen="False" StaysOpen="True"
+               Placement="Bottom" PlacementTarget="{Binding ElementName=DownloadsIndicator}"
+               PopupAnimation="Fade">
+            <Border x:Name="DownloadsFlyoutRoot" Width="404" MaxHeight="392" Margin="8"
+                    Background="{StaticResource OverlayBrush}" CornerRadius="14"
+                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                    MouseEnter="DownloadsFlyoutRoot_MouseEnter" MouseLeave="DownloadsFlyoutRoot_MouseLeave">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="18" ShadowDepth="0" Opacity="0.5" Color="#000000" />
+                </Border.Effect>
+                <Grid Margin="14,10,14,12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid Grid.Row="0" Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Загрузки" FontSize="13" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" Text="подробности — Ctrl+J" FontSize="10"
+                                   Foreground="{StaticResource MutedTextBrush}" VerticalAlignment="Center" />
+                    </Grid>
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" MaxHeight="336">
+                        <ItemsControl x:Name="DownloadsList">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="{x:Type models:DownloadItem}">
+                                    <Border Padding="10,8" Margin="0,2" CornerRadius="10"
+                                            Background="{StaticResource PanelBrush}"
+                                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+
+                                            <TextBlock Grid.Row="0" Grid.Column="0" Text="{Binding FileName}"
+                                                       FontSize="12.5" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource TextBrush}"
+                                                       TextTrimming="CharacterEllipsis" Margin="0,0,8,0" />
+                                            <Button Grid.Row="0" Grid.Column="1" Content="&#xE8E5;"
+                                                    Style="{StaticResource IconButton}" FontSize="14" Padding="6,4"
+                                                    Margin="2,0" ToolTip="Открыть файл" Tag="{Binding}"
+                                                    Foreground="{StaticResource AccentBrush}"
+                                                    Click="DownloadsOpenFile_Click" />
+                                            <Button Grid.Row="0" Grid.Column="2" Content="&#xE838;"
+                                                    Style="{StaticResource IconButton}" FontSize="14" Padding="6,4"
+                                                    ToolTip="Показать в папке" Tag="{Binding}"
+                                                    Foreground="{StaticResource GoldBrush}"
+                                                    Click="DownloadsShowFolder_Click" />
+
+                                            <ProgressBar Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3"
+                                                         Height="3" Margin="0,6,0,0" Minimum="0" Maximum="100"
+                                                         Value="{Binding Progress, Mode=OneWay}"
+                                                         Foreground="{StaticResource AccentBrush}"
+                                                         Background="{StaticResource BorderBrush}" BorderThickness="0">
+                                                <ProgressBar.Style>
+                                                    <Style TargetType="ProgressBar">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Status}" Value="Завершено">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding Status}" Value="Прервано">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </ProgressBar.Style>
+                                            </ProgressBar>
+
+                                            <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3"
+                                                       Text="{Binding ProgressText}" FontSize="10.5" Margin="0,6,0,0"
+                                                       Foreground="{StaticResource MutedTextBrush}"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3"
+                                                       Text="{Binding ScanStateText}" FontSize="10.5" Margin="0,3,0,0"
+                                                       TextTrimming="CharacterEllipsis">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding ScanState}" Value="{x:Static services:DownloadScanState.Clean}">
+                                                                <Setter Property="Foreground" Value="#38D996" />
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding ScanState}" Value="{x:Static services:DownloadScanState.Scanning}">
+                                                                <Setter Property="Foreground" Value="{StaticResource GoldBrush}" />
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding ScanState}" Value="{x:Static services:DownloadScanState.Threat}">
+                                                                <Setter Property="Foreground" Value="#E0567A" />
+                                                                <Setter Property="FontWeight" Value="SemiBold" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Popup>
 
     </Grid>
     </Border>

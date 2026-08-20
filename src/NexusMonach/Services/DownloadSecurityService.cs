@@ -108,7 +108,6 @@ public static class DownloadSecurityService
             _ => "низкий"
         };
         item.SecurityDetails = assessment.Description;
-        item.RequiresOpenConfirmation = assessment.Level is DownloadRiskLevel.High or DownloadRiskLevel.Medium;
     }
 
     public static AuthenticodeAssessment VerifyAuthenticode(string path)

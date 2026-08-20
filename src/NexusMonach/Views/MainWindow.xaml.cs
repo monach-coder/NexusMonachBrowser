@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Net.Http;
@@ -34,6 +35,7 @@ public partial class MainWindow : Window
     private TopologyDetailsWindow? _topologyDetailsWindow;
     private readonly DispatcherTimer _memoryTimer;
     private readonly DispatcherTimer _networkPerformanceTimer;
+    private DispatcherTimer? _downloadsCloseTimer;
     private readonly Dictionary<string, (long Received, long Sent)> _networkCounters = new(StringComparer.Ordinal);
     private DateTime _networkSampleUtc = DateTime.UtcNow;
     private double _downloadBytesPerSecond;
@@ -93,6 +95,117 @@ public partial class MainWindow : Window
             Dispatcher.BeginInvoke(new Action(() =>
                 throw new InvalidOperationException("Intentional Nexus Guardian crash-pipeline test.")),
                 DispatcherPriority.ApplicationIdle);
+        }
+        DownloadsList.ItemsSource = DownloadService.Items;
+        DownloadService.Items.CollectionChanged += Downloads_CollectionChanged;
+        Closed += (_, _) => DownloadService.Items.CollectionChanged -= Downloads_CollectionChanged;
+        RefreshDownloadsIndicator();
+    }
+
+    private void Downloads_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.OldItems is not null)
+            foreach (DownloadItem item in e.OldItems)
+                item.PropertyChanged -= Download_PropertyChanged;
+        if (e.NewItems is not null)
+            foreach (DownloadItem item in e.NewItems)
+                item.PropertyChanged += Download_PropertyChanged;
+        RefreshDownloadsIndicator();
+    }
+
+    private void Download_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(DownloadItem.Status) or nameof(DownloadItem.BytesReceived)
+            or nameof(DownloadItem.TotalBytes) or nameof(DownloadItem.ScanState))
+            RefreshDownloadsIndicator();
+    }
+
+    private void RefreshDownloadsIndicator()
+    {
+        var items = DownloadService.Items;
+        DownloadsIndicator.Visibility = items.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (items.Count == 0)
+        {
+            DownloadsPopup.IsOpen = false;
+            return;
+        }
+
+        var active = items.Where(x => x.Status.Equals("Загрузка", StringComparison.Ordinal)).ToArray();
+        if (active.Length == 0)
+        {
+            DownloadsIndicatorGlyph.Text = "\uE73E";
+            DownloadsIndicatorText.Text = "Готово";
+            return;
+        }
+
+        DownloadsIndicatorGlyph.Text = "\uE896";
+        var received = active.Sum(x => x.BytesReceived);
+        var total = active.Sum(x => x.TotalBytes);
+        var percent = total <= 0 ? 0 : Math.Clamp(received * 100d / total, 0, 100);
+        DownloadsIndicatorText.Text = $"{percent:0}%";
+    }
+
+    private void DownloadsIndicator_MouseEnter(object sender, MouseEventArgs e)
+    {
+        _downloadsCloseTimer?.Stop();
+        // Right-align the flyout with the indicator, which sits near the
+        // window edge, so the panel never runs off the right side.
+        DownloadsPopup.HorizontalOffset = DownloadsIndicator.ActualWidth -
+            (DownloadsFlyoutRoot.Width + DownloadsFlyoutRoot.Margin.Left + DownloadsFlyoutRoot.Margin.Right);
+        DownloadsPopup.VerticalOffset = 2;
+        DownloadsPopup.IsOpen = true;
+    }
+
+    private void DownloadsIndicator_MouseLeave(object sender, MouseEventArgs e) =>
+        ScheduleDownloadsFlyoutClose();
+
+    private void DownloadsFlyoutRoot_MouseEnter(object sender, MouseEventArgs e) =>
+        _downloadsCloseTimer?.Stop();
+
+    private void DownloadsFlyoutRoot_MouseLeave(object sender, MouseEventArgs e) =>
+        ScheduleDownloadsFlyoutClose();
+
+    private void ScheduleDownloadsFlyoutClose()
+    {
+        _downloadsCloseTimer?.Stop();
+        _downloadsCloseTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(320) };
+        _downloadsCloseTimer.Tick += (_, _) =>
+        {
+            _downloadsCloseTimer?.Stop();
+            DownloadsPopup.IsOpen = false;
+        };
+        _downloadsCloseTimer.Start();
+    }
+
+    private void DownloadsOpenFile_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is not DownloadItem item) return;
+        if (!item.Status.Equals("Завершено", StringComparison.OrdinalIgnoreCase) ||
+            !File.Exists(item.FilePath)) return;
+        try
+        {
+            Process.Start(new ProcessStartInfo(item.FilePath) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("downloads", "open-from-flyout", ex);
+        }
+    }
+
+    private void DownloadsShowFolder_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is not DownloadItem item) return;
+        if (!File.Exists(item.FilePath)) return;
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{item.FilePath}\"")
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("downloads", "show-folder", ex);
         }
     }
 

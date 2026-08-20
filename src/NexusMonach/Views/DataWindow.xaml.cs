@@ -79,17 +79,6 @@ public partial class DataWindow : Window
                 return;
             }
 
-            if (download.RequiresOpenConfirmation)
-            {
-                var message = $"Файл: {download.FileName}\nИсточник: {download.SourceUrl}\n\n" +
-                              $"{download.SecurityDetails}\n{download.SignatureInfo}\n\n" +
-                              "Цифровая подпись подтверждает издателя, но не гарантирует безопасность файла. " +
-                              "Открыть его сейчас?";
-                var decision = GlassDialogWindow.Show(this, message, "Подтверждение открытия",
-                    MessageBoxButton.YesNo, MessageBoxImage.Warning);
-                if (decision != MessageBoxResult.Yes) return;
-            }
-
             Process.Start(new ProcessStartInfo(row.Value) { UseShellExecute = true });
             return;
         }
