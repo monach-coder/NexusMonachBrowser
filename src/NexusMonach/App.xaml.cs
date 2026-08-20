@@ -29,6 +29,10 @@ public partial class App : Application
     {
         base.OnStartup(e);
         if (RedirectPortableLaunchToGuardian(e.Args)) return;
+        // Unattended readiness probe: initialize everything, show the real
+        // window, then exit with code 0. CI uses it to catch startup crashes
+        // that unit tests cannot see; interactive flows stay untouched.
+        var smokeSelfTest = e.Args.Any(x => x.Equals("--smoke-self-test", StringComparison.OrdinalIgnoreCase));
         ShutdownMode = ShutdownMode.OnLastWindowClose;
         AppPaths.Initialize(e.Args);
         CrashReportService.Initialize();
@@ -52,20 +56,30 @@ public partial class App : Application
             await SettingsService.InitializeAsync();
             if (!SettingsService.Current.ThemeSelectionCompleted)
             {
-                splash.Hide();
-                var themePicker = new ThemeSelectionWindow(
-                    SettingsService.Current.Theme, SettingsService.Current.ThemeMode);
-                themePicker.ShowDialog();
-                var firstRunSettings = SettingsService.Current.Clone();
-                firstRunSettings.Theme = themePicker.ResultTheme;
-                firstRunSettings.ThemeMode = themePicker.ResultMode;
-                firstRunSettings.ThemeSelectionCompleted = true;
-                await SettingsService.SaveAsync(firstRunSettings);
-                splash.Show();
+                if (smokeSelfTest)
+                {
+                    var smokeSettings = SettingsService.Current.Clone();
+                    smokeSettings.ThemeSelectionCompleted = true;
+                    await SettingsService.SaveAsync(smokeSettings);
+                }
+                else
+                {
+                    splash.Hide();
+                    var themePicker = new ThemeSelectionWindow(
+                        SettingsService.Current.Theme, SettingsService.Current.ThemeMode);
+                    themePicker.ShowDialog();
+                    var firstRunSettings = SettingsService.Current.Clone();
+                    firstRunSettings.Theme = themePicker.ResultTheme;
+                    firstRunSettings.ThemeMode = themePicker.ResultMode;
+                    firstRunSettings.ThemeSelectionCompleted = true;
+                    await SettingsService.SaveAsync(firstRunSettings);
+                    splash.Show();
+                }
             }
             ThemeService.Apply(SettingsService.Current.Theme, SettingsService.Current.ThemeMode);
             CrashReportService.AddBreadcrumb("startup", "settings-ready");
-            if (SettingsService.Current.VoiceSpeakAtStartup &&
+            if (!smokeSelfTest &&
+                SettingsService.Current.VoiceSpeakAtStartup &&
                 SettingsService.Current.VoiceAssistantMode != Models.VoiceAssistantMode.Off)
                 startupAudio = StartupSoundService.PlayAsync();
             if (e.Args.Any(x => x.Equals("--guardian-test-crash", StringComparison.OrdinalIgnoreCase)))
@@ -89,20 +103,32 @@ public partial class App : Application
                     "Nexus Guardian — безопасный режим", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
             VoiceAssistantService.Initialize();
-            VoiceAssistantService.Announce(
-                GuardianRuntime.IsSafeMode
-                    ? "Nexus запущен в безопасном режиме."
-                    : GuardianRuntime.IntegrityStatus.Equals("verified", StringComparison.OrdinalIgnoreCase)
-                        ? "Nexus готов. Целостность браузера подтверждена."
-                        : "Nexus готов к работе.",
-                GuardianRuntime.IsSafeMode
-                    ? VoiceAnnouncementPriority.Critical
-                    : VoiceAnnouncementPriority.Important);
-            if (!GuardianRuntime.IsSafeMode)
+            if (!smokeSelfTest)
             {
-                WhisperService.PrepareInBackground();
-                TranslationService.WarmUpInBackground();
-                LocalAiService.WarmUpInBackground();
+                VoiceAssistantService.Announce(
+                    GuardianRuntime.IsSafeMode
+                        ? "Nexus запущен в безопасном режиме."
+                        : GuardianRuntime.IntegrityStatus.Equals("verified", StringComparison.OrdinalIgnoreCase)
+                            ? "Nexus готов. Целостность браузера подтверждена."
+                            : "Nexus готов к работе.",
+                    GuardianRuntime.IsSafeMode
+                        ? VoiceAnnouncementPriority.Critical
+                        : VoiceAnnouncementPriority.Important);
+                if (!GuardianRuntime.IsSafeMode)
+                {
+                    WhisperService.PrepareInBackground();
+                    TranslationService.WarmUpInBackground();
+                    LocalAiService.WarmUpInBackground();
+                }
+            }
+            if (smokeSelfTest)
+            {
+                CrashReportService.AddBreadcrumb("startup", "smoke-self-test-ready");
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(8));
+                    await Dispatcher.InvokeAsync(() => Shutdown(0));
+                });
             }
             _ = ProcessCrashQueueAsync(mainWindow);
         }

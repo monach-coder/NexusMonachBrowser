@@ -73,9 +73,11 @@ public static class JsonStore
                 File.Move(temp, destination, overwrite: true);
                 return;
             }
-            catch (Exception exception) when (
-                attempt < ReplaceAttempts - 1 &&
-                exception is IOException or UnauthorizedAccessException)
+            // A destination held by another process (a concurrently closing
+            // instance, antivirus, indexer) surfaces as either IOException or
+            // UnauthorizedAccessException depending on the sharing mode.
+            catch (Exception ex) when ((ex is IOException or UnauthorizedAccessException) &&
+                                       attempt < ReplaceAttempts - 1)
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(25 * (1 << attempt)));
             }

@@ -47,8 +47,11 @@ public static partial class CrashReportService
     private static readonly object FileGate = new();
     private static readonly ConcurrentQueue<CrashBreadcrumb> Breadcrumbs = new();
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly TimeSpan NonFatalDedupWindow = TimeSpan.FromSeconds(60);
     private static int _fatalRecorded;
     private static bool _initialized;
+    private static DateTimeOffset? _lastNonFatalUtc;
+    private static string? _lastNonFatalSignature;
 
     public static string VaultPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NexusMonach", "Guardian", "CrashVault");
@@ -74,8 +77,24 @@ public static partial class CrashReportService
     public static void RecordNonFatal(string component, string stage, Exception? exception = null)
     {
         AddBreadcrumb(component, stage);
-        if (exception is not null)
-            WriteReport(exception, component, stage, fatal: false);
+        if (exception is null) return;
+        // Startup may hit the same broken local worker twice in a few seconds
+        // (chime plus the ready announcement, or a retrying lane). One sanitized
+        // report per unique failure is enough for the vault; exact duplicates
+        // only bury genuinely different problems behind repeated noise.
+        var signature = string.Join('|',
+            LimitToken(component), LimitToken(stage),
+            exception.GetType().FullName ?? exception.GetType().Name, exception.Message);
+        var now = DateTimeOffset.UtcNow;
+        lock (FileGate)
+        {
+            if (_lastNonFatalSignature == signature &&
+                _lastNonFatalUtc is { } previous && now - previous < NonFatalDedupWindow)
+                return;
+            _lastNonFatalSignature = signature;
+            _lastNonFatalUtc = now;
+        }
+        WriteReport(exception, component, stage, fatal: false);
     }
 
     public static void RecordFatal(Exception exception, string component, string stage) =>

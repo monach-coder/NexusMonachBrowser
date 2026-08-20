@@ -190,6 +190,13 @@ dotnet restore NexusMonach.sln
 dotnet run --project src/NexusMonach/NexusMonach.csproj
 ```
 
+Быстрая автопроверка запуска без диалогов и звука — окно открывается и через
+несколько секунд процесс завершается с кодом 0 (этот же режим используется в CI):
+
+```powershell
+dotnet run --project src/NexusMonach/NexusMonach.csproj -- --smoke-self-test
+```
+
 ## Хранение данных
 
 - portable-сборка: `NexusMonach-Portable/Data`;

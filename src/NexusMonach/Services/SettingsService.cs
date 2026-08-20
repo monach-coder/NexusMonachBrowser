@@ -31,7 +31,18 @@ public static class SettingsService
         }
         if (stored is null && GuardianReportingDefaults.Mode.Equals("automatic", StringComparison.OrdinalIgnoreCase))
             Current.CrashReportMode = CrashReportMode.AutomaticAnonymous;
-        await SaveAsync(Current);
+        try
+        {
+            await SaveAsync(Current);
+        }
+        catch (Exception ex)
+        {
+            // Another instance may still hold settings.json while this one is
+            // starting (safe restart, portable copy). Browsing must start with
+            // the loaded in-memory settings; the next successful save persists
+            // the normalization.
+            CrashReportService.RecordNonFatal("settings", "initial-normalize-persist", ex);
+        }
     }
 
     public static async Task SaveAsync(BrowserSettings settings)

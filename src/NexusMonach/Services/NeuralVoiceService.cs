@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
@@ -128,24 +129,34 @@ public static class NeuralVoiceService
         if (!IsAvailable) return false;
         var state = StateFor(lane);
         var generation = Volatile.Read(ref state.StopGeneration);
-        var output = Path.Combine(Path.GetTempPath(),
-            $"nexus-voice-{state.Name}-{Guid.NewGuid():N}.wav");
-        try
+        // A worker that exits before its first reply is usually a broken cold
+        // start (inherited Python environment, unwritable temp directory,
+        // half-extracted runtime). One retry with a fresh worker keeps startup
+        // speech reliable without hiding persistent failures from Crash Vault.
+        for (var attempt = 0; ; attempt++)
         {
-            SynthesizeToFile(text, profile, rate, lane, output, CancellationToken.None);
-            return PlayWave(output, state, lane, generation);
-        }
-        catch (Exception ex)
-        {
-            if (ShouldReportSynthesisFailure(generation, Volatile.Read(ref state.StopGeneration)))
-                CrashReportService.RecordNonFatal("voice",
-                    "neural-tts-" + state.Name, ex);
-            StopWorker(state);
-            return false;
-        }
-        finally
-        {
-            try { File.Delete(output); } catch { }
+            var output = Path.Combine(Path.GetTempPath(),
+                $"nexus-voice-{state.Name}-{Guid.NewGuid():N}.wav");
+            try
+            {
+                SynthesizeToFile(text, profile, rate, lane, output, CancellationToken.None);
+                return PlayWave(output, state, lane, generation);
+            }
+            catch (Exception ex)
+            {
+                StopWorker(state);
+                var stillCurrent =
+                    ShouldReportSynthesisFailure(generation, Volatile.Read(ref state.StopGeneration));
+                if (attempt == 0 && stillCurrent && ex is WorkerExitedException) continue;
+                if (stillCurrent)
+                    CrashReportService.RecordNonFatal("voice",
+                        "neural-tts-" + state.Name, ex);
+                return false;
+            }
+            finally
+            {
+                try { File.Delete(output); } catch { }
+            }
         }
     }
 
@@ -230,6 +241,15 @@ public static class NeuralVoiceService
                 StandardOutputEncoding = new UTF8Encoding(false),
                 StandardErrorEncoding = new UTF8Encoding(false)
             };
+            // The worker embeds a Python runtime: PYTHONHOME/PYTHONPATH inherited
+            // from a developer shell corrupt its imports, and a PyInstaller-style
+            // pack needs an explicit TEMP/TMP when the parent shell omits them.
+            start.Environment.Remove("PYTHONHOME");
+            start.Environment.Remove("PYTHONPATH");
+            if (string.IsNullOrWhiteSpace(start.Environment["TEMP"]))
+                start.Environment["TEMP"] = Path.GetTempPath();
+            if (string.IsNullOrWhiteSpace(start.Environment["TMP"]))
+                start.Environment["TMP"] = Path.GetTempPath();
             start.ArgumentList.Add("--model");
             start.ArgumentList.Add(model);
             start.ArgumentList.Add("--stdio");
@@ -239,6 +259,8 @@ public static class NeuralVoiceService
             state.Worker = process;
             state.WorkerExecutable = executable;
             state.WorkerModel = model;
+            var workerGeneration = ++state.WorkerGeneration;
+            state.WorkerStderrTail.Clear();
             _ = Task.Run(async () =>
             {
                 try
@@ -247,6 +269,10 @@ public static class NeuralVoiceService
                     {
                         var line = await process.StandardError.ReadLineAsync();
                         if (line is null) break;
+                        if (Volatile.Read(ref state.WorkerGeneration) != workerGeneration) break;
+                        state.WorkerStderrTail.Enqueue(line);
+                        while (state.WorkerStderrTail.Count > 8)
+                            state.WorkerStderrTail.TryDequeue(out _);
                     }
                 }
                 catch { /* Stop/Shutdown may dispose the worker while stderr is drained. */ }
@@ -289,7 +315,7 @@ public static class NeuralVoiceService
             synthesisBudget.CancelAfter(state.IsReady || lane == NeuralVoiceLane.Assistant
                 ? WarmSynthesisTimeout
                 : DubbingColdSynthesisTimeout);
-            var replyLine = ReadReplyAsync(worker, requestId, synthesisBudget.Token)
+            var replyLine = ReadReplyAsync(state, requestId, synthesisBudget.Token)
                 .GetAwaiter().GetResult();
             using var reply = JsonDocument.Parse(replyLine);
             var root = reply.RootElement;
@@ -441,14 +467,23 @@ public static class NeuralVoiceService
         }
     }
 
-    private static async Task<string> ReadReplyAsync(Process worker, string requestId,
+    private static async Task<string> ReadReplyAsync(LaneState state, string requestId,
         CancellationToken cancellationToken)
     {
+        var worker = state.Worker
+            ?? throw new InvalidOperationException("Локальный TTS-воркер больше не запущен.");
         for (var lineCount = 0; lineCount < 100; lineCount++)
         {
             var line = await worker.StandardOutput.ReadLineAsync(cancellationToken);
             if (line is null)
-                throw new InvalidOperationException("Локальный процесс TTS не вернул ответ.");
+            {
+                // EOF means the worker process itself died; its stderr tail is
+                // the only actionable diagnostic, so it belongs in the report.
+                var tail = string.Join(" | ", state.WorkerStderrTail.ToArray());
+                throw new WorkerExitedException(string.IsNullOrWhiteSpace(tail)
+                    ? "Локальный процесс TTS завершился до ответа; stderr пуст."
+                    : "Локальный процесс TTS завершился до ответа. Последние строки воркера: " + tail);
+            }
             try
             {
                 using var document = JsonDocument.Parse(line);
@@ -491,11 +526,16 @@ public static class NeuralVoiceService
             state.WorkerExecutable = null;
             state.WorkerModel = null;
             state.IsReady = false;
+            state.WorkerGeneration++;
+            state.WorkerStderrTail.Clear();
         }
         if (worker is null) return;
         try { if (!worker.HasExited) worker.Kill(true); } catch { }
         try { worker.Dispose(); } catch { }
     }
+
+    /// <summary>Thrown when the TTS worker process dies before answering a request.</summary>
+    private sealed class WorkerExitedException(string message) : InvalidOperationException(message);
 
     private sealed class LaneState(string name)
     {
@@ -509,5 +549,7 @@ public static class NeuralVoiceService
         public bool IsReady { get; set; }
         public WaveOutEvent? ActiveOutput { get; set; }
         public int StopGeneration;
+        public int WorkerGeneration;
+        public ConcurrentQueue<string> WorkerStderrTail { get; } = new();
     }
 }

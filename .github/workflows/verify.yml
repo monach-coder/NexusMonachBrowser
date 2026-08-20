@@ -31,6 +31,19 @@ jobs:
         run: dotnet build NexusMonach.sln --configuration Release --no-restore -warnaserror
       - name: Run security regression tests
         run: dotnet test tests/NexusMonach.Security.Tests/NexusMonach.Security.Tests.csproj --configuration Release --no-build --no-restore --verbosity normal
+      - name: Smoke-launch the real browser window
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "src/NexusMonach/bin/Release/net8.0-windows/NexusMonach.Browser.exe"
+          $process = Start-Process -FilePath $exe -ArgumentList "--smoke-self-test" -PassThru
+          if (-not $process.WaitForExit(120000)) {
+            Stop-Process -Id $process.Id -Force
+            throw "Smoke run did not exit within 120 seconds."
+          }
+          if ($process.ExitCode -ne 0) {
+            throw "Smoke run exited with code $($process.ExitCode)."
+          }
+          Write-Output "Smoke run initialized WebView2, opened the main window and exited cleanly."
       - name: Ensure runtime code has no external AI endpoints
         shell: pwsh
         run: |
