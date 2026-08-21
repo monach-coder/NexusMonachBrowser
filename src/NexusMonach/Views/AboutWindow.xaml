@@ -25,10 +25,10 @@
                 <StackPanel>
                     <TextBlock Text="АВТОРЫ ПРОЕКТА" HorizontalAlignment="Center"
                                Foreground="{StaticResource GoldBrush}" FontSize="10" FontWeight="SemiBold" />
-                    <TextBlock Text="CoderMonach  ×  OpenAI Codex" Margin="0,4,0,0"
+                    <TextBlock Text="CoderMonach  ×  OpenAI Codex  ×  ZCode" Margin="0,4,0,0"
                                HorizontalAlignment="Center" Foreground="{StaticResource AccentBrush}"
                                FontSize="15" FontWeight="SemiBold" />
-                    <TextBlock Text="Идея, видение и направление — CoderMonach. Проектирование и код — в сотрудничестве с OpenAI Codex."
+                    <TextBlock Text="Идея, видение и направление — CoderMonach. Проектирование и код — в сотрудничестве с OpenAI Codex и ZCode (агент на модели GLM, Z.ai): надёжность запуска, локальный нейроголос и словарь ударений."
                                Margin="0,5,0,0" TextAlignment="Center" TextWrapping="Wrap"
                                Foreground="{StaticResource MutedTextBrush}" FontSize="11" />
                 </StackPanel>
