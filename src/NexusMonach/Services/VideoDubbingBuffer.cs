@@ -33,10 +33,12 @@ internal sealed class VideoDubbingBuffer : IAsyncDisposable
         _beforeSpeaking = beforeSpeaking;
         _afterSpeaking = afterSpeaking;
         _stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        // DropOldest: когда перевод не успевает за речью, теряется самый старый,
+        // уже отставший хвост — а не блокируется весь конвейер.
         _translations = Channel.CreateBounded<VideoSpeechTranslationText>(
             new BoundedChannelOptions(profile.PreparedQueueCapacity * 2)
             {
-                FullMode = BoundedChannelFullMode.Wait,
+                FullMode = BoundedChannelFullMode.DropOldest,
                 SingleReader = true,
                 SingleWriter = true
             });
@@ -72,6 +74,19 @@ internal sealed class VideoDubbingBuffer : IAsyncDisposable
         {
             await foreach (var translation in _translations.Reader.ReadAllAsync(_stop.Token))
             {
+                // Ограничение накопленного отставания: если озвученного запаса
+                // уже слишком много, новая реплика пропускается — перевод
+                // догоняет видео, а не копит минутную очередь, которая
+                // доигрывается после остановки.
+                if (VideoDubbingPolicy.ShouldShedTranslation(
+                        _reserve.Snapshot().Seconds, _profile))
+                {
+                    await _diagnostics.WriteEventAsync("translation-shed",
+                        $"buffered={_reserve.Snapshot().Seconds:F1}s " +
+                        $"text={translation.RussianText[..Math.Min(80, translation.RussianText.Length)]}")
+                        .ConfigureAwait(false);
+                    continue;
+                }
                 foreach (var ttsText in VideoDubbingPolicy.SplitTtsText(
                              translation.RussianText, _profile))
                 {
@@ -99,7 +114,7 @@ internal sealed class VideoDubbingBuffer : IAsyncDisposable
                         var item = new PreparedItem(translation, ttsText, speech);
                         await _diagnostics.WriteAsync("prepared", item,
                             _reserve.Snapshot()).ConfigureAwait(false);
-                        await _prepared.Writer.WriteAsync(item, _stop.Token).ConfigureAwait(false);
+                        await WritePreparedSheddingAsync(item).ConfigureAwait(false);
                         speech = null;
                         addedToReserve = false;
                     }
@@ -122,6 +137,29 @@ internal sealed class VideoDubbingBuffer : IAsyncDisposable
             }
         }
         finally { _prepared.Writer.TryComplete(); }
+    }
+
+    /// <summary>
+    /// Запись в очередь подготовленного звука со сбросом: если очередь полна,
+    /// самая старая реплика выкидывается и её WAV удаляется — свежий перевод
+    /// важнее накопленного отставания, а временные файлы не утекают.
+    /// </summary>
+    private async Task WritePreparedSheddingAsync(PreparedItem item)
+    {
+        while (!_prepared.Writer.TryWrite(item))
+        {
+            if (!_prepared.Reader.TryRead(out var oldest))
+            {
+                await _prepared.Writer.WriteAsync(item, _stop.Token).ConfigureAwait(false);
+                return;
+            }
+            _reserve.Remove(oldest.Speech.Duration);
+            await _diagnostics.WriteEventAsync("prepared-shed",
+                $"seconds={oldest.Speech.Duration.TotalSeconds:F1} " +
+                $"text={oldest.TtsText[..Math.Min(60, oldest.TtsText.Length)]}")
+                .ConfigureAwait(false);
+            oldest.Speech.Dispose();
+        }
     }
 
     /// <summary>
@@ -384,6 +422,30 @@ internal sealed class VideoDubbingDiagnosticLog : IAsyncDisposable
             PreparedAudioSeconds = item.Speech.Duration.TotalSeconds,
             ReadyPhraseCount = reserve.Phrases,
             ReadyAudioSeconds = reserve.Seconds
+        });
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await _writer.WriteLineAsync(payload).ConfigureAwait(false);
+            await _writer.FlushAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("video-translation",
+                "diagnostic-log-write", ex);
+        }
+        finally { _gate.Release(); }
+    }
+
+    public async Task WriteEventAsync(string stage, string detail)
+    {
+        if (_writer is null) return;
+        var payload = JsonSerializer.Serialize(new
+        {
+            TimestampUtc = DateTimeOffset.UtcNow,
+            Stage = stage,
+            Mode = Mode.ToString(),
+            Detail = detail
         });
         await _gate.WaitAsync().ConfigureAwait(false);
         try

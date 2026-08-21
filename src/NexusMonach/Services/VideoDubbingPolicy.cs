@@ -17,7 +17,8 @@ internal sealed record VideoDubbingModeProfile(
     int RefillWaitMilliseconds,
     int PreparedQueueCapacity,
     int MaximumTtsCharacters,
-    double MaximumPreparedAudioSeconds);
+    double MaximumPreparedAudioSeconds,
+    double MaximumBufferedAudioSeconds);
 
 /// <summary>
 /// Проверяемые границы закадрового перевода. Ни один путь захвата или озвучивания
@@ -64,7 +65,8 @@ internal static class VideoDubbingPolicy
             RefillWaitMilliseconds: 300,
             PreparedQueueCapacity: 4,
             MaximumTtsCharacters: 110,
-            MaximumPreparedAudioSeconds: 9),
+            MaximumPreparedAudioSeconds: 9,
+            MaximumBufferedAudioSeconds: 15),
         VideoTranslationMode.Quality => new(mode,
             SegmentMilliseconds: 4_000,
             SegmentOverlapMilliseconds: 1_000,
@@ -79,7 +81,8 @@ internal static class VideoDubbingPolicy
             RefillWaitMilliseconds: 650,
             PreparedQueueCapacity: 8,
             MaximumTtsCharacters: 140,
-            MaximumPreparedAudioSeconds: 12),
+            MaximumPreparedAudioSeconds: 12,
+            MaximumBufferedAudioSeconds: 32),
         _ => new(VideoTranslationMode.Balanced,
             SegmentMilliseconds: SegmentMilliseconds,
             SegmentOverlapMilliseconds: SegmentOverlapMilliseconds,
@@ -94,7 +97,8 @@ internal static class VideoDubbingPolicy
             RefillWaitMilliseconds: 450,
             PreparedQueueCapacity: 6,
             MaximumTtsCharacters: 110,
-            MaximumPreparedAudioSeconds: 9)
+            MaximumPreparedAudioSeconds: 9,
+            MaximumBufferedAudioSeconds: 24)
     };
 
     /// <summary>
@@ -182,6 +186,17 @@ internal static class VideoDubbingPolicy
     public static bool IsPreparedAudioAcceptable(TimeSpan duration,
         VideoDubbingModeProfile profile) =>
         duration > TimeSpan.Zero && duration.TotalSeconds <= profile.MaximumPreparedAudioSeconds;
+
+    /// <summary>
+    /// Русская озвучка обычно длиннее исходной речи, поэтому без сброса
+    /// накопленный буфер растёт неограниченно: задержка догоняет минуты, а
+    /// после остановки видео очередь продолжает говорить. Когда озвученного
+    /// запаса слишком много, новые реплики не ставятся в очередь — перевод
+    /// возвращается к синхрону, пропустив отставший хвост.
+    /// </summary>
+    public static bool ShouldShedTranslation(double bufferedAudioSeconds,
+        VideoDubbingModeProfile profile) =>
+        bufferedAudioSeconds >= profile.MaximumBufferedAudioSeconds;
 
     public static bool ShouldFinalizeUtterance(string? text, int fragmentCount,
         VideoDubbingModeProfile profile)

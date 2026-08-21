@@ -147,6 +147,25 @@ public sealed class VideoDubbingPolicyTests
     }
 
     [Fact]
+    public void BacklogShedding_BoundsAccumulatedDubbingLagPerMode()
+    {
+        var fast = VideoDubbingPolicy.ForMode(VideoTranslationMode.Fast);
+        var balanced = VideoDubbingPolicy.ForMode(VideoTranslationMode.Balanced);
+        var quality = VideoDubbingPolicy.ForMode(VideoTranslationMode.Quality);
+
+        // Русская озвучка длиннее исходной речи: без сброса очередь дорастает
+        // до минут и продолжает говорить после остановки видео.
+        Assert.InRange(fast.MaximumBufferedAudioSeconds, 10, 18);
+        Assert.InRange(balanced.MaximumBufferedAudioSeconds, 20, 28);
+        Assert.InRange(quality.MaximumBufferedAudioSeconds, 28, 36);
+        Assert.True(VideoDubbingPolicy.ShouldShedTranslation(
+            balanced.MaximumBufferedAudioSeconds, balanced));
+        Assert.False(VideoDubbingPolicy.ShouldShedTranslation(
+            balanced.MaximumBufferedAudioSeconds - 0.01, balanced));
+        Assert.False(VideoDubbingPolicy.ShouldShedTranslation(0, balanced));
+    }
+
+    [Fact]
     public void ReadyAudioReserve_TracksPreparedWavDuration()
     {
         var reserve = new ReadyAudioReserve();
