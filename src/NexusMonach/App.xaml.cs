@@ -119,6 +119,7 @@ public partial class App : Application
                     WhisperService.PrepareInBackground();
                     TranslationService.WarmUpInBackground();
                     LocalAiService.WarmUpInBackground();
+                    _ = Task.Run(RussianStressDictionary.WarmUp);
                 }
             }
             if (smokeSelfTest)

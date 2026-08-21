@@ -26,6 +26,7 @@ public static class AiModelCatalog
     public static string KoreanToEnglishRoot => Path.Combine(TranslationRoot, "ko-en");
     public static string NodeRoot => Path.Combine(Root, "node");
     public static string AdapterRoot => Path.Combine(Root, "adapters");
+    public static string DictionariesRoot => Path.Combine(Root, "dictionaries");
     public static string VoiceRoot => Path.Combine(Root, "voice");
     public static string VoskVoiceModelRoot => Path.Combine(Root, "models", "voice", "vosk-tts-ru-multi");
     public static string SileroVoiceModelRoot => Path.Combine(Root, "models", "voice", "silero-v5-ru");
@@ -46,6 +47,7 @@ public static class AiModelCatalog
     public static string? NodeExecutable => FindFile(NodeRoot, "node.exe");
     public static string SemanticAdapter => Path.Combine(AdapterRoot, "semantic.mjs");
     public static string TranslationAdapter => Path.Combine(AdapterRoot, "translate.mjs");
+    public static string StressDictionary => Path.Combine(DictionariesRoot, "ru-stress-full.txt.gz");
     public static string? PiperVoiceWorker => FindFile(VoiceRoot, "nexus-piper-worker.exe");
     public static string? SileroVoiceWorker => FindFile(VoiceRoot, "nexus-silero-worker.exe");
     public static string? PiperCli => FindFile(VoiceRoot, "piper.exe");
@@ -72,6 +74,7 @@ public static class AiModelCatalog
                                           File.Exists(PiperVoiceModel + ".json");
     public static bool SileroVoiceReady => IsUsable(SileroVoiceWorker, 500_000) &&
                                            IsUsable(SileroVoiceModel, 100_000_000);
+    public static bool StressDictionaryReady => IsUsable(StressDictionary, 1_000_000);
     public static bool NeuralVoiceReady => SileroVoiceReady || PiperVoiceReady || OperatingSystem.IsWindows();
 
     public static string ReadinessSummary =>

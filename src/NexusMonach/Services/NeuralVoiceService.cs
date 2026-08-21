@@ -299,10 +299,13 @@ public static class NeuralVoiceService
 
             var worker = EnsureWorker(state);
             var requestId = Guid.NewGuid().ToString("N");
+            // Silero понимает «+» перед гласной как ручное ударение. Маркер
+            // ставится только здесь: SAPI-фолбэк и Piper произнесли бы «плюс».
+            var spokenText = RussianStressDictionary.ApplyStress(text);
             var request = JsonSerializer.Serialize(new
             {
                 id = requestId,
-                text,
+                text = spokenText,
                 output,
                 style = VoiceStyle(profile),
                 speaker = SpeakerId(profile),
