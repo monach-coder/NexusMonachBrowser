@@ -66,7 +66,7 @@ internal static class VideoDubbingPolicy
             PreparedQueueCapacity: 4,
             MaximumTtsCharacters: 110,
             MaximumPreparedAudioSeconds: 9,
-            MaximumBufferedAudioSeconds: 15),
+            MaximumBufferedAudioSeconds: 10),
         VideoTranslationMode.Quality => new(mode,
             SegmentMilliseconds: 4_000,
             SegmentOverlapMilliseconds: 1_000,
@@ -82,7 +82,7 @@ internal static class VideoDubbingPolicy
             PreparedQueueCapacity: 8,
             MaximumTtsCharacters: 140,
             MaximumPreparedAudioSeconds: 12,
-            MaximumBufferedAudioSeconds: 32),
+            MaximumBufferedAudioSeconds: 22),
         _ => new(VideoTranslationMode.Balanced,
             SegmentMilliseconds: SegmentMilliseconds,
             SegmentOverlapMilliseconds: SegmentOverlapMilliseconds,
@@ -98,7 +98,7 @@ internal static class VideoDubbingPolicy
             PreparedQueueCapacity: 6,
             MaximumTtsCharacters: 110,
             MaximumPreparedAudioSeconds: 9,
-            MaximumBufferedAudioSeconds: 24)
+            MaximumBufferedAudioSeconds: 15)
     };
 
     /// <summary>

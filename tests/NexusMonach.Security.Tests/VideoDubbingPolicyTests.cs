@@ -153,11 +153,11 @@ public sealed class VideoDubbingPolicyTests
         var balanced = VideoDubbingPolicy.ForMode(VideoTranslationMode.Balanced);
         var quality = VideoDubbingPolicy.ForMode(VideoTranslationMode.Quality);
 
-        // Русская озвучка длиннее исходной речи: без сброса очередь дорастает
-        // до минут и продолжает говорить после остановки видео.
-        Assert.InRange(fast.MaximumBufferedAudioSeconds, 10, 18);
-        Assert.InRange(balanced.MaximumBufferedAudioSeconds, 20, 28);
-        Assert.InRange(quality.MaximumBufferedAudioSeconds, 28, 36);
+        // Русская озвучка длиннее исходной речи: без выталкивания старых реплик
+        // очередь дорастает до минут и продолжает говорить после остановки.
+        Assert.InRange(fast.MaximumBufferedAudioSeconds, 8, 12);
+        Assert.InRange(balanced.MaximumBufferedAudioSeconds, 12, 18);
+        Assert.InRange(quality.MaximumBufferedAudioSeconds, 18, 26);
         Assert.True(VideoDubbingPolicy.ShouldShedTranslation(
             balanced.MaximumBufferedAudioSeconds, balanced));
         Assert.False(VideoDubbingPolicy.ShouldShedTranslation(

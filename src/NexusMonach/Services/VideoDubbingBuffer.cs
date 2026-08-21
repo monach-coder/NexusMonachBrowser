@@ -74,18 +74,22 @@ internal sealed class VideoDubbingBuffer : IAsyncDisposable
         {
             await foreach (var translation in _translations.Reader.ReadAllAsync(_stop.Token))
             {
-                // Ограничение накопленного отставания: если озвученного запаса
-                // уже слишком много, новая реплика пропускается — перевод
-                // догоняет видео, а не копит минутную очередь, которая
-                // доигрывается после остановки.
-                if (VideoDubbingPolicy.ShouldShedTranslation(
-                        _reserve.Snapshot().Seconds, _profile))
+                // Ограничение накопленного отставания с выталкиванием: когда
+                // озвученного запаса слишком много, из очереди уходят самые
+                // СТАРЫЕ реплики, а свежая встаёт в начало — перевод держится
+                // возле головы воспроизведения. Сбрасывать новую реплику
+                // вместо старой нельзя: запас из отставших фраз продолжал бы
+                // играть, а перевод молчал.
+                while (VideoDubbingPolicy.ShouldShedTranslation(
+                           _reserve.Snapshot().Seconds, _profile))
                 {
-                    await _diagnostics.WriteEventAsync("translation-shed",
-                        $"buffered={_reserve.Snapshot().Seconds:F1}s " +
-                        $"text={translation.RussianText[..Math.Min(80, translation.RussianText.Length)]}")
+                    if (!_prepared.Reader.TryRead(out var stale)) break;
+                    _reserve.Remove(stale.Speech.Duration);
+                    await _diagnostics.WriteEventAsync("prepared-shed",
+                        $"seconds={stale.Speech.Duration.TotalSeconds:F1} " +
+                        $"text={stale.TtsText[..Math.Min(60, stale.TtsText.Length)]}")
                         .ConfigureAwait(false);
-                    continue;
+                    stale.Speech.Dispose();
                 }
                 foreach (var ttsText in VideoDubbingPolicy.SplitTtsText(
                              translation.RussianText, _profile))
