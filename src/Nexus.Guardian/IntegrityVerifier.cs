@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -88,6 +89,7 @@ internal static class IntegrityVerifier
         var criticalProblems = new List<string>();
         var otherProblems = new List<string>();
         var expectedPaths = manifest.Files.Select(x => x.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var hashPending = new List<(IntegrityFile Entry, string FullPath)>();
         foreach (var entry in manifest.Files)
         {
             var relative = entry.Path.Replace('/', Path.DirectorySeparatorChar);
@@ -112,12 +114,27 @@ internal static class IntegrityVerifier
             }
 
             if (entry.Critical || full)
-            {
-                var actual = ComputeSha256(fullPath);
-                if (!actual.Equals(entry.Sha256, StringComparison.OrdinalIgnoreCase))
-                    (entry.Critical ? criticalProblems : otherProblems).Add("Не совпадает SHA-256: " + entry.Path);
-            }
+                hashPending.Add((entry, fullPath));
         }
+
+        // Почти гигабайт критических файлов — это минуты на холодном диске.
+        // Хеши независимы, поэтому считаются параллельно; порядок проблем
+        // в отчёте не имеет значения.
+        var hashFailures = new ConcurrentBag<(bool Critical, string Message)>();
+        Parallel.ForEach(
+            hashPending,
+            new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount, 2, 6)
+            },
+            item =>
+            {
+                var actual = ComputeSha256(item.FullPath);
+                if (!actual.Equals(item.Entry.Sha256, StringComparison.OrdinalIgnoreCase))
+                    hashFailures.Add((item.Entry.Critical, "Не совпадает SHA-256: " + item.Entry.Path));
+            });
+        foreach (var failure in hashFailures)
+            (failure.Critical ? criticalProblems : otherProblems).Add(failure.Message);
 
         foreach (var path in Directory.EnumerateFiles(normalizedRoot, "*", SearchOption.AllDirectories))
         {
@@ -196,6 +213,9 @@ internal static class IntegrityVerifier
         return relative.Equals(ManifestName, StringComparison.OrdinalIgnoreCase) ||
                relative.Equals(SignatureName, StringComparison.OrdinalIgnoreCase) ||
                relative.StartsWith("Data/", StringComparison.OrdinalIgnoreCase) ||
+               // Служебное состояние внешних инструментов разработки не входит в
+               // поставку и не влияет на поведение браузера.
+               relative.StartsWith(".mimosa/", StringComparison.OrdinalIgnoreCase) ||
                relative.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase);
     }
 

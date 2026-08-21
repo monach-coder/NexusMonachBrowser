@@ -82,6 +82,10 @@ public sealed class NeuralVoiceLifecycleTests
         var whisperModel = Path.Combine(root, "src", "NexusMonach", "AI", "models", "whisper",
             "ggml-base-q5_1.bin");
         if (!File.Exists(worker) || !File.Exists(model)) return;
+        // torch внутри воркера открывает модель через ANSI fopen: репозиторий с
+        // кириллицей в пути ломает холодный старт, поэтому тест идёт тем же
+        // ASCII-зеркалом, что и продакшн-запуск браузера.
+        model = AsciiSafeModelCache.EnsureAsciiSafePath(model);
 
         var output = Path.Combine(Path.GetTempPath(), $"nexus-ready-{Guid.NewGuid():N}.wav");
         try

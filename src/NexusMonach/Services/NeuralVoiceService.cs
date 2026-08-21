@@ -219,7 +219,7 @@ public static class NeuralVoiceService
         {
             var executable = AiModelCatalog.VoiceWorker
                 ?? throw new FileNotFoundException(AiModelCatalog.MissingNeuralVoiceMessage);
-            var model = AiModelCatalog.VoiceModel;
+            var model = AsciiSafeModelCache.EnsureAsciiSafePath(AiModelCatalog.VoiceModel);
             if (state.Worker is { HasExited: false } &&
                 string.Equals(state.WorkerExecutable, executable, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(state.WorkerModel, model, StringComparison.OrdinalIgnoreCase))
@@ -358,7 +358,7 @@ public static class NeuralVoiceService
             WorkingDirectory = Path.GetDirectoryName(executable) ?? AppContext.BaseDirectory
         };
         start.ArgumentList.Add("--model");
-        start.ArgumentList.Add(AiModelCatalog.PiperVoiceModel);
+        start.ArgumentList.Add(AsciiSafeModelCache.EnsureAsciiSafePath(AiModelCatalog.PiperVoiceModel));
         start.ArgumentList.Add("--output_file");
         start.ArgumentList.Add(output);
         start.ArgumentList.Add("--noise_scale");

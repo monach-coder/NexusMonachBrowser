@@ -13,6 +13,8 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        Application.SetHighDpiMode(HighDpiMode.SystemAware);
+        Application.EnableVisualStyles();
         var commandMode = args.Length > 0 &&
             (args[0].Equals("--generate-key", StringComparison.OrdinalIgnoreCase) ||
              args[0].Equals("--generate-report-key", StringComparison.OrdinalIgnoreCase) ||
@@ -140,7 +142,7 @@ internal static class Program
             SilentUpdateCoordinator.TryLaunchPendingApply(root, GuardianRoot, relaunch: true))
             return 0;
 
-        var integrity = IntegrityVerifier.Verify(root, full);
+        var integrity = VerifyWithSplash(root, full);
         WriteIntegrityIncident(integrity);
         if (!integrity.CanLaunch)
         {
@@ -190,6 +192,36 @@ internal static class Program
         if (normalExit && IntegrityVerifier.UsesEmbeddedTrust)
             SilentUpdateCoordinator.TryLaunchPendingApply(root, GuardianRoot, relaunch: false);
         return process.ExitCode;
+    }
+
+    /// <summary>
+    /// Проверка целостности идёт до появления любого окна браузера и занимает
+    /// десятки секунд на холодном диске. Сплэш появляется не сразу, чтобы
+    /// тёплый повторный запуск не мигал лишним окном.
+    /// </summary>
+    private static IntegrityResult VerifyWithSplash(string root, bool full)
+    {
+        var verification = Task.Run(() => IntegrityVerifier.Verify(root, full));
+        GuardianSplash? splash = null;
+        var elapsed = Stopwatch.StartNew();
+        try
+        {
+            while (!verification.Wait(40))
+            {
+                if (splash is null && elapsed.ElapsedMilliseconds > 700)
+                {
+                    splash = new GuardianSplash();
+                    splash.Show();
+                }
+                Application.DoEvents();
+            }
+            return verification.Result;
+        }
+        finally
+        {
+            splash?.Close();
+            splash?.Dispose();
+        }
     }
 
     private static bool ShouldUseSafeMode()
