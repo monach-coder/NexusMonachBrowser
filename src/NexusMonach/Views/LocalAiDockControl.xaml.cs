@@ -229,8 +229,11 @@ public partial class LocalAiDockControl : UserControl
             var translationContext = new VideoSpeechTranslationContext(videoMode);
             var recentTranscripts = new RecentVideoPhraseGuard(
                 capacity: profile.ContextPhrases, retentionSeconds: profile.ContextSeconds);
+            // Дубли перевода подавляются только в коротком окне: повтор
+            // распознавания одного звука приходит секундами позже, а честный
+            // повтор говорящим («да», припев, акцент) обязан прозвучать.
             var recentTranslations = new RecentVideoPhraseGuard(
-                capacity: profile.ContextPhrases, retentionSeconds: profile.ContextSeconds);
+                capacity: profile.ContextPhrases, retentionSeconds: 15);
             var consecutiveErrors = 0;
 
             async Task<VideoSpeechTranslationText?> TranslateSegmentAsync(LiveAudioSegment segment)

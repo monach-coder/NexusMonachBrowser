@@ -225,7 +225,11 @@ public static class WhisperService
             var threads = Math.Clamp(Environment.ProcessorCount / 2, 2, 8);
             foreach (var argument in new[]
                      {
-                         "-m", AiModelCatalog.WhisperModel!, "--host", IPAddress.Loopback.ToString(),
+                         // whisper-server открывает модель через ANSI fopen: кириллица
+                         // в пути установки убивает процесс на загрузке модели, поэтому
+                         // модель заранее зеркалируется в ASCII-безопасный кэш.
+                         "-m", AsciiSafeModelCache.EnsureAsciiSafePath(AiModelCatalog.WhisperModel!),
+                         "--host", IPAddress.Loopback.ToString(),
                          "--port", port.ToString(), "--inference-path", inferencePath, "-l", "auto",
                          "-t", threads.ToString(), "-p", "1", "-sns"
                      })
@@ -318,7 +322,10 @@ public static class WhisperService
             };
             var arguments = new List<string>
             {
-                "-m", AiModelCatalog.WhisperModel!, "-f", input, "-l", "auto",
+                // whisper-cli падает при загрузке модели по пути с не-ASCII
+                // символами — тот же класс ошибки, что у torch в TTS-воркере.
+                "-m", AsciiSafeModelCache.EnsureAsciiSafePath(AiModelCatalog.WhisperModel!),
+                "-f", input, "-l", "auto",
                 "-otxt", "-of", outputBase, "-nt"
             };
             if (translateToEnglish) arguments.Add("-tr");

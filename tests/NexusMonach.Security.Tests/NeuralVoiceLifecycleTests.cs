@@ -137,7 +137,10 @@ public sealed class NeuralVoiceLifecycleTests
                 StandardOutputEncoding = new UTF8Encoding(false),
                 StandardErrorEncoding = new UTF8Encoding(false)
             };
-            foreach (var argument in new[] { "-m", whisperModel, "-f", output, "-l", "ru", "-nt", "-np" })
+            // whisper-cli, как и TTS-воркер, не открывает модель по пути с
+            // кириллицей — тест идёт тем же ASCII-зеркалом, что и продакшн.
+            var recognitionModel = AsciiSafeModelCache.EnsureAsciiSafePath(whisperModel);
+            foreach (var argument in new[] { "-m", recognitionModel, "-f", output, "-l", "ru", "-nt", "-np" })
                 recognition.ArgumentList.Add(argument);
             using var recognizer = Process.Start(recognition)!;
             var recognized = recognizer.StandardOutput.ReadToEndAsync();

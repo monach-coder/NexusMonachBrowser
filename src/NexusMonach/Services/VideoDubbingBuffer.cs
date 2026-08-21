@@ -72,62 +72,87 @@ internal sealed class VideoDubbingBuffer : IAsyncDisposable
         {
             await foreach (var translation in _translations.Reader.ReadAllAsync(_stop.Token))
             {
-                var ttsText = VideoDubbingPolicy.PrepareTtsText(translation.RussianText, _profile);
-                if (ttsText.Length == 0) continue;
-                PreparedDubbingSpeech? speech = null;
-                var addedToReserve = false;
-                try
+                foreach (var ttsText in VideoDubbingPolicy.SplitTtsText(
+                             translation.RussianText, _profile))
                 {
-                    speech = await VideoDubbingVoiceService.PrepareAsync(ttsText,
-                        VideoDubbingPolicy.SelectSpeechRate(ttsText.Length), _stop.Token)
-                        .ConfigureAwait(false);
-                    if (!VideoDubbingPolicy.IsPreparedAudioAcceptable(speech.Duration, _profile))
+                    if (ttsText.Length == 0) continue;
+                    PreparedDubbingSpeech? speech = null;
+                    var addedToReserve = false;
+                    try
                     {
-                        speech.Dispose();
-                        ttsText = VideoDubbingPolicy.PrepareTtsText(ttsText, _profile,
-                            Math.Max(40, _profile.MaximumTtsCharacters / 2));
-                        speech = await VideoDubbingVoiceService.PrepareAsync(ttsText,
-                            VideoDubbingPolicy.SelectSpeechRate(ttsText.Length), _stop.Token)
-                            .ConfigureAwait(false);
-                    }
-                    if (!VideoDubbingPolicy.IsPreparedAudioAcceptable(speech.Duration, _profile))
-                    {
-                        speech.Dispose();
+                        speech = await PrepareWithRetryAsync(ttsText).ConfigureAwait(false);
+                        if (!VideoDubbingPolicy.IsPreparedAudioAcceptable(speech.Duration, _profile))
+                        {
+                            speech.Dispose();
+                            var shortened = VideoDubbingPolicy.PrepareTtsText(ttsText, _profile,
+                                Math.Max(40, _profile.MaximumTtsCharacters / 2));
+                            speech = await PrepareWithRetryAsync(shortened).ConfigureAwait(false);
+                        }
+                        if (!VideoDubbingPolicy.IsPreparedAudioAcceptable(speech.Duration, _profile))
+                        {
+                            speech.Dispose();
+                            speech = null;
+                            continue;
+                        }
+                        _reserve.Add(speech.Duration);
+                        addedToReserve = true;
+                        var item = new PreparedItem(translation, ttsText, speech);
+                        await _diagnostics.WriteAsync("prepared", item,
+                            _reserve.Snapshot()).ConfigureAwait(false);
+                        await _prepared.Writer.WriteAsync(item, _stop.Token).ConfigureAwait(false);
                         speech = null;
-                        continue;
+                        addedToReserve = false;
                     }
-                    _reserve.Add(speech.Duration);
-                    addedToReserve = true;
-                    var item = new PreparedItem(translation, ttsText, speech);
-                    await _diagnostics.WriteAsync("prepared", item,
-                        _reserve.Snapshot()).ConfigureAwait(false);
-                    await _prepared.Writer.WriteAsync(item, _stop.Token).ConfigureAwait(false);
-                    speech = null;
-                    addedToReserve = false;
-                }
-                catch (OperationCanceledException) when (_stop.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (Exception ex)
-                {
-                    CrashReportService.RecordNonFatal("video-translation",
-                        "prepare-local-tts", ex);
-                }
-                finally
-                {
-                    if (speech is not null && addedToReserve)
-                        _reserve.Remove(speech.Duration);
-                    speech?.Dispose();
+                    catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        CrashReportService.RecordNonFatal("video-translation",
+                            "prepare-local-tts", ex);
+                    }
+                    finally
+                    {
+                        if (speech is not null && addedToReserve)
+                            _reserve.Remove(speech.Duration);
+                        speech?.Dispose();
+                    }
                 }
             }
         }
         finally { _prepared.Writer.TryComplete(); }
     }
 
+    /// <summary>
+    /// Подготовленный путь синтеза не имеет встроенного ретрая TrySpeak, а
+    /// воркер, умерший при холодном старте, не должен стоить перевода реплики:
+    /// одна повторная попытка со свежим процессом спасает типовой сбой.
+    /// </summary>
+    private async Task<PreparedDubbingSpeech> PrepareWithRetryAsync(string ttsText)
+    {
+        try
+        {
+            return await VideoDubbingVoiceService.PrepareAsync(ttsText,
+                VideoDubbingPolicy.SelectSpeechRate(ttsText.Length), _stop.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return await VideoDubbingVoiceService.PrepareAsync(ttsText,
+                VideoDubbingPolicy.SelectSpeechRate(ttsText.Length), _stop.Token)
+                .ConfigureAwait(false);
+        }
+    }
+
     private async Task PlaybackLoopAsync()
     {
         var ready = new Queue<PreparedItem>();
+        var consecutiveFailures = 0;
         try
         {
             await FillStartupReserveAsync(ready).ConfigureAwait(false);
@@ -150,6 +175,7 @@ internal sealed class VideoDubbingBuffer : IAsyncDisposable
                 await _diagnostics.WriteAsync("playback-start", item,
                     _reserve.Snapshot()).ConfigureAwait(false);
                 var handedToVoiceQueue = false;
+                var failed = false;
                 try
                 {
                     if (_beforeSpeaking is not null)
@@ -157,11 +183,30 @@ internal sealed class VideoDubbingBuffer : IAsyncDisposable
                     handedToVoiceQueue = true;
                     var spoken = await VideoDubbingVoiceService.SpeakPreparedAndWaitAsync(
                         item.Speech, _stop.Token).ConfigureAwait(false);
-                    if (!spoken)
-                        throw new InvalidOperationException(
-                            "Локальный голос не смог воспроизвести подготовленную реплику.");
-                    await _diagnostics.WriteAsync("playback-complete", item,
-                        _reserve.Snapshot()).ConfigureAwait(false);
+                    if (spoken)
+                    {
+                        consecutiveFailures = 0;
+                        await _diagnostics.WriteAsync("playback-complete", item,
+                            _reserve.Snapshot()).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        // Одиночный сбой реплики не должен глушить весь перевод:
+                        // видео продолжает идти, следующая реплика озвучится.
+                        failed = true;
+                        await _diagnostics.WriteAsync("playback-failed", item,
+                            _reserve.Snapshot()).ConfigureAwait(false);
+                    }
+                }
+                catch (OperationCanceledException) when (_stop.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    failed = true;
+                    CrashReportService.RecordNonFatal("video-translation",
+                        "prepared-playback-item", ex);
                 }
                 finally
                 {
@@ -169,6 +214,10 @@ internal sealed class VideoDubbingBuffer : IAsyncDisposable
                     if (_afterSpeaking is not null)
                         await _afterSpeaking().ConfigureAwait(false);
                 }
+                if (failed && ++consecutiveFailures >=
+                    VideoDubbingPolicy.MaxConsecutivePlaybackFailures)
+                    throw new InvalidOperationException(
+                        "Локальный голос не смог воспроизвести несколько реплик подряд.");
             }
         }
         catch (OperationCanceledException) when (_stop.IsCancellationRequested) { }

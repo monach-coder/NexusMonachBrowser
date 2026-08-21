@@ -16,7 +16,8 @@ src/NexusMonach/AI/**/*.bin
 src/NexusMonach/AI/**/*.onnx
 src/NexusMonach/AI/**/*.exe
 src/NexusMonach/AI/voice/
-src/NexusMonach/AI/models/voice/
+src/NexusMonach/AI/models/
+src/NexusMonach/AI/node_modules/
 src/NexusMonach/AI/**/*.dll
 
 # Сертификаты подписи и приватные ключи никогда не хранятся в Git.

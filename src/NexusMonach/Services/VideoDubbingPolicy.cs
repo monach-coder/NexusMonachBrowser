@@ -34,6 +34,13 @@ internal static class VideoDubbingPolicy
     public const int PlaybackProbeMilliseconds = 180;
     public const int DirectSilenceProbeLimit = 3;
     public const int FirstLoopbackSegmentTimeoutMilliseconds = 12_000;
+    /// <summary>
+    /// Сколько реплик подряд может не справиться локальный голос, прежде чем
+    /// сессия закадрового перевода признаётся неработоспособной. Одна-две
+    /// случайные сбоя не должны глушить весь перевод: реплика пропускается,
+    /// видео и очередь продолжаются.
+    /// </summary>
+    public const int MaxConsecutivePlaybackFailures = 4;
     public const double OriginalVolume = 0.12;
     public const double MinimumAudibleRms = 0.00018;
     public const double MinimumAudiblePeak = 0.0015;
@@ -126,6 +133,50 @@ internal static class VideoDubbingPolicy
         }
         if (split < minimum) split = limit;
         return text[..split].TrimEnd(' ', ',', ';', ':', '-', '—') + "…";
+    }
+
+    /// <summary>
+    /// Делит длинный перевод на короткие реплики для синтеза. Обрезка с «…»
+    /// теряла смысл хвоста фразы; деление сохраняет всё содержимое целиком —
+    /// части произносятся подряд с естественной паузой на границе.
+    /// </summary>
+    public static IReadOnlyList<string> SplitTtsText(string? text,
+        VideoDubbingModeProfile profile, int? maximumCharacters = null)
+    {
+        var normalized = VoiceAssistantService.SanitizeForSpeech(text);
+        if (normalized.Length == 0) return [];
+        var limit = Math.Clamp(maximumCharacters ?? profile.MaximumTtsCharacters, 40, 240);
+        if (normalized.Length <= limit) return [normalized];
+
+        var chunks = new List<string>();
+        var remaining = normalized;
+        while (remaining.Length > limit)
+        {
+            var split = FindSplitIndex(remaining, limit);
+            var chunk = remaining[..split].TrimEnd(' ', ',', ';', ':', '-', '—');
+            if (chunk.Length > 0) chunks.Add(chunk);
+            remaining = remaining[split..].TrimStart();
+        }
+        if (remaining.Length > 0) chunks.Add(remaining);
+        return chunks;
+    }
+
+    private static int FindSplitIndex(string text, int limit)
+    {
+        var minimum = Math.Max(20, limit / 2);
+        var bestSentence = -1;
+        var bestSpace = -1;
+        for (var index = Math.Min(limit, text.Length - 1); index >= minimum; index--)
+        {
+            var isBoundary = text[index] is '.' or '!' or '?' or '…';
+            if (isBoundary && bestSentence < 0) bestSentence = index + 1;
+            if (text[index] is ';' or ':' && bestSentence < 0 && bestSpace < 0) bestSentence = index + 1;
+            if (char.IsWhiteSpace(text[index]) && bestSpace < 0) bestSpace = index;
+            if (bestSentence >= 0) break;
+        }
+        if (bestSentence >= minimum) return bestSentence;
+        if (bestSpace >= minimum) return bestSpace;
+        return limit;
     }
 
     public static bool IsPreparedAudioAcceptable(TimeSpan duration,

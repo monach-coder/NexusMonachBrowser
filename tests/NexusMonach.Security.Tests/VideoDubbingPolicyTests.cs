@@ -96,6 +96,57 @@ public sealed class VideoDubbingPolicyTests
     }
 
     [Fact]
+    public void LongTranslations_AreSplitIntoChunksWithoutLosingContent()
+    {
+        var profile = VideoDubbingPolicy.ForMode(VideoTranslationMode.Balanced);
+        var sentence = "Это достаточно длинное русское предложение переведённого текста.";
+        // Пять предложений: больше шести сотен символов, но меньше жёсткого
+        // лимита санитайзера объявлений в 360 символов.
+        var text = string.Join(" ", Enumerable.Repeat(sentence, 5));
+
+        var chunks = VideoDubbingPolicy.SplitTtsText(text, profile);
+
+        Assert.True(chunks.Count >= 2);
+        Assert.All(chunks, chunk => Assert.InRange(chunk.Length, 10, profile.MaximumTtsCharacters));
+        var originalWords = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var spokenWords = string.Join(' ', chunks)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        // Ни одно слово перевода не теряется: обрезка с «…» заменена делением.
+        Assert.Equal(originalWords.Length, spokenWords.Length);
+        Assert.Equal(originalWords, spokenWords);
+    }
+
+    [Fact]
+    public void ShortTranslation_IsReturnedAsSingleChunk()
+    {
+        var profile = VideoDubbingPolicy.ForMode(VideoTranslationMode.Balanced);
+
+        var chunks = VideoDubbingPolicy.SplitTtsText("Привет и добро пожаловать.", profile);
+
+        var chunk = Assert.Single(chunks);
+        Assert.Equal("Привет и добро пожаловать.", chunk);
+    }
+
+    [Fact]
+    public void PlaybackFailureTolerance_SkipsIsolatedFailuresInsteadOfKillingSession()
+    {
+        Assert.InRange(VideoDubbingPolicy.MaxConsecutivePlaybackFailures, 2, 8);
+    }
+
+    [Fact]
+    public void RepeatedTranslations_AreSuppressedOnlyInsideShortWindow()
+    {
+        var guard = new RecentVideoPhraseGuard(capacity: 8, retentionSeconds: 15);
+        var now = DateTimeOffset.UtcNow;
+
+        Assert.True(guard.IsNovel("посмотрите внимательно на этот график", now));
+        // Повторное распознавание того же звука приходит секундами позже.
+        Assert.False(guard.IsNovel("посмотрите внимательно на этот график", now.AddSeconds(3)));
+        // Честный повтор говорящего позже окна должен прозвучать целиком.
+        Assert.True(guard.IsNovel("посмотрите внимательно на этот график", now.AddSeconds(40)));
+    }
+
+    [Fact]
     public void ReadyAudioReserve_TracksPreparedWavDuration()
     {
         var reserve = new ReadyAudioReserve();
