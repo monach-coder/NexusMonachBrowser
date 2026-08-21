@@ -252,7 +252,7 @@ public static class LocalIntelligenceService
         if (pending.Count > 0)
         {
             var translatedItems = await TranslationService.TranslateSegmentsAsync(
-                pending, false, cancellationToken);
+                pending, false, cancellationToken, highQuality: true);
             foreach (var item in translatedItems)
             {
                 if (!int.TryParse(item.Id.AsSpan("video-".Length), out var index) ||

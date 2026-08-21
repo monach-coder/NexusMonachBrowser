@@ -49,19 +49,20 @@ public static class TranslationService
     }
 
     public static async Task<string> TranslateToRussianAsync(string text, bool sourceIsEnglish = false,
-        CancellationToken cancellationToken = default, string? sourceLanguage = null)
+        CancellationToken cancellationToken = default, string? sourceLanguage = null,
+        bool highQuality = false)
     {
         if (string.IsNullOrWhiteSpace(text)) return string.Empty;
         var item = new TranslationSegment
             { Id = "single", Text = text.Trim(), Language = sourceLanguage?.Trim() ?? string.Empty };
-        var translated = await TranslateSegmentsAsync([item], sourceIsEnglish, cancellationToken);
+        var translated = await TranslateSegmentsAsync([item], sourceIsEnglish, cancellationToken, highQuality);
         return translated.FirstOrDefault()?.Text ??
                throw new InvalidOperationException("Автономный переводчик не вернул текст.");
     }
 
     public static async Task<IReadOnlyList<TranslationSegment>> TranslateSegmentsAsync(
         IReadOnlyList<TranslationSegment> segments, bool sourceIsEnglish = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, bool highQuality = false)
     {
         if (segments.Count == 0) return [];
         if (!AiModelCatalog.TranslationReady)
@@ -75,6 +76,10 @@ public static class TranslationService
             var request = JsonSerializer.Serialize(new
             {
                 id = requestId,
+                // Закадровый перевод фильма идёт с поиском по лучам: смысл
+                // реплики важнее лишней секунды на CPU. Страничные пакеты
+                // остаются на жадном декодировании ради скорости.
+                beams = highQuality ? 4 : 1,
                 items = segments.Take(16).Select(item => new
                 {
                     id = item.Id,

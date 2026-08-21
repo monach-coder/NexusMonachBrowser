@@ -79,10 +79,129 @@ internal static partial class RussianSpeechTextNormalizer
         text = EuroPattern().Replace(text, ReplaceEuros);
         text = DecimalPattern().Replace(text, match => DecimalToWords(match.Groups[1].Value, match.Groups[2].Value));
         text = IntegerPattern().Replace(text, match => IntegerToWords(ParseInteger(match.Value)));
+        // Транслитерация идёт после числовых подстановок: FormKC превращает
+        // «№» в латинское «No», а единицы вроде «°C» должны сначала попасть
+        // в свои шаблоны — иначе «№7» станет «но7».
+        text = TransliterateEnglish(text);
         text = text.Replace("&", " и ", StringComparison.Ordinal);
         text = RepeatedPunctuationPattern().Replace(text, match => match.Value[..1]);
         return SpacePattern().Replace(text, " ").Trim();
     }
+
+    // Произношение частых английских слов, которые нельзя угадать правилами:
+    // поразрядная транслитерация делает из них нечто нечленораздельное.
+    private static readonly Dictionary<string, string> EnglishPronunciations =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["google"] = "гугл", ["youtube"] = "ютуб", ["iphone"] = "айфон",
+            ["ipad"] = "айпэд", ["app"] = "эпп", ["apple"] = "эпл",
+            ["windows"] = "виндоуз", ["microsoft"] = "майкрософт",
+            ["chrome"] = "кроум", ["firefox"] = "файрфокс", ["safari"] = "сафари",
+            ["edge"] = "эдж", ["opera"] = "опера", ["android"] = "андроид",
+            ["samsung"] = "самсунг", ["tesla"] = "тесла", ["spacex"] = "спейсэкс",
+            ["twitter"] = "твиттер", ["facebook"] = "фейсбук",
+            ["instagram"] = "инстаграм", ["tiktok"] = "тикток",
+            ["whatsapp"] = "ватсап", ["telegram"] = "телеграм",
+            ["netflix"] = "нетфликс", ["disney"] = "дисней", ["amazon"] = "амазон",
+            ["wifi"] = "вай-фай", ["wi-fi"] = "вай-фай", ["bluetooth"] = "блютус",
+            ["online"] = "онлайн", ["offline"] = "офлайн", ["email"] = "имейл",
+            ["website"] = "вебсайт", ["web"] = "вэб", ["browser"] = "браузер",
+            ["hacker"] = "хакер", ["password"] = "пассворд",
+            ["username"] = "юзернэйм", ["login"] = "логин",
+            ["account"] = "акаунт", ["download"] = "даунлоад",
+            ["upload"] = "аплоад", ["streaming"] = "стриминг",
+            ["stream"] = "стрим", ["server"] = "сэрвэр", ["startup"] = "стартап",
+            ["thriller"] = "триллер", ["horror"] = "хоррор", ["action"] = "экшн",
+            ["season"] = "сизон", ["episode"] = "эпизод", ["trailer"] = "трейлэр",
+            ["release"] = "рилиз", ["update"] = "апдейт", ["upgrade"] = "апгрейд",
+            ["version"] = "вэржн", ["phone"] = "фон", ["home"] = "хоум",
+            ["money"] = "мани", ["time"] = "тайм", ["cool"] = "кул",
+            ["okay"] = "окей", ["ok"] = "окей", ["wow"] = "вау",
+            ["bye"] = "бай", ["hello"] = "хэллоу", ["hi"] = "хай",
+            ["stop"] = "стоп", ["play"] = "плэй", ["pause"] = "пауза",
+            ["next"] = "нэкст", ["cloud"] = "клауд", ["chip"] = "чип",
+            ["team"] = "тим", ["game"] = "гэйм", ["project"] = "проджект"
+        };
+
+    private static readonly (string Suffix, string Sound)[] EnglishDigraphs =
+    [
+        ("eigh", "эй"), ("ough", "о"), ("tch", "ч"), ("sch", "ш"), ("dge", "дж"),
+        ("sh", "ш"), ("ch", "ч"), ("th", "т"), ("ph", "ф"), ("wh", "в"),
+        ("oh", "о"), ("ck", "к"), ("qu", "кв"), ("gh", "г"), ("oo", "у"), ("ee", "и"),
+        ("ea", "и"), ("ai", "эй"), ("ay", "эй"), ("ei", "эй"), ("ey", "эй"),
+        ("oi", "ой"), ("oy", "ой"), ("ou", "ау"), ("ow", "ау"), ("au", "о"),
+        ("aw", "о"), ("ie", "и"), ("ll", "л"), ("mm", "м"), ("nn", "н"),
+        ("pp", "п"), ("rr", "р"), ("ss", "с"), ("tt", "т"), ("dd", "д"),
+        ("gg", "г"), ("cc", "к"), ("mb", "м")
+    ];
+
+    private static readonly Dictionary<char, string> EnglishLetterSounds = new()
+    {
+        ['a'] = "а", ['b'] = "б", ['c'] = "к", ['d'] = "д", ['e'] = "е",
+        ['f'] = "ф", ['g'] = "г", ['h'] = "х", ['i'] = "и", ['j'] = "дж",
+        ['k'] = "к", ['l'] = "л", ['m'] = "м", ['n'] = "н", ['o'] = "о",
+        ['p'] = "п", ['q'] = "к", ['r'] = "р", ['s'] = "с", ['t'] = "т",
+        ['u'] = "у", ['v'] = "в", ['w'] = "в", ['x'] = "кс", ['y'] = "и",
+        ['z'] = "з"
+    };
+
+    private static readonly Dictionary<char, string> EnglishLetterNames = new()
+    {
+        ['a'] = "эй", ['b'] = "би", ['c'] = "си", ['d'] = "ди", ['e'] = "и",
+        ['f'] = "эф", ['g'] = "джи", ['h'] = "эйч", ['i'] = "ай", ['j'] = "джей",
+        ['k'] = "кей", ['l'] = "эл", ['m'] = "эм", ['n'] = "эн", ['o'] = "оу",
+        ['p'] = "пи", ['q'] = "кью", ['r'] = "ар", ['s'] = "эс", ['t'] = "ти",
+        ['u'] = "ю", ['v'] = "ви", ['w'] = "дабл-ю", ['x'] = "экс",
+        ['y'] = "уай", ['z'] = "зэд"
+    };
+
+    /// <summary>
+    /// Переводит латинские слова в русскую фонетику до синтеза: Silero и SAPI
+    /// читают английский побуквенно («чроме», «ипхоне»). Диграфы, мягкие
+    /// c/g и аббревиатуры по названиям букв дают разборчивое произношение
+    /// имён и терминов, не покинув оффлайн-словарь.
+    /// </summary>
+    internal static string TransliterateEnglish(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return text;
+        return EnglishWordPattern().Replace(text, match =>
+        {
+            var word = match.Value;
+            if (EnglishPronunciations.TryGetValue(word, out var known)) return known;
+            var letters = word.ToLowerInvariant();
+            if (word.Length <= 5 && word.ToUpperInvariant() == word && letters.Length >= 2)
+                return string.Join("-", letters.Select(IncludeLetterName));
+            var builder = new StringBuilder(word.Length * 2);
+            for (var index = 0; index < letters.Length;)
+            {
+                var matched = false;
+                foreach (var (suffix, sound) in EnglishDigraphs)
+                {
+                    if (!letters.AsSpan(index).StartsWith(suffix,
+                            StringComparison.Ordinal)) continue;
+                    builder.Append(sound);
+                    index += suffix.Length;
+                    matched = true;
+                    break;
+                }
+                if (matched) continue;
+                var letter = letters[index];
+                var next = index + 1 < letters.Length ? letters[index + 1] : '\0';
+                if (letter == 'c' && next is 'e' or 'i' or 'y') builder.Append('с');
+                else if (letter == 'g' && next is 'e' or 'i' or 'y') builder.Append("дж");
+                else if (letter == 'y' && index == 0) builder.Append('й');
+                else if (EnglishLetterSounds.TryGetValue(letter, out var sound))
+                    builder.Append(sound);
+                else builder.Append(letter);
+                index++;
+            }
+            var result = builder.ToString();
+            return result.Length == 0 ? word : result;
+        });
+    }
+
+    private static string IncludeLetterName(char letter) =>
+        EnglishLetterNames.TryGetValue(letter, out var name) ? name : letter.ToString();
 
     private static string ApplyPronunciationDictionary(string text)
     {
@@ -306,6 +425,8 @@ internal static partial class RussianSpeechTextNormalizer
             ? parsed
             : 0;
 
+    [GeneratedRegex(@"[A-Za-z]+(?:['-][A-Za-z]+)*")]
+    private static partial Regex EnglishWordPattern();
     [GeneratedRegex(@"(?<!\d)(\d{1,2})[./-](\d{1,2})[./-](\d{4})(?!\d)")]
     private static partial Regex DatePattern();
     [GeneratedRegex(@"(?<!\d)([01]?\d|2[0-3]):([0-5]\d)(?!\d)")]

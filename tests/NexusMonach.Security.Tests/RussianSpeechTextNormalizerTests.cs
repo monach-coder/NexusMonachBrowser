@@ -35,4 +35,32 @@ public sealed class RussianSpeechTextNormalizerTests
     {
         Assert.Equal("Дата 31.02.2026", RussianSpeechTextNormalizer.Normalize("Дата 31.02.2026"));
     }
+
+    [Theory]
+    [InlineData("Chrome", "кроум")]
+    [InlineData("iPhone", "айфон")]
+    [InlineData("WiFi", "вай-фай")]
+    [InlineData("shutdown", "шутдаун")]
+    [InlineData("John Connor", "джон конор")]
+    [InlineData("check", "чек")]
+    public void EnglishWords_ArePronouncedWithRussianPhonetics(string input, string expected)
+    {
+        Assert.Equal(expected, RussianSpeechTextNormalizer.Normalize(input));
+    }
+
+    [Fact]
+    public void Acronyms_AreSpelledByLetterNames()
+    {
+        Assert.Equal("эйч-би-оу", RussianSpeechTextNormalizer.Normalize("HBO"));
+    }
+
+    [Fact]
+    public void EnglishInsideRussianSpeech_BecomesReadable()
+    {
+        var spoken = RussianSpeechTextNormalizer.Normalize(
+            "Смотрите новый trailer на YouTube channel.");
+        Assert.Contains("трейлэр", spoken);
+        Assert.Contains("ютуб", spoken);
+        Assert.DoesNotContain("trailer", spoken, StringComparison.OrdinalIgnoreCase);
+    }
 }

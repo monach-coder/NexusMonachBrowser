@@ -17,6 +17,10 @@ const koreanToEnglishPath = path.resolve(process.argv[4]);
 let multilingualToEnglish;
 let englishToRussian;
 let koreanToEnglish;
+
+// Batch page translation stays greedy for speed; live movie dubbing sends
+// beams: 4 because phrase meaning matters more than a spare CPU second.
+let requestBeams = 1;
 function generationOptionsFor(values) {
   const longestWords = Math.max(1, ...values.map(value =>
     String(value ?? '').trim().split(/\s+/u).filter(Boolean).length));
@@ -30,7 +34,7 @@ function generationOptionsFor(values) {
   return {
     max_new_tokens: Math.max(18, Math.min(384, estimated)),
     do_sample: false,
-    num_beams: 1,
+    num_beams: Math.min(4, Math.max(1, requestBeams)),
     repetition_penalty: 1.12,
     no_repeat_ngram_size: 3,
   };
@@ -119,6 +123,7 @@ for await (const line of input) {
   try {
     const request = JSON.parse(line);
     requestId = String(request?.id ?? '');
+    requestBeams = Math.min(4, Math.max(1, Number(request?.beams) || 1));
     const items = Array.isArray(request?.items) ? request.items.slice(0, 16) : [];
     let translated;
     try {
