@@ -54,6 +54,18 @@ public sealed class RussianStressDictionaryTests
         Assert.Equal("перезвон+ит включ+ит ср+едства нар+очно", marked);
     }
 
+    [Fact]
+    public void UpstreamDictionaryErrors_AreCorrected()
+    {
+        EnsureDictionaryLoaded();
+        // В исходном словаре RUAccent «готов» ошибочно помечено как «г+отов»,
+        // хотя вся семья (готова, готово, готовить) ударяется на вторую «о»;
+        // родительный падеж «утра» — утрА, как в «десять утра».
+        Assert.Equal("гот+ов", RussianStressDictionary.TryStressWord("готов"));
+        Assert.Equal("утр+а", RussianStressDictionary.TryStressWord("утра"));
+        Assert.Equal("Гот+ов", RussianStressDictionary.TryStressWord("Готов"));
+    }
+
     private static void EnsureDictionaryLoaded()
     {
         if (RussianStressDictionary.IsReady) return;
