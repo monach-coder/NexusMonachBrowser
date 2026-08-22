@@ -214,10 +214,16 @@ internal static class IntegrityVerifier
                relative.Equals(SignatureName, StringComparison.OrdinalIgnoreCase) ||
                relative.StartsWith("Data/", StringComparison.OrdinalIgnoreCase) ||
                // Служебное состояние внешних инструментов разработки не входит в
-               // поставку и не влияет на поведение браузера.
-               relative.StartsWith(".mimosa/", StringComparison.OrdinalIgnoreCase) ||
+               // поставку и не влияет на поведение браузера — каталог .mimosa
+               // исключается на любом уровне вложенности: инструмент может
+               // оставить его и внутри AI/, и в других подпапках.
+               HasSegment(relative, ".mimosa") ||
                relative.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static bool HasSegment(string relativePath, string segment) =>
+        relativePath.Split('/').Any(
+            part => part.Equals(segment, StringComparison.OrdinalIgnoreCase));
 
     private static bool IsCriticalPath(string relative)
     {

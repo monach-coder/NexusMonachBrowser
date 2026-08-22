@@ -31,6 +31,24 @@ public sealed class GuardianIntegrityTests
         Assert.Equal(IntegrityState.CriticalMismatch, result.State);
     }
 
+    [Fact]
+    public void NestedMimosaToolState_DoesNotBlockVerification()
+    {
+        using var fixture = new IntegrityFixture();
+        fixture.CreateSignedManifest();
+        // Внешние инструменты разработки могут оставить служебный каталог
+        // .mimosa в любой подпапке (например, AI/.mimosa/hook-status) уже
+        // после подписи — это не часть поставки и не повод для блокировки.
+        Directory.CreateDirectory(Path.Combine(fixture.PayloadDirectory, "AI", ".mimosa", "hook-status"));
+        File.WriteAllText(
+            Path.Combine(fixture.PayloadDirectory, "AI", ".mimosa", "hook-status", "session.json"),
+            "{\"status\":\"ok\"}");
+
+        var result = IntegrityVerifier.Verify(fixture.PayloadDirectory, full: true);
+
+        Assert.Equal(IntegrityState.Verified, result.State);
+    }
+
     private sealed class IntegrityFixture : IDisposable
     {
         private readonly string _root = Path.Combine(Path.GetTempPath(), "NexusGuardianTests", Guid.NewGuid().ToString("N"));
