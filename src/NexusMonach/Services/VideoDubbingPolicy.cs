@@ -102,6 +102,33 @@ internal static class VideoDubbingPolicy
     };
 
     /// <summary>
+    /// Профиль двухпроходного дубляжа: анализ идёт заранее и быстрее
+    /// реального времени, поэтому реплики финализируются только по концу
+    /// предложения и с щедрыми лимитами — переводчик получает целые
+    /// развернутые фразы, а не обрывки на бегу.
+    /// </summary>
+    public static VideoDubbingModeProfile ForPrecompute() => new(
+        VideoTranslationMode.Quality,
+        SegmentMilliseconds: 3_200,
+        SegmentOverlapMilliseconds: 800,
+        ContextSeconds: 120,
+        ContextPhrases: 16,
+        MaximumPendingParts: 8,
+        MaximumPendingWords: 40,
+        MaximumPendingCharacters: 280,
+        StartupPreparedPhrases: 1,
+        StartupPreparedSeconds: 0.5,
+        StartupMaximumWaitMilliseconds: 3_500,
+        RefillWaitMilliseconds: 200,
+        PreparedQueueCapacity: 8,
+        MaximumTtsCharacters: 160,
+        MaximumPreparedAudioSeconds: 14,
+        MaximumBufferedAudioSeconds: 12);
+
+    /// <summary>Верхняя граница скорости ускоренного прогона анализа.</summary>
+    public const double MaximumAnalysisRate = 12;
+
+    /// <summary>
     /// Balanced is the automatic everyday mode: short clips prioritize first
     /// speech latency, while feature-length material gets a deeper context and
     /// prepared reserve. Explicit Fast/Quality choices are never overridden.

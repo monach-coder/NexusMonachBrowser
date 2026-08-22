@@ -149,6 +149,23 @@ public sealed class VideoDubbingPolicyTests
     }
 
     [Fact]
+    public void PrecomputeProfile_WaitsForCompleteSentencesAndBoundedAnalysisRate()
+    {
+        var profile = VideoDubbingPolicy.ForPrecompute();
+
+        // Анализ идёт заранее: реплика ждёт конца предложения, а не лимита
+        // на бегу — переводчик получает целые фразы, а не обрывки.
+        Assert.True(profile.MaximumPendingWords >= 40);
+        Assert.True(profile.MaximumPendingCharacters >= 280);
+        Assert.True(profile.MaximumTtsCharacters > 140);
+        Assert.InRange(VideoDubbingPolicy.MaximumAnalysisRate, 8, 16);
+        var longUnfinished = string.Join(' ', Enumerable.Repeat("слово", 30));
+        Assert.False(VideoDubbingPolicy.ShouldFinalizeUtterance(longUnfinished, 2, profile));
+        Assert.True(VideoDubbingPolicy.ShouldFinalizeUtterance(
+            "Полное развёрнутое предложение переведено целиком.", 3, profile));
+    }
+
+    [Fact]
     public void BacklogShedding_BoundsAccumulatedDubbingLagPerMode()
     {
         var fast = VideoDubbingPolicy.ForMode(VideoTranslationMode.Fast);

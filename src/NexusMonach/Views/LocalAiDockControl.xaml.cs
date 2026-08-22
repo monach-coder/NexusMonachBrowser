@@ -561,6 +561,236 @@ public partial class LocalAiDockControl : UserControl
 
     public void StopVideoTranslation() => Interlocked.Exchange(ref _videoCancellation, null)?.Cancel();
 
+    /// <summary>
+    /// Двухпроходный дубляж как у профессиональной закадровой студии: сначала
+    /// фильм прогоняется на адаптивно ускоренной скорости и целиком
+    /// переводится целыми предложениями, затем видео возвращается в начало и
+    /// идёт с мгновенным синхронным дубляжом по таймкоду — без задержки
+    /// перевода и без потерь смысла от спешки.
+    /// </summary>
+    public async Task PrecomputeVideoDubbingAsync(BrowserTab tab)
+    {
+        _cancellation?.Cancel();
+        VoiceAssistantService.StopSpeaking();
+        Visibility = Visibility.Collapsed;
+        _tab = tab;
+        _pageUrl = tab.CurrentUrl;
+        if (!AiModelCatalog.TranslationReady)
+        {
+            GlassDialogWindow.Show(AiModelCatalog.MissingTranslationRuntimeMessage,
+                "Предперевод фильма", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (!AiModelCatalog.SpeechReady)
+        {
+            GlassDialogWindow.Show(AiModelCatalog.MissingSpeechRuntimeMessage,
+                "Предперевод фильма", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (!AiModelCatalog.NeuralVoiceReady)
+        {
+            GlassDialogWindow.Show(AiModelCatalog.MissingNeuralVoiceMessage,
+                "Предперевод фильма", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        StopVideoTranslation();
+        var session = new CancellationTokenSource();
+        _videoCancellation = session;
+        var finalStatus = "Предперевод остановлен.";
+        var allWavs = new List<string>();
+        PrecomputedDubbingPlayer? player = null;
+        try
+        {
+            var duration = await tab.GetActiveVideoDurationAsync()
+                         ?? throw new InvalidOperationException(
+                                "Не удалось определить длительность видео. Откройте видео и попробуйте снова.");
+            var profile = VideoDubbingPolicy.ForPrecompute();
+            await tab.BeginLiveAudioTranslationAsync();
+            await tab.PrepareVideoForAnalysisAsync();
+            await tab.EnableVideoDubbingMixAsync();
+            await tab.UpdateLiveAudioTranslationStatusAsync(
+                "Прогреваю локальные модели…");
+            await Task.WhenAll(
+                WhisperService.WarmUpAsync(WhisperLane.Dubbing, session.Token),
+                TranslationService.WarmUpForLiveVideoAsync(
+                    includeAllSourceRoutes: false, cancellationToken: session.Token),
+                VideoDubbingVoiceService.WarmUpAsync(session.Token));
+            CrashReportService.AddBreadcrumb("video-translation", "precompute-analysis-started");
+
+            var phrases = await AnalyzeVideoAsync(tab, profile, duration, allWavs, session.Token);
+            if (phrases.Count == 0)
+                throw new InvalidOperationException(
+                    "Речь в видео не распознана. Проверьте, что звук включён.");
+            phrases.Sort((left, right) => left.StartSeconds.CompareTo(right.StartSeconds));
+
+            await tab.RestartVideoForDubbedPlaybackAsync();
+            await tab.UpdateLiveAudioTranslationStatusAsync(
+                $"Синхронный дубляж · {phrases.Count} реплик · приятного просмотра");
+            CrashReportService.AddBreadcrumb("video-translation", "precompute-playback-started");
+            player = new PrecomputedDubbingPlayer();
+            await PlayPrecomputedAsync(tab, phrases, player, session.Token);
+            finalStatus = "Синхронный дубляж завершён.";
+        }
+        catch (OperationCanceledException) { finalStatus = "Предперевод остановлен."; }
+        catch (Exception ex)
+        {
+            if (ReferenceEquals(Volatile.Read(ref _videoCancellation), session))
+                finalStatus = "Предперевод прерван: " +
+                              ex.Message[..Math.Min(ex.Message.Length, 160)];
+            CrashReportService.RecordNonFatal("video-translation", "precompute", ex);
+        }
+        finally
+        {
+            player?.Dispose();
+            foreach (var wav in allWavs)
+                try { File.Delete(wav); } catch { }
+            VideoDubbingVoiceService.Stop();
+            Interlocked.CompareExchange(ref _videoCancellation, null, session);
+            session.Dispose();
+            try { await tab.EndLiveAudioTranslationAsync(finalStatus); } catch { }
+        }
+    }
+
+    private async Task<List<PrecomputedDubbingPhrase>> AnalyzeVideoAsync(
+        BrowserTab tab, VideoDubbingModeProfile profile, double durationSeconds,
+        List<string> allWavs, CancellationToken cancellationToken)
+    {
+        var phrases = new List<PrecomputedDubbingPhrase>();
+        var context = new VideoSpeechTranslationContext(profile);
+        var analysisRate = 1.0;
+        var throughputEma = 1.0;
+        var lastPosition = -1.0;
+        var consecutiveSilence = 0;
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var state = await tab.GetVideoStateAsync();
+            if (state is null) break;
+            if (state.Ended) break;
+            if (await tab.ShouldStopLiveAudioTranslationAsync())
+                throw new OperationCanceledException(cancellationToken);
+            if (state.Paused)
+            {
+                await tab.UpdateLiveAudioTranslationStatusAsync(
+                    "Пауза · предперевод продолжится вместе с видео");
+                await Task.Delay(300, cancellationToken);
+                continue;
+            }
+            // Перемотка назад перезапускает накопление фразы: старые реплики
+            // остаются, playback-планировщик отсортирует их по таймкоду.
+            if (state.Position < lastPosition - 1.5)
+                context = new VideoSpeechTranslationContext(profile);
+            lastPosition = state.Position;
+
+            var processingStopwatch = Stopwatch.StartNew();
+            var captured = await tab.CaptureActiveVideoAudioAsync(
+                profile.SegmentMilliseconds, cancellationToken,
+                profile.SegmentOverlapMilliseconds);
+            if (captured.WaitingForPlayback) continue;
+            if (!captured.Success || string.IsNullOrWhiteSpace(captured.WavBase64))
+            {
+                if (++consecutiveSilence >= 6 && analysisRate > 4)
+                {
+                    // Некоторые плееры глушат звук на большой скорости — сбрасываем.
+                    analysisRate = 4;
+                    await tab.SetVideoAnalysisRateAsync(analysisRate);
+                    consecutiveSilence = 0;
+                }
+                continue;
+            }
+            consecutiveSilence = 0;
+            var segment = new LiveAudioSegment(
+                Convert.FromBase64String(captured.WavBase64), DateTimeOffset.UtcNow,
+                TimeSpan.FromMilliseconds(profile.SegmentMilliseconds));
+            VideoSpeechTranslationText? translated = null;
+            try
+            {
+                translated = await context.TranslateAsync(segment, cancellationToken,
+                    captured.VideoPosition);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                CrashReportService.RecordNonFatal("video-translation",
+                    "precompute-translate", ex);
+            }
+            if (translated is not null && !double.IsNaN(translated.VideoStartedAt))
+            {
+                var wavs = new List<string>();
+                foreach (var chunk in VideoDubbingPolicy.SplitTtsText(
+                             translated.RussianText, profile))
+                {
+                    var speech = await VideoDubbingVoiceService.PrepareAsync(chunk, 0,
+                        cancellationToken);
+                    wavs.Add(speech.Path);
+                    allWavs.Add(speech.Path);
+                }
+                if (wavs.Count > 0)
+                    phrases.Add(new PrecomputedDubbingPhrase(
+                        translated.VideoStartedAt, translated.VideoEndedAt, wavs,
+                        translated.RussianText));
+            }
+
+            processingStopwatch.Stop();
+            var audioSeconds = profile.SegmentMilliseconds / 1000.0;
+            var instantThroughput = processingStopwatch.ElapsedMilliseconds > 0
+                ? audioSeconds / (processingStopwatch.ElapsedMilliseconds / 1000.0)
+                : 2.0;
+            throughputEma = throughputEma * 0.7 + instantThroughput * 0.3;
+            var targetRate = Math.Clamp(throughputEma * 0.85, 1,
+                VideoDubbingPolicy.MaximumAnalysisRate);
+            if (Math.Abs(targetRate - analysisRate) > 0.4)
+            {
+                analysisRate = targetRate;
+                await tab.SetVideoAnalysisRateAsync(analysisRate);
+            }
+            var progress = Math.Clamp(state.Position / durationSeconds, 0, 1);
+            await tab.UpdateLiveAudioTranslationStatusAsync(
+                $"Предперевод {(int)(progress * 100)}% · скорость ×{analysisRate:F1} · реплик: {phrases.Count}");
+        }
+        return phrases;
+    }
+
+    private static async Task PlayPrecomputedAsync(
+        BrowserTab tab, IReadOnlyList<PrecomputedDubbingPhrase> phrases,
+        PrecomputedDubbingPlayer player, CancellationToken cancellationToken)
+    {
+        var next = 0;
+        var paused = false;
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var state = await tab.GetVideoStateAsync();
+            if (state is null || state.Ended) break;
+            if (await tab.ShouldStopLiveAudioTranslationAsync()) break;
+            if (state.Paused)
+            {
+                if (!paused)
+                {
+                    player.Pause();
+                    paused = true;
+                    await tab.UpdateLiveAudioTranslationStatusAsync("Пауза");
+                }
+                await Task.Delay(250, cancellationToken);
+                continue;
+            }
+            if (paused)
+            {
+                player.Resume();
+                paused = false;
+            }
+            // Перемотка вперёд пропускает реплики, целиком оставшиеся позади.
+            while (next < phrases.Count && phrases[next].EndSeconds < state.Position - 0.5)
+                next++;
+            if (next < phrases.Count &&
+                phrases[next].StartSeconds <= state.Position + 0.12 &&
+                !player.IsPlaying)
+            {
+                player.Enqueue(phrases[next].WavPaths);
+                next++;
+            }
+            await Task.Delay(120, cancellationToken);
+        }
+    }
+
     private static string VideoModeLabel(VideoTranslationMode mode, bool automatic = false) =>
         (mode switch
     {

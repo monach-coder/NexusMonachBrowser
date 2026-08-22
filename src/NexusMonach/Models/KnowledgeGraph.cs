@@ -120,4 +120,15 @@ public sealed class AudioCaptureResult
     public bool WaitingForPlayback { get; set; }
     public string Error { get; set; } = string.Empty;
     public string WavBase64 { get; set; } = string.Empty;
+    /// <summary>Позиция видео (сек) в момент начала сбора сегмента — якорь
+    /// таймкода для предперевода фильма.</summary>
+    public double VideoPosition { get; set; }
 }
+
+/// <summary>Снимок активного видео для двухпроходного дубляжа.</summary>
+public sealed record VideoPlaybackState(
+    double Position,
+    double Duration,
+    bool Paused,
+    bool Ended,
+    double Rate);

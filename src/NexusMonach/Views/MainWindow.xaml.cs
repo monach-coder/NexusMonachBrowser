@@ -954,6 +954,13 @@ public partial class MainWindow : Window
         await RunWithHandsFreePausedAsync(() => LocalAiDock.TranslateVideoAudioAsync(tab));
     }
 
+    private async void PrecomputeDubbing_Click(object sender, RoutedEventArgs e)
+    {
+        var tab = ActiveTab;
+        if (tab?.Core is null) return;
+        await RunWithHandsFreePausedAsync(() => LocalAiDock.PrecomputeVideoDubbingAsync(tab));
+    }
+
     private async void ShoppingAgentTop_Click(object sender, RoutedEventArgs e)
     {
         var tab = ActiveTab;
