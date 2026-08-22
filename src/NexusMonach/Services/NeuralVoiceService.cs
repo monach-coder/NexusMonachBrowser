@@ -77,8 +77,23 @@ public static class NeuralVoiceService
             $"nexus-voice-warmup-{state.Name}-{Guid.NewGuid():N}.wav");
         try
         {
-            await Task.Run(() => SynthesizeToFile("Нексус готов", NeuralVoiceProfile.Natasha,
-                0, lane, output, cancellationToken), cancellationToken);
+            // Холодный старт воркера падает пачками (гонка зеркалирования
+            // модели, антивирус на свежераспакованном рантайме) — секунда
+            // паузы и свежий процесс обычно снимают проблему.
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    await Task.Run(() => SynthesizeToFile("Нексус готов", NeuralVoiceProfile.Natasha,
+                        0, lane, output, cancellationToken), cancellationToken);
+                    break;
+                }
+                catch (WorkerExitedException) when (attempt < 3)
+                {
+                    StopWorker(state);
+                    await Task.Delay(1000 + attempt * 500, cancellationToken);
+                }
+            }
         }
         catch
         {
@@ -147,7 +162,14 @@ public static class NeuralVoiceService
                 StopWorker(state);
                 var stillCurrent =
                     ShouldReportSynthesisFailure(generation, Volatile.Read(ref state.StopGeneration));
-                if (attempt == 0 && stillCurrent && ex is WorkerExitedException) continue;
+                // Холодный старт воркера падает пачками: гонка зеркалирования
+                // модели, антивирус на свежераспакованном рантайме. Мгновенный
+                // повтор бьётся о ту же причину — даю секунду на отпускание.
+                if (attempt < 3 && stillCurrent && ex is WorkerExitedException)
+                {
+                    Thread.Sleep(1000 + attempt * 500);
+                    continue;
+                }
                 if (stillCurrent)
                     CrashReportService.RecordNonFatal("voice",
                         "neural-tts-" + state.Name, ex);

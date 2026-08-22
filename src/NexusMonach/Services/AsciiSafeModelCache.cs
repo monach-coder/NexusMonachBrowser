@@ -10,9 +10,41 @@ namespace NexusMonach.Services;
 /// </summary>
 internal static class AsciiSafeModelCache
 {
+    // Обе линии речи (ассистент и дубляж) могут зеркалить одну и ту же
+    // модель одновременно; без сериализации гонка копий способна подсунуть
+    // воркеру битый путь — и он молча умирает на загрузке.
+    private static readonly SemaphoreSlim MirrorLock = new(1, 1);
+
+    public static async Task<string> EnsureAsciiSafePathAsync(string modelPath)
+    {
+        if (IsAscii(modelPath)) return modelPath;
+        await MirrorLock.WaitAsync();
+        try
+        {
+            return MirrorLocked(modelPath);
+        }
+        finally
+        {
+            MirrorLock.Release();
+        }
+    }
+
     public static string EnsureAsciiSafePath(string modelPath)
     {
         if (IsAscii(modelPath)) return modelPath;
+        MirrorLock.Wait();
+        try
+        {
+            return MirrorLocked(modelPath);
+        }
+        finally
+        {
+            MirrorLock.Release();
+        }
+    }
+
+    private static string MirrorLocked(string modelPath)
+    {
         try
         {
             var source = new FileInfo(modelPath);
@@ -27,8 +59,7 @@ internal static class AsciiSafeModelCache
                 return target;
 
             Directory.CreateDirectory(cacheRoot);
-            // Промежуточный файл + Move: параллельные дорожки речи могут
-            // зеркалить модель одновременно, а читатель никогда не видит
+            // Промежуточный файл + Move: читатель никогда не видит
             // недокопированный файл.
             var staging = target + ".tmp-" + Guid.NewGuid().ToString("N");
             File.Copy(modelPath, staging, overwrite: true);

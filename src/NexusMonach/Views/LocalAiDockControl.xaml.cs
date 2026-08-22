@@ -615,12 +615,13 @@ public partial class LocalAiDockControl : UserControl
             await tab.EnableVideoDubbingMixAsync();
             await tab.SetBufferingVeilAsync(true, "Предварительная буферизация\nПрогреваю локальные модели…");
             var warmupStarted = DateTimeOffset.UtcNow;
-            var warmup = Task.WhenAll(
+            var coreWarmup = Task.WhenAll(
                 WhisperService.WarmUpAsync(WhisperLane.Dubbing, session.Token),
                 TranslationService.WarmUpForLiveVideoAsync(
-                    includeAllSourceRoutes: false, cancellationToken: session.Token),
-                VideoDubbingVoiceService.WarmUpAsync(session.Token));
-            while (!warmup.IsCompleted)
+                    includeAllSourceRoutes: false, cancellationToken: session.Token));
+            var voiceWarmup = VideoDubbingVoiceService.WarmUpAsync(session.Token);
+            var allWarmup = Task.WhenAll(coreWarmup, voiceWarmup);
+            while (!allWarmup.IsCompleted)
             {
                 var elapsed = (int)(DateTimeOffset.UtcNow - warmupStarted).TotalSeconds;
                 await tab.SetBufferingVeilAsync(true,
@@ -628,7 +629,16 @@ public partial class LocalAiDockControl : UserControl
                 try { await Task.Delay(2000, session.Token); }
                 catch (OperationCanceledException) { break; }
             }
-            await warmup;
+            await coreWarmup;
+            // Прогрев голоса с повторами внутри; если он всё же не встал —
+            // сеанс живёт: синтез поднимется на первой реплике, а сбой
+            // попадёт в Crash Vault вместо убийства всего перевода.
+            try { await voiceWarmup; }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                CrashReportService.RecordNonFatal("video-translation", "voice-warmup", ex);
+            }
             CrashReportService.AddBreadcrumb("video-translation", "rolling-dubbing-started");
 
             // Зритель видит паузу с карточкой «подождите минуту»: под вуалью
@@ -897,7 +907,7 @@ public partial class LocalAiDockControl : UserControl
                 silenceStreak = 0;
                 await TranslateDrainedAsync(captured, cancellationToken);
                 await ReportAsync(HasModelIssues
-                    ? "Проблема распознавания — проверьте модель"
+                    ? "Проблема конвейера — распознавание или синтез голоса"
                     : null);
             }
 
@@ -987,13 +997,26 @@ public partial class LocalAiDockControl : UserControl
             if (translated is null || double.IsNaN(translated.VideoStartedAt))
                 return mediaSeconds;
             var wavs = new List<string>();
-            foreach (var chunk in VideoDubbingPolicy.SplitTtsText(
-                         translated.RussianText, _profile))
+            try
             {
-                var speech = await VideoDubbingVoiceService.PrepareAsync(chunk, 0,
-                    cancellationToken);
-                wavs.Add(speech.Path);
-                _allWavs.Add(speech.Path);
+                foreach (var chunk in VideoDubbingPolicy.SplitTtsText(
+                             translated.RussianText, _profile))
+                {
+                    var speech = await VideoDubbingVoiceService.PrepareAsync(chunk, 0,
+                        cancellationToken);
+                    wavs.Add(speech.Path);
+                    _allWavs.Add(speech.Path);
+                }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                // Сбой синтеза одной реплики не должен ронять окно буферизации:
+                // реплика пропускается, счётчик проблем скажет об этом в карточке.
+                Interlocked.Increment(ref _transcribeFailures);
+                CrashReportService.RecordNonFatal("video-translation",
+                    "rolling-tts", ex);
+                return mediaSeconds;
             }
             if (wavs.Count > 0)
                 lock (_gate)
