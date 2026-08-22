@@ -789,6 +789,20 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     }
 
     /// <summary>
+    /// Сбрасывает накопленный буфер захвата: после перемотки хвост прошлого
+    /// материала не должен подмешиваться в новые сегменты стока.
+    /// </summary>
+    public async Task FlushAudioCaptureBufferAsync()
+    {
+        if (Core is null) return;
+        await Core.ExecuteScriptAsync("""
+            (()=>{const state=window.__nexusLiveAudioCapture;
+              if(state){state.chunks=[];state.total=0;state.minimum=0}
+              window.__nexusLiveAudioOverlap=null})()
+            """);
+    }
+
+    /// <summary>
     /// Ставит видео анализа на паузу, не трогая сохранённую скорость: медиа
     /// замирает, пока распознавание думает — речь не проскакивает мимо.
     /// </summary>
@@ -865,6 +879,12 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         catch { return null; }
     }
 
+    /// <summary>
+    /// Собирает сегмент звука активного видео. При <paramref name="milliseconds"/>
+    /// &gt; 0 ждёт ровно столько wall-времени; при 0 — режим стока: отдаёт всё
+    /// накопленное с прошлого раза (не меньше секунды), что вместе с 90-секундным
+    /// кольцевым буфером страницы даёт непрерывный перевод без дыр на ×1.
+    /// </summary>
     public async Task<AudioCaptureResult> CaptureActiveVideoAudioAsync(int milliseconds,
         CancellationToken cancellationToken = default, int overlapMilliseconds = 0)
     {
@@ -892,7 +912,10 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                   processor.onaudioprocess=e=>{
                     if(state.closed)return;
                     const chunk=new Float32Array(e.inputBuffer.getChannelData(0));state.chunks.push(chunk);state.total+=chunk.length;
-                    const maximum=Math.ceil(state.sampleRate*12);
+                    // Кольцевой буфер на 90 секунд: пока конвейер думает над
+                    // предыдущим куском, звук накапливается без потерь — на
+                    // обычной скорости ×1 это даёт непрерывный перевод без дыр.
+                    const maximum=Math.ceil(state.sampleRate*90);
                     while(state.total>maximum&&state.chunks.length>1){const removed=state.chunks.shift();state.total-=removed.length}
                     // Фоновая вкладка троттлит setTimeout до раза в секунду, и опрос
                     // готовности сегмента замедлял конвейер перевода. Аудио-поток
@@ -904,7 +927,8 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                   source.connect(processor);processor.connect(silent);silent.connect(context.destination);await context.resume();
                   window.__nexusLiveAudioCapture=state;
                 }
-                const minimum=Math.floor(state.sampleRate*__MILLISECONDS__/1000),deadline=Date.now()+__MILLISECONDS__+2500;
+                const drain=__MILLISECONDS__<=0,collectMs=drain?1000:__MILLISECONDS__;
+                const minimum=Math.floor(state.sampleRate*collectMs/1000),deadline=Date.now()+collectMs+(drain?1500:2500);
                 const positionBefore=video.currentTime;
                 state.minimum=minimum;
                 while(state.total<minimum&&Date.now()<deadline){
@@ -936,7 +960,8 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 return {Success:true,Error:'',WavBase64:btoa(binary),VideoPosition:positionBefore,VideoRate:video.playbackRate||1};
               } catch(error) { return {Success:false,Error:error?.message||String(error),WavBase64:''}; }
             })();
-            """.Replace("__MILLISECONDS__", Math.Clamp(milliseconds, 1_200, 4_000).ToString(),
+            """.Replace("__MILLISECONDS__",
+                milliseconds <= 0 ? "0" : Math.Clamp(milliseconds, 1_200, 4_000).ToString(),
                 StringComparison.Ordinal)
             .Replace("__OVERLAP__", Math.Clamp(overlapMilliseconds, 0, 1_200).ToString(),
                 StringComparison.Ordinal);

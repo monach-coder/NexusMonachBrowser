@@ -29,16 +29,16 @@ public sealed class VideoDubbingPolicyTests
     [Fact]
     public void BufferingPauseBudgets_AreComfortableForViewer()
     {
-        // Первая пауза — «подождите минутку»: не дольше полутора минут.
+        // Первая пауза — «подождите минуту» на обычной скорости ×1:
+        // минута ожидания = минута переведённого задела.
         Assert.InRange(VideoDubbingPolicy.InitialBufferWallBudgetSeconds, 45, 90);
-        // Догрузка должна быть короче первой паузы, но успевать дать задел.
+        Assert.Equal(VideoDubbingPolicy.InitialLookaheadSeconds,
+            VideoDubbingPolicy.InitialBufferWallBudgetSeconds);
+        // Догрузка короче первой паузы, но успевает дать задел.
         Assert.InRange(VideoDubbingPolicy.CatchUpWallBudgetSeconds, 20,
             VideoDubbingPolicy.InitialBufferWallBudgetSeconds);
-        Assert.InRange(VideoDubbingPolicy.InitialLookaheadSeconds, 90, 300);
-        Assert.InRange(VideoDubbingPolicy.CatchUpLookaheadSeconds, 45,
-            VideoDubbingPolicy.InitialLookaheadSeconds);
-        // Выше ×8 захват звука деградирует — потолок обязан быть ограничен.
-        Assert.InRange(VideoDubbingPolicy.MaximumAnalysisRate, 2, 8);
+        Assert.Equal(VideoDubbingPolicy.CatchUpLookaheadSeconds,
+            VideoDubbingPolicy.CatchUpWallBudgetSeconds);
     }
 
     [Fact]
@@ -173,7 +173,9 @@ public sealed class VideoDubbingPolicyTests
         Assert.True(profile.MaximumPendingWords >= 40);
         Assert.True(profile.MaximumPendingCharacters >= 280);
         Assert.True(profile.MaximumTtsCharacters > 140);
-        Assert.InRange(VideoDubbingPolicy.MaximumAnalysisRate, 8, 16);
+        // Подготовка идёт на обычной скорости ×1: минута паузы — минута задела.
+        Assert.Equal(VideoDubbingPolicy.InitialLookaheadSeconds,
+            VideoDubbingPolicy.InitialBufferWallBudgetSeconds);
         var longUnfinished = string.Join(' ', Enumerable.Repeat("слово", 30));
         Assert.False(VideoDubbingPolicy.ShouldFinalizeUtterance(longUnfinished, 2, profile));
         Assert.True(VideoDubbingPolicy.ShouldFinalizeUtterance(

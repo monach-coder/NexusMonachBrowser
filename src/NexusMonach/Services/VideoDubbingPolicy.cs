@@ -126,22 +126,19 @@ internal static class VideoDubbingPolicy
         MaximumBufferedAudioSeconds: 12);
 
     /// <summary>
-    /// Верхняя граница скорости ускоренного прогона анализа. Прогон идёт
-    /// под вуалью (зритель видит паузу), но выше ×8 захват звука деградирует.
+    /// Бюджет первой паузы буферизации — «подождите минуту»: на обычной
+    /// скорости ×1 минута ожидания даёт минуту переведённого задела.
     /// </summary>
-    public const double MaximumAnalysisRate = 8;
-
-    /// <summary>Бюджет первой паузы буферизации — «подождите минутку».</summary>
-    public const double InitialBufferWallBudgetSeconds = 75;
+    public const double InitialBufferWallBudgetSeconds = 60;
 
     /// <summary>Бюджет короткой догрузки у границы переведённого.</summary>
     public const double CatchUpWallBudgetSeconds = 40;
 
-    /// <summary>Сколько секунд фильма первая пауза стремится перевести вперёд.</summary>
-    public const double InitialLookaheadSeconds = 150;
+    /// <summary>Сколько секунд фильма первая пауза переводит вперёд.</summary>
+    public const double InitialLookaheadSeconds = 60;
 
     /// <summary>На сколько секунд догрузка расширяет переведённое окно.</summary>
-    public const double CatchUpLookaheadSeconds = 75;
+    public const double CatchUpLookaheadSeconds = 40;
 
     /// <summary>
     /// Balanced is the automatic everyday mode: short clips prioritize first
