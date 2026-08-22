@@ -845,7 +845,6 @@ public partial class LocalAiDockControl : UserControl
             await _tab.FlushAudioCaptureBufferAsync();
             Frontier = Math.Max(Frontier, fromSeconds);
             var silenceStreak = 0;
-            var muteFallback = false;
 
             async Task ReportAsync(string? note)
             {
@@ -881,16 +880,18 @@ public partial class LocalAiDockControl : UserControl
                 {
                     if (captured.Success) silenceStreak++;
                     else await Task.Delay(150, cancellationToken);
-                    if (!muteFallback && silenceStreak >= 4)
-                    {
-                        // Некоторые браузеры глушат вместе со звуком и дорожку
-                        // захвата: честно включаем звук и сообщаем в карточке.
-                        muteFallback = true;
-                        await _tab.SetVeilMutedAsync(false);
-                    }
-                    await ReportAsync(silenceStreak >= 4 && captured.Success
-                        ? "Тихий фрагмент — слушаю дальше"
-                        : "Собираю звук…");
+                    // Ошибки захвата видны зрителю сразу — никаких слепых
+                    // «перевода нет» без причины.
+                    string note;
+                    if (!captured.Success && !string.IsNullOrWhiteSpace(captured.Error))
+                        note = captured.Error is "Видео на паузе." or "silence"
+                            ? "Собираю звук…"
+                            : captured.Error[..Math.Min(captured.Error.Length, 90)];
+                    else if (silenceStreak >= 4)
+                        note = "Тихий фрагмент — слушаю дальше";
+                    else
+                        note = "Собираю звук…";
+                    await ReportAsync(note);
                     continue;
                 }
                 silenceStreak = 0;

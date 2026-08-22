@@ -742,10 +742,23 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         if (Core is null) return;
         await Core.ExecuteScriptAsync($$$"""
             ((visible,text)=>{
+              if(!window.__nexusApplyMix)window.__nexusApplyMix=()=>{
+                const cap=window.__nexusLiveAudioCapture;
+                const duck=window.__nexusDuckOriginal;
+                const veiled=window.__nexusBufferingVeil;
+                const video=cap&&cap.video?cap.video:(veiled?veiled.video:null);
+                if(!video)return;
+                // Громкость элемента неприкосновенна: любое её изменение режет
+                // сигнал тапа до нуля. Всё управление слышимостью — только
+                // через узел speaker (или мьют, пока граф не построен).
+                if(cap&&cap.speaker&&cap.mode==='element'){try{cap.speaker.gain.value=veiled?0:(duck!=null?duck:1)}catch{}return}
+                if(veiled){try{video.muted=true}catch{}return}
+              };
               let veil=window.__nexusBufferingVeil;
               if(!visible){
                 if(veil){try{veil.video.muted=veil.wasMuted}catch{}try{veil.frame.remove()}catch{}try{veil.card.remove()}catch{}try{removeEventListener('resize',veil.reposition)}catch{}}
-                window.__nexusBufferingVeil=null;return}
+                window.__nexusBufferingVeil=null;
+                window.__nexusApplyMix();return}
               const saved=window.__nexusAnalysisRate;
               const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0)
                 .sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
@@ -761,7 +774,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 frame.style.cssText='position:fixed;z-index:2147483646;background:#000;object-fit:contain';
                 const card=document.createElement('div');card.dataset.nexusTranslationUi='true';
                 card.style.cssText='position:fixed;z-index:2147483647;background:#050a0ff2;border:1px solid #55d8cc66;border-radius:10px;color:#eafffc;font:600 12.5px Segoe UI,sans-serif;line-height:1.5;white-space:pre-line;padding:10px 16px;pointer-events:none;text-align:left;box-shadow:0 6px 20px rgba(0,0,0,.35);backdrop-filter:blur(6px)';
-                const wasMuted=video.muted;video.muted=true;
+                const wasMuted=video.muted;
                 veil={video,frame,card,wasMuted,reposition:null};
                 const position=()=>{
                   const r=video.getBoundingClientRect();
@@ -772,20 +785,10 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 position();veil.reposition=position;addEventListener('resize',position);
                 window.__nexusBufferingVeil=veil;
                 document.documentElement.append(frame);document.documentElement.append(card)}
-              veil.card.textContent=text})(
+              window.__nexusApplyMix();
+              veil.card.textContent=text})((
             {{{(visible ? "true" : "false")}}},{{{JsonSerializer.Serialize(text)}}})
             """);
-    }
-
-    /// <summary>
-    /// Страховка: если под вуалью захват онемел (некоторые плееры глушат и
-    /// дорожку захвата), возвращаем звук страницы — прогон слышен, но идёт.
-    /// </summary>
-    public async Task SetVeilMutedAsync(bool muted)
-    {
-        if (Core is null) return;
-        await Core.ExecuteScriptAsync(
-            $$$"""(()=>{const veil=window.__nexusBufferingVeil;if(veil)try{veil.video.muted={{{(muted ? "true" : "false")}}}}catch{}})()""");
     }
 
     /// <summary>
@@ -897,18 +900,39 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                   .sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
                 const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];
                 if(!video) return {Success:false,Error:'Активное HTML5-видео не найдено.',WavBase64:''};
-                const dispose=state=>{if(!state)return;state.closed=true;try{state.processor.disconnect()}catch{}try{state.source.disconnect()}catch{}try{state.silent.disconnect()}catch{}try{state.tracks.forEach(t=>t.stop())}catch{}try{state.context.close()}catch{}};
+                const dispose=state=>{if(!state)return;state.closed=true;try{state.processor.disconnect()}catch{}try{state.source.disconnect()}catch{}try{state.silent.disconnect()}catch{}try{state.speaker.disconnect()}catch{}try{state.tracks.forEach(t=>t.stop())}catch{}try{state.context.close()}catch{}};
                 if(video.paused||video.ended){dispose(window.__nexusLiveAudioCapture);window.__nexusLiveAudioCapture=null;window.__nexusLiveAudioOverlap=null;return {Success:false,WaitingForPlayback:true,Error:'Видео на паузе.',WavBase64:''}}
                 let state=window.__nexusLiveAudioCapture;
                 if(!state||state.closed||state.video!==video){
                   dispose(state);
-                  const capture=video.captureStream||video.mozCaptureStream;
-                  if(!capture) return {Success:false,Error:'Этот проигрыватель не разрешает захват звукового потока.',WavBase64:''};
-                  const stream=capture.call(video),tracks=stream.getAudioTracks();
-                  if(!tracks.length){tracks.forEach(t=>t.stop());return {Success:false,Error:'В видеопотоке нет доступной аудиодорожки или она защищена DRM.',WavBase64:''}}
-                  const context=new AudioContext(),source=context.createMediaStreamSource(stream);
+                  const context=new AudioContext();
+                  let source=null,tracks=[],mode='element';
+                  // Основной путь — тап звука самого элемента: в WebView2
+                  // captureStream часто не отдаёт аудиодорожек вовсе, а
+                  // MediaElementSource читает звук независимо от громкости
+                  // страницы и позволяет управлять слышимостью отдельным
+                  // узлом усиления.
+                  try{source=context.createMediaElementSource(video)}
+                  catch{mode='stream'}
+                  if(!source){
+                    const capture=video.captureStream||video.mozCaptureStream;
+                    if(!capture){try{context.close()}catch{};return {Success:false,Error:'Этот проигрыватель не разрешает захват звукового потока.',WavBase64:''};}
+                    const stream=capture.call(video);tracks=stream.getAudioTracks();
+                    if(!tracks.length){tracks.forEach(t=>t.stop());try{context.close()}catch{};return {Success:false,Error:'В видеопотоке нет доступной аудиодорожки или она защищена DRM.',WavBase64:''}}
+                    source=context.createMediaStreamSource(stream);
+                  }
                   const processor=context.createScriptProcessor(4096,1,1),silent=context.createGain();silent.gain.value=0;
-                  state={video,context,source,processor,silent,tracks,chunks:[],total:0,sampleRate:context.sampleRate,closed:false,waiters:[],minimum:0};
+                  const speaker=context.createGain();speaker.gain.value=1;
+                  if(mode==='element'){
+                    // Приглушение и тишина вуали живут в графе (узел speaker),
+                    // поэтому элементу возвращаю честные громкость и мьют —
+                    // тап обязан читать полный сигнал, а не 12% приглушения.
+                    const dub=window.__nexusDubbingVideoState;
+                    if(dub&&dub.video===video&&video.volume<dub.volume){try{video.volume=dub.volume}catch{}}
+                    const veiled=window.__nexusBufferingVeil;
+                    if(veiled){try{video.muted=!!veiled.wasMuted}catch{}}
+                  }
+                  state={video,context,source,processor,silent,speaker,tracks,mode,chunks:[],total:0,sampleRate:context.sampleRate,closed:false,waiters:[],minimum:0};
                   processor.onaudioprocess=e=>{
                     if(state.closed)return;
                     const chunk=new Float32Array(e.inputBuffer.getChannelData(0));state.chunks.push(chunk);state.total+=chunk.length;
@@ -924,8 +948,10 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                       const ready=state.waiters;state.waiters=[];ready.forEach(resolve=>resolve());
                     }
                   };
+                  source.connect(speaker);speaker.connect(context.destination);
                   source.connect(processor);processor.connect(silent);silent.connect(context.destination);await context.resume();
                   window.__nexusLiveAudioCapture=state;
+                  if(window.__nexusApplyMix)window.__nexusApplyMix();
                 }
                 const drain=__MILLISECONDS__<=0,collectMs=drain?1000:__MILLISECONDS__;
                 const minimum=Math.floor(state.sampleRate*collectMs/1000),deadline=Date.now()+collectMs+(drain?1500:2500);
@@ -1023,7 +1049,20 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
             (()=>{const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
               const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];if(!video)return false;
               if(!window.__nexusDubbingVideoState)window.__nexusDubbingVideoState={video,muted:video.muted,volume:video.volume};
-              if(!video.muted)video.volume=Math.min(video.volume,__ORIGINAL_VOLUME__);return true;})()
+              // Приглушаем оригинал одним узлом микширования: при тапе через
+              // MediaElementSource это выходной узел (конвейер читает полный
+              // сигнал), иначе — громкость элемента как раньше.
+              window.__nexusDuckOriginal=__ORIGINAL_VOLUME__;
+              if(!window.__nexusApplyMix)window.__nexusApplyMix=()=>{
+                const cap=window.__nexusLiveAudioCapture;
+                const duck=window.__nexusDuckOriginal;
+                const veiled=window.__nexusBufferingVeil;
+                const target=cap&&cap.video?cap.video:(veiled?veiled.video:null);
+                if(!target)return;
+                if(cap&&cap.speaker&&cap.mode==='element'){try{cap.speaker.gain.value=veiled?0:(duck!=null?duck:1)}catch{}return}
+                if(veiled){try{target.muted=true}catch{}return}
+              };
+              window.__nexusApplyMix();return true;})()
             """.Replace("__ORIGINAL_VOLUME__",
                 VideoDubbingPolicy.OriginalVolume.ToString(CultureInfo.InvariantCulture),
                 StringComparison.Ordinal));
@@ -1035,8 +1074,8 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     {
         if (Core is null) return;
         await Core.ExecuteScriptAsync("""
-            ((status)=>{window.__nexusStopAudioTranslation=true;window.__nexusLiveAudioOverlap=null;window.__nexusLiveVideoSession=null;
-              const capture=window.__nexusLiveAudioCapture;window.__nexusLiveAudioCapture=null;if(capture){capture.closed=true;try{capture.processor.disconnect()}catch{}try{capture.source.disconnect()}catch{}try{capture.silent.disconnect()}catch{}try{capture.tracks.forEach(t=>t.stop())}catch{}try{capture.context.close()}catch{}}
+            ((status)=>{window.__nexusStopAudioTranslation=true;window.__nexusLiveAudioOverlap=null;window.__nexusLiveVideoSession=null;window.__nexusDuckOriginal=null;
+              const capture=window.__nexusLiveAudioCapture;window.__nexusLiveAudioCapture=null;if(capture){capture.closed=true;try{capture.processor.disconnect()}catch{}try{capture.source.disconnect()}catch{}try{capture.silent.disconnect()}catch{}try{capture.speaker.disconnect()}catch{}try{capture.tracks.forEach(t=>t.stop())}catch{}try{capture.context.close()}catch{}}
               window.__nexusSpokenVideoState=null;
               const dubbing=window.__nexusDubbingVideoState;window.__nexusDubbingVideoState=null;if(dubbing?.video?.isConnected){dubbing.video.muted=dubbing.muted;dubbing.video.volume=dubbing.volume}
               const captions=window.__nexusCaptionSuppression;window.__nexusCaptionSuppression=null;if(captions){try{captions.observer.disconnect()}catch{}try{captions.entries.forEach(x=>{if(x.track)x.track.mode=x.mode})}catch{}try{captions.style.remove()}catch{}}
