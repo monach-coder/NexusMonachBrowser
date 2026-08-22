@@ -27,6 +27,21 @@ public sealed class VideoDubbingPolicyTests
     }
 
     [Fact]
+    public void BufferingPauseBudgets_AreComfortableForViewer()
+    {
+        // Первая пауза — «подождите минутку»: не дольше полутора минут.
+        Assert.InRange(VideoDubbingPolicy.InitialBufferWallBudgetSeconds, 45, 90);
+        // Догрузка должна быть короче первой паузы, но успевать дать задел.
+        Assert.InRange(VideoDubbingPolicy.CatchUpWallBudgetSeconds, 20,
+            VideoDubbingPolicy.InitialBufferWallBudgetSeconds);
+        Assert.InRange(VideoDubbingPolicy.InitialLookaheadSeconds, 90, 300);
+        Assert.InRange(VideoDubbingPolicy.CatchUpLookaheadSeconds, 45,
+            VideoDubbingPolicy.InitialLookaheadSeconds);
+        // Выше ×8 захват звука деградирует — потолок обязан быть ограничен.
+        Assert.InRange(VideoDubbingPolicy.MaximumAnalysisRate, 2, 8);
+    }
+
+    [Fact]
     public void VideoTranslationModes_HaveBoundedContextAndPreparedAudioReserve()
     {
         var fast = VideoDubbingPolicy.ForMode(VideoTranslationMode.Fast);

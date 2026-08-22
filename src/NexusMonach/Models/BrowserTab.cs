@@ -733,28 +733,86 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     }
 
     /// <summary>
-    /// Компактная плашка поверх видео на время предварительной
-    /// буферизации: небольшой авто-размер вокруг текста, не закрывает кадр.
+    /// «Невидимая буферизация»: кадр видео замирает (замороженный снимок поверх
+    /// плеера), звук для зрителя глушится, а под этим ускоренно идёт прогон
+    /// анализа. Зритель видит паузу и компактную карточку-статус — не сам прогон.
     /// </summary>
-    public async Task SetAnalysisOverlayAsync(bool visible, string text)
+    public async Task SetBufferingVeilAsync(bool visible, string text)
     {
         if (Core is null) return;
-        await Core.ExecuteScriptAsync($$"""
+        await Core.ExecuteScriptAsync($$$"""
             ((visible,text)=>{
-              let panel=document.getElementById('nexus-analysis-overlay');
-              if(!visible){if(panel)panel.remove();return}
+              let veil=window.__nexusBufferingVeil;
+              if(!visible){
+                if(veil){try{veil.video.muted=veil.wasMuted}catch{}try{veil.frame.remove()}catch{}try{veil.card.remove()}catch{}try{removeEventListener('resize',veil.reposition)}catch{}}
+                window.__nexusBufferingVeil=null;return}
+              const saved=window.__nexusAnalysisRate;
               const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0)
-                .sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*b.clientHeight));
-              const video=videos[0];if(!video)return;
-              if(!panel){panel=document.createElement('div');panel.id='nexus-analysis-overlay';panel.dataset.nexusTranslationUi='true';
-                panel.style.cssText='position:fixed;z-index:2147483646;background:#050a0ff2;border:1px solid #55d8cc66;border-radius:10px;color:#eafffc;font:600 12.5px Segoe UI,sans-serif;line-height:1.5;white-space:pre-line;padding:10px 16px;pointer-events:none;text-align:left;box-shadow:0 6px 20px rgba(0,0,0,.35);backdrop-filter:blur(6px)';
-                document.documentElement.append(panel)}
-              panel.textContent=text;
-              const r=video.getBoundingClientRect();
-              panel.style.left=Math.max(8,r.left+16)+'px';
-              panel.style.top=Math.max(8,r.top+16)+'px';
-              panel.style.maxWidth=Math.max(160,Math.min(420,r.width-32))+'px'})(
-            {{(visible ? "true" : "false")}},{{JsonSerializer.Serialize(text)}})
+                .sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
+              const video=(saved?.video?.isConnected?saved.video:null)||videos[0];if(!video)return;
+              if(!veil||veil.video!==video||!veil.frame.isConnected){
+                if(veil){try{veil.video.muted=veil.wasMuted}catch{}try{veil.frame.remove()}catch{}try{veil.card.remove()}catch{}try{removeEventListener('resize',veil.reposition)}catch{}}
+                const frame=document.createElement('img');frame.dataset.nexusTranslationUi='true';
+                try{const canvas=document.createElement('canvas');
+                  canvas.width=video.videoWidth||1280;canvas.height=video.videoHeight||720;
+                  canvas.getContext('2d').drawImage(video,0,0,canvas.width,canvas.height);
+                  frame.src=canvas.toDataURL('image/jpeg',0.82)}
+                catch{frame.src='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='}
+                frame.style.cssText='position:fixed;z-index:2147483646;background:#000;object-fit:contain';
+                const card=document.createElement('div');card.dataset.nexusTranslationUi='true';
+                card.style.cssText='position:fixed;z-index:2147483647;background:#050a0ff2;border:1px solid #55d8cc66;border-radius:10px;color:#eafffc;font:600 12.5px Segoe UI,sans-serif;line-height:1.5;white-space:pre-line;padding:10px 16px;pointer-events:none;text-align:left;box-shadow:0 6px 20px rgba(0,0,0,.35);backdrop-filter:blur(6px)';
+                const wasMuted=video.muted;video.muted=true;
+                veil={video,frame,card,wasMuted,reposition:null};
+                const position=()=>{
+                  const r=video.getBoundingClientRect();
+                  frame.style.left=r.left+'px';frame.style.top=r.top+'px';
+                  frame.style.width=r.width+'px';frame.style.height=r.height+'px';
+                  card.style.left=Math.max(8,r.left+16)+'px';card.style.top=Math.max(8,r.top+16)+'px';
+                  card.style.maxWidth=Math.max(160,Math.min(420,r.width-32))+'px'};
+                position();veil.reposition=position;addEventListener('resize',position);
+                window.__nexusBufferingVeil=veil;
+                document.documentElement.append(frame);document.documentElement.append(card)}
+              veil.card.textContent=text})(
+            {{{(visible ? "true" : "false")}}},{{{JsonSerializer.Serialize(text)}}})
+            """);
+    }
+
+    /// <summary>
+    /// Страховка: если под вуалью захват онемел (некоторые плееры глушат и
+    /// дорожку захвата), возвращаем звук страницы — прогон слышен, но идёт.
+    /// </summary>
+    public async Task SetVeilMutedAsync(bool muted)
+    {
+        if (Core is null) return;
+        await Core.ExecuteScriptAsync(
+            $$$"""(()=>{const veil=window.__nexusBufferingVeil;if(veil)try{veil.video.muted={{{(muted ? "true" : "false")}}}}catch{}})()""");
+    }
+
+    /// <summary>
+    /// Ставит видео анализа на паузу, не трогая сохранённую скорость: медиа
+    /// замирает, пока распознавание думает — речь не проскакивает мимо.
+    /// </summary>
+    public async Task PauseActiveVideoAsync()
+    {
+        if (Core is null) return;
+        await Core.ExecuteScriptAsync("""
+            (()=>{const saved=window.__nexusAnalysisRate;
+              const video=saved?.video?.isConnected?saved.video:[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0)
+                .sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*b.clientHeight))[0];
+              if(video)video.pause()})()
+            """);
+    }
+
+    /// <summary>
+    /// Восстанавливает исходную скорость видео, если анализ не сделал этого
+    /// сам. Безобиден при повторном вызове — страховка на любом исходе.
+    /// </summary>
+    public async Task RestoreVideoRateAsync()
+    {
+        if (Core is null) return;
+        await Core.ExecuteScriptAsync("""
+            (()=>{const saved=window.__nexusAnalysisRate;if(!saved)return;window.__nexusAnalysisRate=null;
+              if(saved.video?.isConnected)saved.video.playbackRate=saved.rate??1})()
             """);
     }
 
@@ -786,13 +844,6 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
               video.currentTime={{positionSeconds.ToString(CultureInfo.InvariantCulture)}};video.play().catch(()=>{})})()
             """);
     }
-
-    /// <summary>
-    /// Возвращает видео к началу с обычной скоростью — устаревший путь
-    /// полного предперевода; показ теперь стартует с текущей позиции.
-    /// </summary>
-    public async Task RestartVideoForDubbedPlaybackAsync() =>
-        await ResumeVideoFromAsync(0);
 
     public async Task<double?> GetActiveVideoDurationAsync()
     {
