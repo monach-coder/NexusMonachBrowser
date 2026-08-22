@@ -66,18 +66,39 @@ public sealed class RussianStressDictionaryTests
         Assert.Equal("Гот+ов", RussianStressDictionary.TryStressWord("Готов"));
     }
 
+    [Fact]
+    public void MachineTranslationWithoutYo_GetsStressBack()
+    {
+        EnsureDictionaryLoaded();
+        // Машинный перевод пишет без «ё»: словарь ударений помечает нужную
+        // гласную маркером, а таблица «ё» восстанавливает букву целиком —
+        // оба варианта произносятся одинаково правильно.
+        Assert.Equal("ещ+е", RussianStressDictionary.TryStressWord("еще"));
+        var marked = RussianStressDictionary.ApplyStress(
+            "Он приедет еще вечером и привезет ее чемодан.");
+        Assert.Contains("ещё", marked);
+        Assert.Contains("её", marked);
+        Assert.Contains("привезёт", marked);
+        // Слова с возвращенной «ё» не получают лишний маркер «+».
+        Assert.DoesNotContain("+ё", marked);
+    }
+
     private static void EnsureDictionaryLoaded()
     {
         if (RussianStressDictionary.IsReady) return;
+        var root = FindRepositoryRoot();
         var candidates = new[]
         {
             AiModelCatalog.StressDictionary,
-            Path.Combine(FindRepositoryRoot(), "src", "NexusMonach", "AI",
+            Path.Combine(root, "src", "NexusMonach", "AI",
                 "dictionaries", "ru-stress-full.txt.gz")
         };
         var path = candidates.FirstOrDefault(File.Exists);
         Assert.False(path is null, "Словарь ударений ru-stress-full.txt.gz не найден ни в выводе сборки, ни в исходном дереве.");
-        RussianStressDictionary.LoadFrom(path!);
+        var yoPath = Path.Combine(root, "src", "NexusMonach", "AI",
+            "dictionaries", "ru-yo-words.txt.gz");
+        RussianStressDictionary.LoadFrom(path!,
+            File.Exists(yoPath) ? yoPath : null);
         Assert.True(RussianStressDictionary.IsReady);
     }
 

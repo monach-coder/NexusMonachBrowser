@@ -16,6 +16,7 @@ internal static partial class RussianStressDictionary
     private const int MaximumWordLength = 64;
     private static readonly object Sync = new();
     private static byte[]? _blob;
+    private static byte[]? _yoBlob;
     private static bool _loadAttempted;
 
     public static bool IsReady => _blob is not null;
@@ -38,8 +39,16 @@ internal static partial class RussianStressDictionary
         return WordPattern().Replace(text, match =>
         {
             var word = match.Value;
-            if (word.Length > MaximumWordLength || word.Contains('ё') || word.Contains('Ё'))
-                return word;
+            if (word.Length > MaximumWordLength) return word;
+            // Машинный перевод пишет по-русски без «ё», и слово теряет
+            // подсказку об ударении: сначала возвращаем «ё», и только слово
+            // без неё уходит в словарь ударений.
+            if (!word.Contains('ё') && !word.Contains('Ё'))
+            {
+                var restored = TryRestoreYo(_yoBlob, word);
+                if (restored is not null) return restored;
+            }
+            if (word.Contains('ё') || word.Contains('Ё')) return word;
             var stressed = TryStressWord(blob, word);
             return stressed ?? word;
         });
@@ -51,12 +60,23 @@ internal static partial class RussianStressDictionary
         return blob is null ? null : TryStressWord(blob, word);
     }
 
+    private static string? TryRestoreYo(byte[]? yoBlob, string word)
+    {
+        if (yoBlob is null || yoBlob.Length == 0) return null;
+        var value = FindLineValue(yoBlob, word.ToLowerInvariant());
+        if (value is null || !value.Contains('ё')) return null;
+        if (word.ToUpperInvariant() == word)
+            return value.ToUpperInvariant();
+        if (char.IsUpper(word[0]))
+            return char.ToUpperInvariant(value[0]) + value[1..];
+        return value;
+    }
+
     private static string? TryStressWord(byte[] blob, string word)
     {
         var lower = word.ToLowerInvariant();
         if (!HasAtLeastTwoVowels(lower)) return null;
-        var needle = Encoding.UTF8.GetBytes(lower);
-        var stressIndex = FindStressIndex(blob, needle);
+        var stressIndex = FindStressIndex(blob, lower);
         if (stressIndex < 0) return null;
 
         var builder = new StringBuilder(word.Length + 1);
@@ -103,6 +123,15 @@ internal static partial class RussianStressDictionary
                 var blob = ReadBlob(path);
                 if (blob is null) return null;
                 _blob = blob;
+                try
+                {
+                    _yoBlob = ReadBlob(AiModelCatalog.YoWordsDictionary);
+                }
+                catch
+                {
+                    // Таблица «ё» необязательна: без неё лишь часть слов
+                    // теряет подсказку ударения.
+                }
                 return _blob;
             }
             catch
@@ -114,8 +143,8 @@ internal static partial class RussianStressDictionary
         }
     }
 
-    /// <summary>Тестовая точка входа: загрузить словарь из явного пути.</summary>
-    internal static void LoadFrom(string path)
+    /// <summary>Тестовая точка входа: загрузить словари из явных путей.</summary>
+    internal static void LoadFrom(string path, string? yoPath = null)
     {
         lock (Sync)
         {
@@ -124,6 +153,10 @@ internal static partial class RussianStressDictionary
             {
                 _blob = blob;
                 _loadAttempted = true;
+            }
+            if (yoPath is not null)
+            {
+                try { _yoBlob = ReadBlob(yoPath); } catch { _yoBlob = null; }
             }
         }
     }
@@ -139,12 +172,14 @@ internal static partial class RussianStressDictionary
     }
 
     /// <summary>
-    /// Бинарный поиск строки «слово⇥индекс» в отсортированном блобе. UTF-8
-    /// сохраняет порядок кодовых точек, поэтому побайтовое сравнение совпадает
-    /// с алфавитной сортировкой файла.
+    /// Бинарный поиск строки «ключ⇥значение» в отсортированном блобе;
+    /// возвращает хвост строки после табуляции. UTF-8 сохраняет порядок
+    /// кодовых точек, поэтому побайтовое сравнение совпадает с алфавитной
+    /// сортировкой файла.
     /// </summary>
-    private static int FindStressIndex(byte[] blob, byte[] needle)
+    private static string? FindLineValue(byte[] blob, string key)
     {
+        var needle = Encoding.UTF8.GetBytes(key.ToLowerInvariant());
         long low = 0;
         long high = blob.Length;
         while (low < high)
@@ -173,17 +208,7 @@ internal static partial class RussianStressDictionary
             if (compared == 0 && needleIndex < needle.Length)
                 compared = (byte)'\t' < needle[needleIndex] ? -1 : 1;
             if (compared == 0)
-            {
-                // Строка совпала: за табом идёт десятичный индекс гласной.
-                cursor++;
-                var value = 0;
-                while (cursor < blob.Length && blob[cursor] >= (byte)'0' && blob[cursor] <= (byte)'9')
-                {
-                    value = value * 10 + (blob[cursor] - (byte)'0');
-                    cursor++;
-                }
-                return value;
-            }
+                return ReadLineTail(blob, cursor);
             if (compared < 0)
             {
                 while (cursor < blob.Length && blob[cursor] != (byte)'\n') cursor++;
@@ -194,7 +219,23 @@ internal static partial class RussianStressDictionary
                 high = start;
             }
         }
-        return -1;
+        return null;
+    }
+
+    private static string? ReadLineTail(byte[] blob, long cursor)
+    {
+        cursor++;
+        var end = cursor;
+        while (end < blob.Length && blob[end] != (byte)'\n') end++;
+        return end > cursor
+            ? Encoding.UTF8.GetString(blob, (int)cursor, (int)(end - cursor))
+            : null;
+    }
+
+    private static int FindStressIndex(byte[] blob, string word)
+    {
+        var value = FindLineValue(blob, word);
+        return value is not null && int.TryParse(value, out var index) ? index : -1;
     }
 
     [GeneratedRegex("[А-Яа-яЁё]+")]

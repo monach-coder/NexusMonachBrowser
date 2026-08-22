@@ -720,18 +720,33 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                   if(!tracks.length){tracks.forEach(t=>t.stop());return {Success:false,Error:'В видеопотоке нет доступной аудиодорожки или она защищена DRM.',WavBase64:''}}
                   const context=new AudioContext(),source=context.createMediaStreamSource(stream);
                   const processor=context.createScriptProcessor(4096,1,1),silent=context.createGain();silent.gain.value=0;
-                  state={video,context,source,processor,silent,tracks,chunks:[],total:0,sampleRate:context.sampleRate,closed:false};
+                  state={video,context,source,processor,silent,tracks,chunks:[],total:0,sampleRate:context.sampleRate,closed:false,waiters:[],minimum:0};
                   processor.onaudioprocess=e=>{
                     if(state.closed)return;
                     const chunk=new Float32Array(e.inputBuffer.getChannelData(0));state.chunks.push(chunk);state.total+=chunk.length;
                     const maximum=Math.ceil(state.sampleRate*12);
                     while(state.total>maximum&&state.chunks.length>1){const removed=state.chunks.shift();state.total-=removed.length}
+                    // Фоновая вкладка троттлит setTimeout до раза в секунду, и опрос
+                    // готовности сегмента замедлял конвейер перевода. Аудио-поток
+                    // пробуждает ожидающий захват сам — таймер остаётся лишь страховкой.
+                    if(state.waiters&&state.waiters.length&&state.total>=state.minimum){
+                      const ready=state.waiters;state.waiters=[];ready.forEach(resolve=>resolve());
+                    }
                   };
                   source.connect(processor);processor.connect(silent);silent.connect(context.destination);await context.resume();
                   window.__nexusLiveAudioCapture=state;
                 }
                 const minimum=Math.floor(state.sampleRate*__MILLISECONDS__/1000),deadline=Date.now()+__MILLISECONDS__+2500;
-                while(state.total<minimum&&Date.now()<deadline){if(video.paused||video.ended||state.closed)break;await new Promise(resolve=>setTimeout(resolve,35))}
+                state.minimum=minimum;
+                while(state.total<minimum&&Date.now()<deadline){
+                  if(video.paused||video.ended||state.closed)break;
+                  if(!state.waiters)state.waiters=[];
+                  await new Promise(resolve=>{
+                    const wake=()=>{clearTimeout(guard);resolve()};
+                    const guard=setTimeout(wake,500);
+                    state.waiters.push(wake);
+                  });
+                }
                 if(video.paused||video.ended){dispose(state);window.__nexusLiveAudioCapture=null;window.__nexusLiveAudioOverlap=null;return {Success:false,WaitingForPlayback:true,Error:'Видео на паузе.',WavBase64:''}}
                 const chunks=state.chunks;state.chunks=[];const length=state.total;state.total=0;
                 const current=new Float32Array(length);let offset=0;

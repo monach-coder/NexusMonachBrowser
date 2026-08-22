@@ -48,6 +48,7 @@ public static class AiModelCatalog
     public static string SemanticAdapter => Path.Combine(AdapterRoot, "semantic.mjs");
     public static string TranslationAdapter => Path.Combine(AdapterRoot, "translate.mjs");
     public static string StressDictionary => Path.Combine(DictionariesRoot, "ru-stress-full.txt.gz");
+    public static string YoWordsDictionary => Path.Combine(DictionariesRoot, "ru-yo-words.txt.gz");
     public static string? PiperVoiceWorker => FindFile(VoiceRoot, "nexus-piper-worker.exe");
     public static string? SileroVoiceWorker => FindFile(VoiceRoot, "nexus-silero-worker.exe");
     public static string? PiperCli => FindFile(VoiceRoot, "piper.exe");

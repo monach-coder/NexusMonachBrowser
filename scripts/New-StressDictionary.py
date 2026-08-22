@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """Regenerates AI/dictionaries/ru-stress-full.txt.gz for the neural voice.
 
-Usage: python scripts/New-StressDictionary.py <path-to-accents.json.gz>
+Usage: python scripts/New-StressDictionary.py <accents.json.gz> [yo_words.json.gz]
 
-The input is the main RUAccent dictionary (MIT License), downloadable once
-by the maintainer from Hugging Face:
-https://huggingface.co/ruaccent/accentuator -> dictionary/accents.json.gz
-The script itself is offline and never accesses the network.
+The inputs are the RUAccent dictionaries (MIT License), downloadable once by
+the maintainer from Hugging Face:
+https://huggingface.co/ruaccent/accentuator -> dictionary/accents.json.gz and
+yo_words.json.gz. The script itself is offline and never accesses the network.
 
-Output format: one "word<TAB>vowel-index" line per word form, sorted; the
-index is the 0-based position of the stressed vowel. Words containing "ё"
-are dropped because "ё" already marks the stress unambiguously.
+Output formats (sorted TSV, gzipped):
+- ru-stress-full.txt.gz: "word<TAB>vowel-index" per word form; the index is
+  the 0-based position of the stressed vowel. Words containing "ё" are dropped
+  because "ё" already marks the stress unambiguously.
+- ru-yo-words.txt.gz (when yo_words.json.gz is given): "word-without-ё<TAB>
+  word-with-ё". Machine translation writes Russian without "ё", which loses
+  the stress hints; the spoken text restores "ё" before synthesis.
 
 Known single-entry errors in the upstream dictionary are corrected in
 OVERRIDES below; the browser test suite pins the corrected words, so a future
@@ -53,10 +57,11 @@ def parse_entry(key: str, value: str) -> int | None:
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
+    if len(sys.argv) not in (2, 3):
         print(__doc__)
         return 2
     source_path = sys.argv[1]
+    yo_path = sys.argv[2] if len(sys.argv) == 3 else ""
     with gzip.open(source_path, "rt", encoding="utf-8") as f:
         raw = json.load(f)
 
@@ -89,6 +94,24 @@ def main() -> int:
 
     print(f"entries: {len(entries)} | skipped: {skipped} | overrides applied: {applied}")
     print(f"written: {target} ({os.path.getsize(target)} bytes)")
+
+    if not yo_path:
+        return 0
+    with gzip.open(yo_path, "rt", encoding="utf-8") as f:
+        yo_raw = json.load(f)
+    yo_entries = {
+        key.strip(): value.strip()
+        for key, value in yo_raw.items()
+        if key.strip() and value.strip() and "ё" in value and "ё" not in key
+        and set(key.strip()) <= LOWER_RUSSIAN
+    }
+    yo_target = os.path.join(root, "src", "NexusMonach", "AI", "dictionaries",
+                             "ru-yo-words.txt.gz")
+    with gzip.open(yo_target, "wt", encoding="utf-8", newline="\n") as out:
+        for key in sorted(yo_entries):
+            out.write(f"{key}\t{yo_entries[key]}\n")
+    print(f"yo entries: {len(yo_entries)}")
+    print(f"written: {yo_target} ({os.path.getsize(yo_target)} bytes)")
     return 0
 
 
