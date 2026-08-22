@@ -65,6 +65,16 @@ if ($missingAi.Count -gt 0) {
     Write-Host "The browser will build, but AI functions require the official Full Offline release." -ForegroundColor Yellow
 }
 
+# Портативный профиль пользователя (Data) живёт в папке сборки и не является
+# артефактом сборки: без переноса каждая пересборка сбрасывала настройки,
+# тему и диалог первого запуска.
+$preservedData = Join-Path $dist "NexusMonach-Data-Preserve"
+$hasPreservedData = Test-Path (Join-Path $publish "Data")
+if ($hasPreservedData) {
+    if (Test-Path $preservedData) { Remove-Item $preservedData -Recurse -Force }
+    Move-Item (Join-Path $publish "Data") $preservedData
+}
+
 if (Test-Path $publish) { Remove-Item $publish -Recurse -Force }
 if (Test-Path $archive) { Remove-Item $archive -Force }
 New-Item -ItemType Directory -Force -Path $publish | Out-Null
@@ -201,6 +211,13 @@ if (-not $SkipArchive) {
     Compress-Archive -Path (Join-Path $publish "*") -DestinationPath $archive -CompressionLevel Optimal
 } else {
     Write-Host "Skipping the portable archive (-SkipArchive)." -ForegroundColor Yellow
+}
+
+# Профиль возвращается после создания архива: пользовательские данные не
+# должны попадать в распространяемый zip.
+if ($hasPreservedData -and (Test-Path $preservedData)) {
+    Move-Item $preservedData (Join-Path $publish "Data")
+    Write-Host "User portable profile (Data) carried over the rebuild." -ForegroundColor Green
 }
 
 Write-Host ""

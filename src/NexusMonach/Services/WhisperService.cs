@@ -222,7 +222,11 @@ public static class WhisperService
                 RedirectStandardError = true,
                 WorkingDirectory = Path.GetDirectoryName(executable)!
             };
-            var threads = Math.Clamp(Environment.ProcessorCount / 2, 2, 8);
+            // Распознавание сидит в критическом пути закадрового перевода:
+            // каждая секунда на сегменте напрямую добавляется к отставанию,
+            // поэтому отдаём трем четвертям ядер, оставляя остальным задачам
+            // минимум.
+            var threads = Math.Clamp(Environment.ProcessorCount * 3 / 4, 3, 8);
             foreach (var argument in new[]
                      {
                          // whisper-server открывает модель через ANSI fopen: кириллица

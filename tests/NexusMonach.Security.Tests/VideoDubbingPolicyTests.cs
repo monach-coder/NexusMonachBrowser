@@ -45,7 +45,9 @@ public sealed class VideoDubbingPolicyTests
         Assert.True(fast.SegmentMilliseconds < balanced.SegmentMilliseconds);
         Assert.True(balanced.SegmentMilliseconds < quality.SegmentMilliseconds);
         Assert.Equal(2, fast.MaximumPendingParts);
-        Assert.Equal(14, fast.MaximumPendingWords);
+        Assert.Equal(12, fast.MaximumPendingWords);
+        Assert.Equal(3, balanced.MaximumPendingParts);
+        Assert.Equal(12, balanced.MaximumPendingWords);
         Assert.All(new[] { fast, balanced, quality }, profile =>
             Assert.Equal(1, profile.StartupPreparedPhrases));
     }
@@ -155,9 +157,11 @@ public sealed class VideoDubbingPolicyTests
 
         // Русская озвучка длиннее исходной речи: без выталкивания старых реплик
         // очередь дорастает до минут и продолжает говорить после остановки.
-        Assert.InRange(fast.MaximumBufferedAudioSeconds, 8, 12);
-        Assert.InRange(balanced.MaximumBufferedAudioSeconds, 12, 18);
-        Assert.InRange(quality.MaximumBufferedAudioSeconds, 18, 26);
+        // Лимит запаса равен отставанию в стационарном режиме, поэтому он
+        // держится минимально комфортным, а не «сколько влезет».
+        Assert.InRange(fast.MaximumBufferedAudioSeconds, 5, 7);
+        Assert.InRange(balanced.MaximumBufferedAudioSeconds, 7, 9);
+        Assert.InRange(quality.MaximumBufferedAudioSeconds, 10, 14);
         Assert.True(VideoDubbingPolicy.ShouldShedTranslation(
             balanced.MaximumBufferedAudioSeconds, balanced));
         Assert.False(VideoDubbingPolicy.ShouldShedTranslation(
