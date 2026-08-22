@@ -716,8 +716,9 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     }
 
     /// <summary>
-    /// Готовит видео к ускоренному прогону анализа: перематывает в начало и
-    /// ставит на паузу, пока прогреваются модели.
+    /// Готовит видео к ускоренному прогону анализа: ставит на паузу и
+    /// запоминает исходную скорость. Позиция не трогается — анализ всегда
+    /// начинается с текущего места просмотра.
     /// </summary>
     public async Task PrepareVideoForAnalysisAsync()
     {
@@ -727,26 +728,71 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
               .sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
               const video=videos[0];if(!video)return;
               if(!window.__nexusAnalysisRate)window.__nexusAnalysisRate={video,rate:video.playbackRate};
-              video.pause();video.currentTime=0})()
+              video.pause()})()
             """);
     }
 
     /// <summary>
-    /// Возвращает видео к началу с обычной скоростью — старт показа с
-    /// готовым синхронным дубляжом.
+    /// Компактная плашка поверх видео на время предварительной
+    /// буферизации: небольшой авто-размер вокруг текста, не закрывает кадр.
     /// </summary>
-    public async Task RestartVideoForDubbedPlaybackAsync()
+    public async Task SetAnalysisOverlayAsync(bool visible, string text)
     {
         if (Core is null) return;
-        await Core.ExecuteScriptAsync("""
+        await Core.ExecuteScriptAsync($$"""
+            ((visible,text)=>{
+              let panel=document.getElementById('nexus-analysis-overlay');
+              if(!visible){if(panel)panel.remove();return}
+              const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0)
+                .sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*b.clientHeight));
+              const video=videos[0];if(!video)return;
+              if(!panel){panel=document.createElement('div');panel.id='nexus-analysis-overlay';panel.dataset.nexusTranslationUi='true';
+                panel.style.cssText='position:fixed;z-index:2147483646;background:#050a0ff2;border:1px solid #55d8cc66;border-radius:10px;color:#eafffc;font:600 12.5px Segoe UI,sans-serif;line-height:1.5;white-space:pre-line;padding:10px 16px;pointer-events:none;text-align:left;box-shadow:0 6px 20px rgba(0,0,0,.35);backdrop-filter:blur(6px)';
+                document.documentElement.append(panel)}
+              panel.textContent=text;
+              const r=video.getBoundingClientRect();
+              panel.style.left=Math.max(8,r.left+16)+'px';
+              panel.style.top=Math.max(8,r.top+16)+'px';
+              panel.style.maxWidth=Math.max(160,Math.min(420,r.width-32))+'px'})(
+            {{(visible ? "true" : "false")}},{{JsonSerializer.Serialize(text)}})
+            """);
+    }
+
+    /// <summary>Перемещает видео на позицию (для прогона анализа от границы).</summary>
+    public async Task SeekVideoAsync(double positionSeconds)
+    {
+        if (Core is null) return;
+        await Core.ExecuteScriptAsync($$"""
+            (()=>{const saved=window.__nexusAnalysisRate;
+              const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0)
+              .sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
+              const video=saved?.video?.isConnected?saved.video:(videos[0]||null);if(!video)return;
+              video.currentTime={{positionSeconds.ToString(CultureInfo.InvariantCulture)}}})()
+            """);
+    }
+
+    /// <summary>
+    /// Возвращает видео к показу с обычной скоростью с указанной позиции.
+    /// </summary>
+    public async Task ResumeVideoFromAsync(double positionSeconds)
+    {
+        if (Core is null) return;
+        await Core.ExecuteScriptAsync($$"""
             (()=>{const saved=window.__nexusAnalysisRate;window.__nexusAnalysisRate=null;
               const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0)
               .sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
               const video=saved?.video?.isConnected?saved.video:(videos[0]||null);if(!video)return;
               video.playbackRate=saved?saved.rate:1;
-              video.currentTime=0;video.play().catch(()=>{})})()
+              video.currentTime={{positionSeconds.ToString(CultureInfo.InvariantCulture)}};video.play().catch(()=>{})})()
             """);
     }
+
+    /// <summary>
+    /// Возвращает видео к началу с обычной скоростью — устаревший путь
+    /// полного предперевода; показ теперь стартует с текущей позиции.
+    /// </summary>
+    public async Task RestartVideoForDubbedPlaybackAsync() =>
+        await ResumeVideoFromAsync(0);
 
     public async Task<double?> GetActiveVideoDurationAsync()
     {
@@ -825,7 +871,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 for(const chunk of chunks){current.set(chunk,offset);offset+=chunk.length}
                 if(!current.length) return {Success:false,Error:'Браузер не получил аудиосэмплы.',WavBase64:''};
                 let energy=0;for(let i=0;i<current.length;i+=32)energy+=current[i]*current[i];
-                if(Math.sqrt(energy/Math.max(1,current.length/32))<0.0001){window.__nexusLiveAudioOverlap=null;return {Success:true,Error:'silence',WavBase64:'',VideoPosition:positionBefore}}
+                if(Math.sqrt(energy/Math.max(1,current.length/32))<0.0001){window.__nexusLiveAudioOverlap=null;return {Success:true,Error:'silence',WavBase64:'',VideoPosition:positionBefore,VideoRate:video.playbackRate||1}}
                 const overlapSamples=Math.min(current.length,Math.floor(state.sampleRate*__OVERLAP__/1000));
                 const previous=window.__nexusLiveAudioOverlap instanceof Float32Array?window.__nexusLiveAudioOverlap:null;
                 window.__nexusLiveAudioOverlap=overlapSamples>0?current.slice(current.length-overlapSamples):null;
@@ -836,7 +882,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 const bytes=new Uint8Array(44+pcm.length*2),view=new DataView(bytes.buffer),write=(p,s)=>{for(let i=0;i<s.length;i++)view.setUint8(p+i,s.charCodeAt(i))};
                 write(0,'RIFF');view.setUint32(4,36+pcm.length*2,true);write(8,'WAVE');write(12,'fmt ');view.setUint32(16,16,true);view.setUint16(20,1,true);view.setUint16(22,1,true);view.setUint32(24,outRate,true);view.setUint32(28,outRate*2,true);view.setUint16(32,2,true);view.setUint16(34,16,true);write(36,'data');view.setUint32(40,pcm.length*2,true);for(let i=0;i<pcm.length;i++)view.setInt16(44+i*2,pcm[i],true);
                 let binary='';for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));
-                return {Success:true,Error:'',WavBase64:btoa(binary),VideoPosition:positionBefore};
+                return {Success:true,Error:'',WavBase64:btoa(binary),VideoPosition:positionBefore,VideoRate:video.playbackRate||1};
               } catch(error) { return {Success:false,Error:error?.message||String(error),WavBase64:''}; }
             })();
             """.Replace("__MILLISECONDS__", Math.Clamp(milliseconds, 1_200, 4_000).ToString(),

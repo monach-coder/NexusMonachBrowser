@@ -562,11 +562,11 @@ public partial class LocalAiDockControl : UserControl
     public void StopVideoTranslation() => Interlocked.Exchange(ref _videoCancellation, null)?.Cancel();
 
     /// <summary>
-    /// Двухпроходный дубляж как у профессиональной закадровой студии: сначала
-    /// фильм прогоняется на адаптивно ускоренной скорости и целиком
-    /// переводится целыми предложениями, затем видео возвращается в начало и
-    /// идёт с мгновенным синхронным дубляжом по таймкоду — без задержки
-    /// перевода и без потерь смысла от спешки.
+    /// Синхронный перевод видео одним нажатием: видео ставится на паузу с
+    /// панелью «Предварительная буферизация и перевод…», накопленный кусок
+    /// переводится целыми предложениями, затем показ идёт с идеальным
+    /// дубляжом по таймкоду, а когда воспроизведение подбирается к границе
+    /// переведённого, короткая догрузка расширяет окно — и так до конца.
     /// </summary>
     public async Task PrecomputeVideoDubbingAsync(BrowserTab tab)
     {
@@ -578,25 +578,25 @@ public partial class LocalAiDockControl : UserControl
         if (!AiModelCatalog.TranslationReady)
         {
             GlassDialogWindow.Show(AiModelCatalog.MissingTranslationRuntimeMessage,
-                "Предперевод фильма", MessageBoxButton.OK, MessageBoxImage.Information);
+                "Синхронный перевод видео", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
         if (!AiModelCatalog.SpeechReady)
         {
             GlassDialogWindow.Show(AiModelCatalog.MissingSpeechRuntimeMessage,
-                "Предперевод фильма", MessageBoxButton.OK, MessageBoxImage.Information);
+                "Синхронный перевод видео", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
         if (!AiModelCatalog.NeuralVoiceReady)
         {
             GlassDialogWindow.Show(AiModelCatalog.MissingNeuralVoiceMessage,
-                "Предперевод фильма", MessageBoxButton.OK, MessageBoxImage.Information);
+                "Синхронный перевод видео", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
         StopVideoTranslation();
         var session = new CancellationTokenSource();
         _videoCancellation = session;
-        var finalStatus = "Предперевод остановлен.";
+        var finalStatus = "Синхронный перевод остановлен.";
         var allWavs = new List<string>();
         PrecomputedDubbingPlayer? player = null;
         try
@@ -608,39 +608,111 @@ public partial class LocalAiDockControl : UserControl
             await tab.BeginLiveAudioTranslationAsync();
             await tab.PrepareVideoForAnalysisAsync();
             await tab.EnableVideoDubbingMixAsync();
-            await tab.UpdateLiveAudioTranslationStatusAsync(
-                "Прогреваю локальные модели…");
-            await Task.WhenAll(
+            await tab.SetAnalysisOverlayAsync(true, "Предварительная буферизация · прогреваю локальные модели…");
+            var warmupStarted = DateTimeOffset.UtcNow;
+            var warmup = Task.WhenAll(
                 WhisperService.WarmUpAsync(WhisperLane.Dubbing, session.Token),
                 TranslationService.WarmUpForLiveVideoAsync(
                     includeAllSourceRoutes: false, cancellationToken: session.Token),
                 VideoDubbingVoiceService.WarmUpAsync(session.Token));
-            CrashReportService.AddBreadcrumb("video-translation", "precompute-analysis-started");
+            while (!warmup.IsCompleted)
+            {
+                var elapsed = (int)(DateTimeOffset.UtcNow - warmupStarted).TotalSeconds;
+                await tab.SetAnalysisOverlayAsync(true,
+                    $"Предварительная буферизация\nПрогреваю локальные модели · {elapsed} с…");
+                try { await Task.Delay(2000, session.Token); }
+                catch (OperationCanceledException) { break; }
+            }
+            await warmup;
+            CrashReportService.AddBreadcrumb("video-translation", "rolling-dubbing-started");
 
-            var phrases = await AnalyzeVideoAsync(tab, profile, duration, allWavs, session.Token);
-            if (phrases.Count == 0)
+            // Комфортный бюджет первой паузы — полторы минуты ожидания; окно
+            // переведённого подбирается под фактическую скорость конвейера.
+            var analysis = new RollingAnalysis(tab, profile, duration, allWavs);
+            player = new PrecomputedDubbingPlayer();
+            var frontier = await analysis.AnalyzeWindowAsync(
+                await CurrentPositionAsync(tab, session.Token),
+                TimeSpan.FromSeconds(90), session.Token, title: "Предварительная буферизация и перевод");
+            if (analysis.Phrases.Count == 0 && frontier - (await CurrentPositionAsync(tab, session.Token)) < 5)
                 throw new InvalidOperationException(
                     "Речь в видео не распознана. Проверьте, что звук включён.");
+            var phrases = analysis.Phrases;
             phrases.Sort((left, right) => left.StartSeconds.CompareTo(right.StartSeconds));
 
-            await tab.RestartVideoForDubbedPlaybackAsync();
+            await tab.SetAnalysisOverlayAsync(false, string.Empty);
+            var playbackPosition = await CurrentPositionAsync(tab, session.Token);
+            await tab.ResumeVideoFromAsync(playbackPosition);
             await tab.UpdateLiveAudioTranslationStatusAsync(
                 $"Синхронный дубляж · {phrases.Count} реплик · приятного просмотра");
-            CrashReportService.AddBreadcrumb("video-translation", "precompute-playback-started");
-            player = new PrecomputedDubbingPlayer();
-            await PlayPrecomputedAsync(tab, phrases, player, session.Token);
+
+            // Показ с догрузкой: когда воспроизведение подходит к границе
+            // переведённого, короткая пауза расширяет окно и видео продолжает
+            // путь без единой потерянной реплики.
+            var next = 0;
+            var playerPaused = false;
+            while (!session.IsCancellationRequested)
+            {
+                if (await tab.ShouldStopLiveAudioTranslationAsync()) break;
+                var state = await tab.GetVideoStateAsync();
+                if (state is null || state.Ended) break;
+                if (state.Paused)
+                {
+                    if (!playerPaused)
+                    {
+                        player.Pause();
+                        playerPaused = true;
+                        await tab.UpdateLiveAudioTranslationStatusAsync("Пауза");
+                    }
+                    await Task.Delay(250, session.Token);
+                    continue;
+                }
+                if (playerPaused)
+                {
+                    player.Resume();
+                    playerPaused = false;
+                }
+                while (next < phrases.Count && phrases[next].EndSeconds < state.Position - 0.5)
+                    next++;
+                if (next < phrases.Count &&
+                    phrases[next].StartSeconds <= state.Position + 0.12 &&
+                    !player.IsPlaying)
+                {
+                    player.Enqueue(phrases[next].WavPaths);
+                    next++;
+                }
+                const double safetySeconds = 10;
+                if (state.Position > frontier - safetySeconds && frontier < duration - 1)
+                {
+                    player.Pause();
+                    playerPaused = true;
+                    await tab.PrepareVideoForAnalysisAsync();
+                    var extendFrom = Math.Max(frontier, state.Position);
+                    frontier = await analysis.AnalyzeWindowAsync(extendFrom,
+                        TimeSpan.FromSeconds(75), session.Token, title: "Догружаю следующую часть");
+                    phrases.Sort((left, right) => left.StartSeconds.CompareTo(right.StartSeconds));
+                    await tab.SetAnalysisOverlayAsync(false, string.Empty);
+                    await tab.ResumeVideoFromAsync(state.Position);
+                    player.Resume();
+                    playerPaused = false;
+                    await tab.UpdateLiveAudioTranslationStatusAsync(
+                        $"Синхронный дубляж · {phrases.Count} реплик");
+                    continue;
+                }
+                await Task.Delay(120, session.Token);
+            }
             finalStatus = "Синхронный дубляж завершён.";
         }
-        catch (OperationCanceledException) { finalStatus = "Предперевод остановлен."; }
+        catch (OperationCanceledException) { finalStatus = "Синхронный перевод остановлен."; }
         catch (Exception ex)
         {
             if (ReferenceEquals(Volatile.Read(ref _videoCancellation), session))
-                finalStatus = "Предперевод прерван: " +
+                finalStatus = "Синхронный перевод прерван: " +
                               ex.Message[..Math.Min(ex.Message.Length, 160)];
-            CrashReportService.RecordNonFatal("video-translation", "precompute", ex);
+            CrashReportService.RecordNonFatal("video-translation", "rolling-dubbing", ex);
         }
         finally
         {
+            try { await tab.SetAnalysisOverlayAsync(false, string.Empty); } catch { }
             player?.Dispose();
             foreach (var wav in allWavs)
                 try { File.Delete(wav); } catch { }
@@ -651,143 +723,164 @@ public partial class LocalAiDockControl : UserControl
         }
     }
 
-    private async Task<List<PrecomputedDubbingPhrase>> AnalyzeVideoAsync(
-        BrowserTab tab, VideoDubbingModeProfile profile, double durationSeconds,
-        List<string> allWavs, CancellationToken cancellationToken)
+    private static async Task<double> CurrentPositionAsync(BrowserTab tab,
+        CancellationToken cancellationToken)
     {
-        var phrases = new List<PrecomputedDubbingPhrase>();
-        var context = new VideoSpeechTranslationContext(profile);
-        var analysisRate = 1.0;
-        var throughputEma = 1.0;
-        var lastPosition = -1.0;
-        var consecutiveSilence = 0;
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            var state = await tab.GetVideoStateAsync();
-            if (state is null) break;
-            if (state.Ended) break;
-            if (await tab.ShouldStopLiveAudioTranslationAsync())
-                throw new OperationCanceledException(cancellationToken);
-            if (state.Paused)
-            {
-                await tab.UpdateLiveAudioTranslationStatusAsync(
-                    "Пауза · предперевод продолжится вместе с видео");
-                await Task.Delay(300, cancellationToken);
-                continue;
-            }
-            // Перемотка назад перезапускает накопление фразы: старые реплики
-            // остаются, playback-планировщик отсортирует их по таймкоду.
-            if (state.Position < lastPosition - 1.5)
-                context = new VideoSpeechTranslationContext(profile);
-            lastPosition = state.Position;
-
-            var processingStopwatch = Stopwatch.StartNew();
-            var captured = await tab.CaptureActiveVideoAudioAsync(
-                profile.SegmentMilliseconds, cancellationToken,
-                profile.SegmentOverlapMilliseconds);
-            if (captured.WaitingForPlayback) continue;
-            if (!captured.Success || string.IsNullOrWhiteSpace(captured.WavBase64))
-            {
-                if (++consecutiveSilence >= 6 && analysisRate > 4)
-                {
-                    // Некоторые плееры глушат звук на большой скорости — сбрасываем.
-                    analysisRate = 4;
-                    await tab.SetVideoAnalysisRateAsync(analysisRate);
-                    consecutiveSilence = 0;
-                }
-                continue;
-            }
-            consecutiveSilence = 0;
-            var segment = new LiveAudioSegment(
-                Convert.FromBase64String(captured.WavBase64), DateTimeOffset.UtcNow,
-                TimeSpan.FromMilliseconds(profile.SegmentMilliseconds));
-            VideoSpeechTranslationText? translated = null;
-            try
-            {
-                translated = await context.TranslateAsync(segment, cancellationToken,
-                    captured.VideoPosition);
-            }
-            catch (OperationCanceledException) { throw; }
-            catch (Exception ex)
-            {
-                CrashReportService.RecordNonFatal("video-translation",
-                    "precompute-translate", ex);
-            }
-            if (translated is not null && !double.IsNaN(translated.VideoStartedAt))
-            {
-                var wavs = new List<string>();
-                foreach (var chunk in VideoDubbingPolicy.SplitTtsText(
-                             translated.RussianText, profile))
-                {
-                    var speech = await VideoDubbingVoiceService.PrepareAsync(chunk, 0,
-                        cancellationToken);
-                    wavs.Add(speech.Path);
-                    allWavs.Add(speech.Path);
-                }
-                if (wavs.Count > 0)
-                    phrases.Add(new PrecomputedDubbingPhrase(
-                        translated.VideoStartedAt, translated.VideoEndedAt, wavs,
-                        translated.RussianText));
-            }
-
-            processingStopwatch.Stop();
-            var audioSeconds = profile.SegmentMilliseconds / 1000.0;
-            var instantThroughput = processingStopwatch.ElapsedMilliseconds > 0
-                ? audioSeconds / (processingStopwatch.ElapsedMilliseconds / 1000.0)
-                : 2.0;
-            throughputEma = throughputEma * 0.7 + instantThroughput * 0.3;
-            var targetRate = Math.Clamp(throughputEma * 0.85, 1,
-                VideoDubbingPolicy.MaximumAnalysisRate);
-            if (Math.Abs(targetRate - analysisRate) > 0.4)
-            {
-                analysisRate = targetRate;
-                await tab.SetVideoAnalysisRateAsync(analysisRate);
-            }
-            var progress = Math.Clamp(state.Position / durationSeconds, 0, 1);
-            await tab.UpdateLiveAudioTranslationStatusAsync(
-                $"Предперевод {(int)(progress * 100)}% · скорость ×{analysisRate:F1} · реплик: {phrases.Count}");
-        }
-        return phrases;
+        var state = await tab.GetVideoStateAsync();
+        if (state is not null) return state.Position;
+        cancellationToken.ThrowIfCancellationRequested();
+        return 0;
     }
 
-    private static async Task PlayPrecomputedAsync(
-        BrowserTab tab, IReadOnlyList<PrecomputedDubbingPhrase> phrases,
-        PrecomputedDubbingPlayer player, CancellationToken cancellationToken)
+    /// <summary>
+    /// Сквозной анализатор: ведёт общий список реплик, ускоренно прогоняет
+    /// видео от границы вперёд на бюджет времени и возвращает новую границу
+    /// переведённого материала.
+    /// </summary>
+    private sealed class RollingAnalysis
     {
-        var next = 0;
-        var paused = false;
-        while (!cancellationToken.IsCancellationRequested)
+        private readonly BrowserTab _tab;
+        private readonly VideoDubbingModeProfile _profile;
+        private readonly double _duration;
+        private readonly List<string> _allWavs;
+        private VideoSpeechTranslationContext _context;
+        private double _throughputEma = 1.5;
+        private double _analysisRate = 4;
+
+        public RollingAnalysis(BrowserTab tab, VideoDubbingModeProfile profile,
+            double duration, List<string> allWavs)
         {
-            var state = await tab.GetVideoStateAsync();
-            if (state is null || state.Ended) break;
-            if (await tab.ShouldStopLiveAudioTranslationAsync()) break;
-            if (state.Paused)
+            _tab = tab;
+            _profile = profile;
+            _duration = duration;
+            _allWavs = allWavs;
+            _context = new VideoSpeechTranslationContext(profile);
+        }
+
+        public List<PrecomputedDubbingPhrase> Phrases { get; } = [];
+
+        public async Task<double> AnalyzeWindowAsync(double fromSeconds,
+            TimeSpan wallBudget, CancellationToken cancellationToken, string title)
+        {
+            var deadline = DateTimeOffset.UtcNow + wallBudget;
+            await _tab.SeekVideoAsync(fromSeconds);
+            await _tab.SetVideoAnalysisRateAsync(_analysisRate);
+            var lastPosition = fromSeconds;
+            var consecutiveSilence = 0;
+            var windowAudioSeconds = 0.0;
+
+            async Task ReportAsync(string note)
             {
-                if (!paused)
+                var progress = Math.Clamp(lastPosition / _duration, 0, 1);
+                await _tab.SetAnalysisOverlayAsync(true,
+                    $"{title}\n{(int)(progress * 100)}% · скорость ×{_analysisRate:F1} · реплик: {Phrases.Count}" +
+                    (note.Length == 0 ? string.Empty : $"\n{note}"));
+            }
+
+            while (!cancellationToken.IsCancellationRequested &&
+                   DateTimeOffset.UtcNow < deadline)
+            {
+                var state = await _tab.GetVideoStateAsync();
+                if (state is null || state.Ended) break;
+                if (state.Paused)
                 {
-                    player.Pause();
-                    paused = true;
-                    await tab.UpdateLiveAudioTranslationStatusAsync("Пауза");
+                    await ReportAsync("Жду, пока плеер продолжит показ…");
+                    await Task.Delay(200, cancellationToken);
+                    continue;
                 }
-                await Task.Delay(250, cancellationToken);
-                continue;
+                if (state.Position < lastPosition - 1.5)
+                    _context = new VideoSpeechTranslationContext(_profile);
+                lastPosition = state.Position;
+
+                var processingStopwatch = Stopwatch.StartNew();
+                var captured = await _tab.CaptureActiveVideoAudioAsync(
+                    _profile.SegmentMilliseconds, cancellationToken,
+                    _profile.SegmentOverlapMilliseconds);
+                if (captured.WaitingForPlayback)
+                {
+                    await ReportAsync("Жду звук видео…");
+                    await Task.Delay(150, cancellationToken);
+                    continue;
+                }
+                // На скорости R сегмент покрывает в R раз больше медиа-времени.
+                var rate = captured.VideoRate > 0.05 ? captured.VideoRate : 1.0;
+                var mediaIncrement = (_profile.SegmentMilliseconds -
+                                      _profile.SegmentOverlapMilliseconds) / 1000.0 * rate;
+                if (!captured.Success || string.IsNullOrWhiteSpace(captured.WavBase64))
+                {
+                    // Тишина тоже двигает медиа-вперёд: без этого музыкальные
+                    // вступления «залипали» бы буферизацией до конца бюджета.
+                    if (captured.Success) windowAudioSeconds += mediaIncrement;
+                    else await Task.Delay(120, cancellationToken);
+                    if (++consecutiveSilence >= 6 && _analysisRate > 4)
+                    {
+                        // Некоторые плееры глушат звук на большой скорости — сбрасываем.
+                        _analysisRate = 4;
+                        await _tab.SetVideoAnalysisRateAsync(_analysisRate);
+                        consecutiveSilence = 0;
+                    }
+                    await ReportAsync("Тихий фрагмент — перематываю дальше");
+                    continue;
+                }
+                consecutiveSilence = 0;
+                // Речь сжата по темпу в rate раз — возвращаю исходный темп,
+                // иначе whisper не распознаёт ускоренную «скороговорку».
+                var wav = AudioRateRestore.RestoreTempo(
+                    Convert.FromBase64String(captured.WavBase64), rate);
+                var segment = new LiveAudioSegment(wav, DateTimeOffset.UtcNow,
+                    TimeSpan.FromSeconds(AudioRateRestore.PcmDurationSeconds(wav)));
+                // Начало WAV — это хвост-перекрытие предыдущего сегмента.
+                var anchor = captured.VideoPosition -
+                             _profile.SegmentOverlapMilliseconds / 1000.0 * rate;
+                VideoSpeechTranslationText? translated = null;
+                try
+                {
+                    translated = await _context.TranslateAsync(segment, cancellationToken,
+                        anchor);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    CrashReportService.RecordNonFatal("video-translation",
+                        "rolling-translate", ex);
+                }
+                if (translated is not null && !double.IsNaN(translated.VideoStartedAt))
+                {
+                    var wavs = new List<string>();
+                    foreach (var chunk in VideoDubbingPolicy.SplitTtsText(
+                                 translated.RussianText, _profile))
+                    {
+                        var speech = await VideoDubbingVoiceService.PrepareAsync(chunk, 0,
+                            cancellationToken);
+                        wavs.Add(speech.Path);
+                        _allWavs.Add(speech.Path);
+                    }
+                    if (wavs.Count > 0)
+                        Phrases.Add(new PrecomputedDubbingPhrase(
+                            translated.VideoStartedAt, translated.VideoEndedAt, wavs,
+                            translated.RussianText));
+                }
+                windowAudioSeconds += mediaIncrement;
+
+                processingStopwatch.Stop();
+                var instantThroughput = processingStopwatch.ElapsedMilliseconds > 0
+                    ? mediaIncrement / (processingStopwatch.ElapsedMilliseconds / 1000.0)
+                    : 2.0;
+                _throughputEma = _throughputEma * 0.7 + instantThroughput * 0.3;
+                var targetRate = Math.Clamp(_throughputEma * 0.85, 1,
+                    VideoDubbingPolicy.MaximumAnalysisRate);
+                if (Math.Abs(targetRate - _analysisRate) > 0.4)
+                {
+                    _analysisRate = targetRate;
+                    await _tab.SetVideoAnalysisRateAsync(_analysisRate);
+                }
+                await ReportAsync(string.Empty);
+                await _tab.UpdateLiveAudioTranslationStatusAsync(
+                    $"{title} · {(int)(Math.Clamp(state.Position / _duration, 0, 1) * 100)}%");
             }
-            if (paused)
-            {
-                player.Resume();
-                paused = false;
-            }
-            // Перемотка вперёд пропускает реплики, целиком оставшиеся позади.
-            while (next < phrases.Count && phrases[next].EndSeconds < state.Position - 0.5)
-                next++;
-            if (next < phrases.Count &&
-                phrases[next].StartSeconds <= state.Position + 0.12 &&
-                !player.IsPlaying)
-            {
-                player.Enqueue(phrases[next].WavPaths);
-                next++;
-            }
-            await Task.Delay(120, cancellationToken);
+            var end = await _tab.GetVideoStateAsync();
+            return Math.Max(fromSeconds + windowAudioSeconds,
+                end?.Position ?? fromSeconds);
         }
     }
 

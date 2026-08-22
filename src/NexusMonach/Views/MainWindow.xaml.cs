@@ -947,13 +947,6 @@ public partial class MainWindow : Window
         menu.IsOpen = true;
     }
 
-    private async void TranslateVideoAudio_Click(object sender, RoutedEventArgs e)
-    {
-        var tab = ActiveTab;
-        if (tab?.Core is null) return;
-        await RunWithHandsFreePausedAsync(() => LocalAiDock.TranslateVideoAudioAsync(tab));
-    }
-
     private async void PrecomputeDubbing_Click(object sender, RoutedEventArgs e)
     {
         var tab = ActiveTab;
@@ -1162,7 +1155,7 @@ public partial class MainWindow : Window
             }
             case VoiceCommandKind.TranslateVideo when activeTab?.Core is not null:
             {
-                await RunWithHandsFreePausedAsync(() => LocalAiDock.TranslateVideoAudioAsync(activeTab));
+                await RunWithHandsFreePausedAsync(() => LocalAiDock.PrecomputeVideoDubbingAsync(activeTab));
                 break;
             }
             case VoiceCommandKind.OpenSledopyt when activeTab?.Core is not null:
