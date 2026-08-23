@@ -128,17 +128,19 @@
                            Foreground="#D7C0FF" VerticalAlignment="Center" />
             </Border>
 
-            <Border x:Name="DownloadsIndicator" Grid.Column="3" Margin="6,8,8,5" Padding="9,0"
-                    MinWidth="64" CornerRadius="12" Background="{StaticResource PanelBrush}"
+            <!-- Кнопка загрузок: постоянно видна, показывает прогресс -->
+            <Border x:Name="DownloadsIndicator" Grid.Column="9" Margin="6,8,4,5" Padding="9,0"
+                    MinWidth="52" CornerRadius="12" Background="{StaticResource PanelBrush}"
                     BorderBrush="{StaticResource GoldBrush}" BorderThickness="1" Cursor="Hand"
-                    Visibility="Collapsed" ToolTip="Загрузки — наведите, чтобы открыть список"
+                    Visibility="Visible" ToolTip="Загрузки — наведите, чтобы открыть список"
                     MouseEnter="DownloadsIndicator_MouseEnter" MouseLeave="DownloadsIndicator_MouseLeave">
                 <StackPanel Orientation="Horizontal">
                     <TextBlock x:Name="DownloadsIndicatorGlyph" Text="&#xE896;"
                                FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"
                                Foreground="{StaticResource GoldBrush}" VerticalAlignment="Center" />
-                    <TextBlock x:Name="DownloadsIndicatorText" Text="0%" Margin="7,0,0,0"
-                               FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <TextBlock x:Name="DownloadsIndicatorText" Text="0" Margin="5,0,0,0"
+                               FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"
+                               Foreground="{StaticResource GoldBrush}" />
                 </StackPanel>
             </Border>
 
@@ -219,21 +221,8 @@
                     Foreground="{StaticResource AccentBrush}" ToolTip="SSH-терминал Linux"
                     Click="SshTerminal_Click" />
 
-            <!-- Кнопка микрофона убрана: голосовое управление заморожено.
-                 На её месте — индикатор загрузки Guardian (постоянно виден). -->
-            <Button x:Name="GuardianStatusButton" Grid.Column="9" Content="&#xE895;"
-                    Style="{StaticResource IconButton}" Foreground="{StaticResource GoldBrush}"
-                    ToolTip="Статус системы · Guardian" Click="ShowGuardianCenter_Click">
-                <Button.ContextMenu>
-                    <ContextMenu>
-                        <MenuItem Header="Guardian Center · рапорты" Click="ShowGuardianCenter_Click" />
-                        <MenuItem Header="Сетевой Дозор · активная защита" Click="ShowNetworkWatchdog_Click" />
-                        <Separator />
-                        <MenuItem x:Name="HandsFreeMenuItem" Header="Свободные руки · слово «Нексус»"
-                                  IsCheckable="True" IsChecked="False" Click="HandsFreeMenuItem_Click" />
-                    </ContextMenu>
-                </Button.ContextMenu>
-            </Button>
+            <!-- Кнопка Guardian и микрофон убраны из тулбара.
+                 Дозор и голосовое управление — через меню (шестерёнка). -->
 
             <Button x:Name="MenuButton" Grid.Column="10" Content="&#xE712;"
                     Style="{StaticResource IconButton}" ToolTip="Меню" Click="MenuButton_Click">
@@ -254,6 +243,9 @@
                         <MenuItem Header="SSH-терминал Linux" Click="SshTerminal_Click" />
                         <MenuItem Header="Сетевой Дозор · активная защита" Click="ShowNetworkWatchdog_Click" />
                         <MenuItem Header="Nexus Guardian · локальные рапорты" Click="ShowGuardianCenter_Click" />
+                        <Separator />
+                        <MenuItem x:Name="HandsFreeMenuItem" Header="Свободные руки · слово «Нексус»"
+                                  IsCheckable="True" IsChecked="False" Click="HandsFreeMenuItem_Click" />
                         <MenuItem Header="Настройки" Click="ShowSettings_Click" />
                         <Separator />
                         <MenuItem Header="О браузере" Click="About_Click" />

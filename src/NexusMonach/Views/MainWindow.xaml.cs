@@ -124,7 +124,8 @@ public partial class MainWindow : Window
     private void RefreshDownloadsIndicator()
     {
         var items = DownloadService.Items;
-        DownloadsIndicator.Visibility = items.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        // Индикатор загрузок виден всегда; при активных загрузках показывает счётчик.
+        DownloadsIndicator.Opacity = items.Count > 0 ? 1.0 : 0.6;
         if (items.Count == 0)
         {
             DownloadsPopup.IsOpen = false;
@@ -256,7 +257,7 @@ public partial class MainWindow : Window
             SecureRestartSessionService.Delete();
         if (!_isPrivate)
             HandleCoreUpdateSnapshot(WebView2RuntimeMonitor.Check());
-        GuardianStatusButton.IsEnabled = !_isPrivate;
+        // Guardian status button removed; hands-free stays in the main menu.
         // Свободные руки: выключены по умолчанию, пользователь решает сам.
         HandsFreeMenuItem.IsChecked = false;
         SettingsService.Current.VoiceHandsFreeEnabled = false;
