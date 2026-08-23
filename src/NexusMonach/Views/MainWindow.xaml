@@ -250,6 +250,7 @@
                         <MenuItem Header="Инструменты разработчика Chromium" InputGestureText="F12 / Ctrl+Shift+I"
                                   Click="ShowDeveloperTools_Click" />
                         <MenuItem Header="SSH-терминал Linux" Click="SshTerminal_Click" />
+                        <MenuItem Header="Сетевой Дозор · активная защита" Click="ShowNetworkWatchdog_Click" />
                         <MenuItem Header="Nexus Guardian · локальные рапорты" Click="ShowGuardianCenter_Click" />
                         <MenuItem Header="Настройки" Click="ShowSettings_Click" />
                         <Separator />

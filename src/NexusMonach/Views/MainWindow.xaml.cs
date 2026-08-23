@@ -56,6 +56,7 @@ public partial class MainWindow : Window
     private readonly SemaphoreSlim _voiceListenGate = new(1, 1);
     private CancellationTokenSource? _voiceListenCancellation;
     private CancellationTokenSource? _handsFreeCancellation;
+    private Services.Tor.NetworkWatchdog? _networkWatchdog;
     private static readonly JsonSerializerOptions WebJson = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -356,6 +357,24 @@ public partial class MainWindow : Window
                     "Ошибка вкладки", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             finally { TabLoadingOverlay.Visibility = Visibility.Collapsed; }
+        }
+        // «Режим След»: на каждую вкладку накладывается порт-страж —
+        // WebRTC блокируется, DNS идёт через Tor, mDNS/SSDP отключены.
+        // Сетевой Дозор запускается один раз и ловит сканеров.
+        if (SettingsService.Current.TrailModeEnabled)
+        {
+            if (_networkWatchdog is null)
+            {
+                _networkWatchdog = new Services.Tor.NetworkWatchdog();
+                _networkWatchdog.Start();
+            }
+            try
+            {
+                var (ok, message) = Services.Tor.TrailMode.ProtectTab(tab);
+                if (ok)
+                    System.Diagnostics.Debug.WriteLine("[Trail] Порт-страж применён к вкладке");
+            }
+            catch { }
         }
         SyncUi();
         LocalAiDock.UpdateTab(tab);
@@ -1231,6 +1250,17 @@ public partial class MainWindow : Window
     }
 
     private void ShowSettings_Click(object sender, RoutedEventArgs e) => ShowSettings();
+
+    private void ShowNetworkWatchdog_Click(object sender, RoutedEventArgs e)
+    {
+        // Если Дозор не запущен (Trail Mode выключен) — запускаем для просмотра.
+        if (_networkWatchdog is null)
+        {
+            _networkWatchdog = new Services.Tor.NetworkWatchdog();
+            _networkWatchdog.Start();
+        }
+        new NetworkWatchdogWindow(_networkWatchdog) { Owner = this }.Show();
+    }
 
     private void ShowGuardianCenter_Click(object sender, RoutedEventArgs e)
     {
