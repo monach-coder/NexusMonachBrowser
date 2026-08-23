@@ -295,6 +295,31 @@
                                            Foreground="{StaticResource MutedTextBrush}" />
                             </StackPanel>
                         </Border>
+                        <Border Style="{StaticResource SettingsCard}">
+                            <StackPanel>
+                                <TextBlock Text="Tor · Режим След" FontSize="15" FontWeight="SemiBold" />
+                                <TextBlock Text="Весь трафик браузера идёт через Tor-сеть. Если на машине активен VPN — Tor маршрутизируется через него, и цензор видит только VPN."
+                                           TextWrapping="Wrap" Margin="0,6,0,10" FontSize="11"
+                                           Foreground="{StaticResource MutedTextBrush}" />
+                                <CheckBox x:Name="TrailModeCheck" Margin="0,0,0,8"
+                                          Content="Включить Режим След (Tor + строгая приватность)" />
+                                <TextBlock x:Name="TorStatusLabel" Text="Tor не запущен"
+                                           FontSize="12" Foreground="{StaticResource MutedTextBrush}"
+                                           Margin="0,4,0,10" />
+                                <Button x:Name="TorStartButton" Content="Запустить Tor"
+                                        Style="{StaticResource NexusButton}" Padding="16,7"
+                                        HorizontalAlignment="Left" Margin="0,0,0,12"
+                                        Click="TorStartButton_Click" />
+                                <TextBlock Text="Свои мосты (по одному в строке)" Margin="0,8,0,5" />
+                                <TextBox x:Name="TorBridgesBox" Padding="9,7" MinHeight="80"
+                                         AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
+                                         TextWrapping="Wrap"
+                                         ToolTip="obfs4 IP:ПОРТ ОТПЕЧАТОК cert=... iat-mode=0" />
+                                <TextBlock Text="Публичные мосты блокируют за минуты. Приватный мост на своём VPS ($3/мес) живёт долго."
+                                           TextWrapping="Wrap" Margin="0,6,0,0" FontSize="11"
+                                           Foreground="{StaticResource MutedTextBrush}" />
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
                 </ScrollViewer>
 

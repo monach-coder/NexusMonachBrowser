@@ -151,6 +151,9 @@ public partial class SettingsWindow : Window
         ProxyHostBox.Text = settings.ProxyHost;
         ProxyPortBox.Text = settings.ProxyPort.ToString();
         ProxyBypassBox.Text = settings.ProxyBypassList;
+        TrailModeCheck.IsChecked = settings.TrailModeEnabled;
+        TorBridgesBox.Text = settings.TorCustomBridges;
+        UpdateTorStatus();
         HttpsFirstCheck.IsChecked = settings.HttpsFirstEnabled;
         PrivacyMonitorCheck.IsChecked = settings.ShowPrivacyMonitor;
         PreventWebRtcLeakCheck.IsChecked = settings.PreventWebRtcIpLeak;
@@ -167,7 +170,51 @@ public partial class SettingsWindow : Window
     private void SettingsTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
         if (e.NewValue is TreeViewItem { Tag: string section })
+        {
             ShowSection(section);
+            if (section == "Network") UpdateTorStatus();
+        }
+    }
+
+    private async void TorStartButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (TorStartButton is null) return;
+        TorStartButton.IsEnabled = false;
+        TorStartButton.Content = "Запускаю Tor…";
+        try
+        {
+            var settings = SettingsService.Current.Clone();
+            settings.TorCustomBridges = TorBridgesBox.Text.Trim();
+            var state = await Services.Tor.TorBridgeManager.RestartWithBridgesAsync(settings);
+            UpdateTorStatus();
+            if (state == Services.Tor.TorState.Failed)
+                GlassDialogWindow.Show(this,
+                    "Tor не смог запуститься. Проверьте, что tor.exe установлен (C:\\Tor) и мосты указаны верно.",
+                    "Tor", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("tor", "start-from-settings", ex);
+        }
+        finally
+        {
+            TorStartButton.IsEnabled = true;
+            TorStartButton.Content = "Запустить Tor";
+        }
+    }
+
+    private void UpdateTorStatus()
+    {
+        if (TorStatusLabel is null) return;
+        var (ready, status) = Services.Tor.TrailMode.CheckTorStatus();
+        var vpn = Services.Tor.VpnDetector.Detect();
+        var vpnText = vpn.VpnActive
+            ? $"\nVPN: {vpn.AdapterName} ({vpn.AdapterType})"
+            : "\nVPN: не найден";
+        var portsText = vpn.OpenPorts.Count > 0
+            ? $"\nОткрытые порты: {string.Join(", ", vpn.OpenPorts)}"
+            : "";
+        TorStatusLabel.Text = status + vpnText + portsText;
     }
 
     private void ShowSection(string section)
@@ -283,6 +330,14 @@ public partial class SettingsWindow : Window
         _settings.ProxyHost = ProxyHostBox.Text.Trim();
         _settings.ProxyPort = proxyPort;
         _settings.ProxyBypassList = ProxyBypassBox.Text.Trim();
+        _settings.TrailModeEnabled = TrailModeCheck.IsChecked == true;
+        _settings.TorCustomBridges = TorBridgesBox.Text.Trim();
+        if (_settings.TrailModeEnabled)
+        {
+            // «Режим След» применяет полную анонимную конфигурацию поверх
+            // обычных настроек: Tor SOCKS5, строгая приватность, всё выключено.
+            Services.Tor.TrailMode.Apply(_settings);
+        }
         _settings.HttpsFirstEnabled = HttpsFirstCheck.IsChecked == true;
         _settings.SecureDnsMode = SecureDnsModeCombo.SelectedItem is Choice<SecureDnsMode> dnsMode
             ? dnsMode.Value : SecureDnsMode.Strict;
