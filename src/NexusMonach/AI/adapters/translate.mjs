@@ -95,23 +95,19 @@ function translatedAt(value, index) {
 
 async function translateBatch(items) {
   if (!items.length) return [];
-  if (new Set(items.map(item => item?.source ?? 'auto')).size > 1)
-    throw new Error('Mixed source routes use the safe per-item path.');
-  const originals = items.map(item => String(item?.text ?? '').trim());
-  const allEnglish = items.every(item => item?.source === 'en');
-  const allKorean = items.every(item => item?.source === 'ko');
-  let english = originals;
-  if (!allEnglish) {
-    const firstTranslator = allKorean ? await getKoreanToEnglish() : await getMultilingualToEnglish();
-    const firstStage = await firstTranslator(originals, generationOptionsFor(originals));
-    english = originals.map((_, index) => translatedAt(firstStage, index));
-    if (english.some(text => !text)) throw new Error('The multilingual translation batch returned incomplete text.');
+  // Пакетная генерация transformers.js пере-генерирует хвосты на коротких
+  // репликах («можетно.......-последний.----»): лимиты токенов считались по
+  // самой длинной реплике пакета, и декодер продолжал чужой путь. Перевод
+  // по одному элементу даёт чистый текст и точные лимиты на каждую реплику.
+  const translated = [];
+  for (const item of items) {
+    try {
+      translated.push(await translateOne(item));
+    } catch (error) {
+      translated.push({ id: String(item?.id ?? ''), text: '', error: String(error?.message ?? error) });
+    }
   }
-  const secondStage = await (await getEnglishToRussian())(
-    english, generationOptionsFor(english));
-  const russian = originals.map((_, index) => translatedAt(secondStage, index));
-  if (russian.some(text => !text)) throw new Error('The Russian translation batch returned incomplete text.');
-  return items.map((item, index) => ({ id: String(item?.id ?? ''), text: russian[index] }));
+  return translated;
 }
 
 const input = readline.createInterface({ input: process.stdin, terminal: false });

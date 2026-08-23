@@ -954,6 +954,18 @@ public partial class MainWindow : Window
         await RunWithHandsFreePausedAsync(() => LocalAiDock.PrecomputeVideoDubbingAsync(tab));
     }
 
+    /// <summary>
+    /// Синхронный перевод видео: приоритет — предперевод по отдельной
+    /// аудиодорожке с точными таймкодами; если сайт дорожку не отдаёт,
+    /// сессия сама откатывается на живой закадровый перевод.
+    /// </summary>
+    private async void LiveDubbing_Click(object sender, RoutedEventArgs e)
+    {
+        var tab = ActiveTab;
+        if (tab?.Core is null) return;
+        await RunWithHandsFreePausedAsync(() => LocalAiDock.TranslateVideoDubbedAsync(tab));
+    }
+
     private async void ShoppingAgentTop_Click(object sender, RoutedEventArgs e)
     {
         var tab = ActiveTab;
@@ -1155,7 +1167,7 @@ public partial class MainWindow : Window
             }
             case VoiceCommandKind.TranslateVideo when activeTab?.Core is not null:
             {
-                await RunWithHandsFreePausedAsync(() => LocalAiDock.PrecomputeVideoDubbingAsync(activeTab));
+                await RunWithHandsFreePausedAsync(() => LocalAiDock.TranslateVideoDubbedAsync(activeTab));
                 break;
             }
             case VoiceCommandKind.OpenSledopyt when activeTab?.Core is not null:

@@ -69,6 +69,8 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <StackPanel>
@@ -131,7 +133,19 @@
             </RadioButton>
         </Grid>
 
-        <Button Grid.Row="2" Content="Продолжить" HorizontalAlignment="Right"
+        <StackPanel Grid.Row="2" Margin="0,16,0,0">
+            <TextBlock Text="Голос ассистента" FontSize="16" FontWeight="SemiBold" />
+            <TextBlock Text="Выберите голос для озвучки перевода и ответов."
+                       Margin="0,4,0,8" Foreground="{StaticResource MutedTextBrush}" FontSize="12" />
+            <StackPanel Orientation="Horizontal">
+                <RadioButton x:Name="VoiceKseniyaChoice" GroupName="Voice" Content="Ксения · женский (рекомендуется)"
+                             IsChecked="True" Margin="0,0,24,0" FontSize="13" />
+                <RadioButton x:Name="VoiceEugeneChoice" GroupName="Voice" Content="Евгений · мужской"
+                             FontSize="13" />
+            </StackPanel>
+        </StackPanel>
+
+        <Button Grid.Row="4" Content="Продолжить" HorizontalAlignment="Right" Margin="0,16,0,0"
                 Style="{StaticResource ContinueButton}" Click="Continue_Click" />
     </Grid>
 </Window>

@@ -1,0 +1,30 @@
+# Единые правила переводов строк: Windows-проект — CRLF для исходников,
+# LF для веб-файлов. Устраняет шумные предупреждения при каждом коммите.
+* text=auto
+
+# Исходники Windows — CRLF
+*.cs text eol=crlf
+*.xaml text eol=crlf
+*.ps1 text eol=crlf
+*.csproj text eol=crlf
+*.sln text eol=crlf
+
+# Веб- и конфиги — LF
+*.mjs text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Бинарные — не трогать
+*.exe binary
+*.dll binary
+*.pt binary
+*.onnx binary
+*.png binary
+*.ico binary
+*.gz binary
+*.zip binary
+*.7z binary

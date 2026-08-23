@@ -27,6 +27,8 @@ public static class AiModelCatalog
     public static string NodeRoot => Path.Combine(Root, "node");
     public static string AdapterRoot => Path.Combine(Root, "adapters");
     public static string DictionariesRoot => Path.Combine(Root, "dictionaries");
+    public static string FfmpegRoot => Path.Combine(Root, "ffmpeg");
+    public static string? FfmpegExecutable => FindFile(FfmpegRoot, "ffmpeg.exe");
     public static string VoiceRoot => Path.Combine(Root, "voice");
     public static string VoskVoiceModelRoot => Path.Combine(Root, "models", "voice", "vosk-tts-ru-multi");
     public static string SileroVoiceModelRoot => Path.Combine(Root, "models", "voice", "silero-v5-ru");

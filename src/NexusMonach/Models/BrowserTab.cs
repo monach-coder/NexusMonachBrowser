@@ -746,13 +746,16 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 const cap=window.__nexusLiveAudioCapture;
                 const duck=window.__nexusDuckOriginal;
                 const veiled=window.__nexusBufferingVeil;
+                const loopback=window.__nexusLoopbackCapture===true;
                 const video=cap&&cap.video?cap.video:(veiled?veiled.video:null);
                 if(!video)return;
                 // Громкость элемента неприкосновенна: любое её изменение режет
                 // сигнал тапа до нуля. Всё управление слышимостью — только
-                // через узел speaker (или мьют, пока граф не построен).
-                if(cap&&cap.speaker&&cap.mode==='element'){try{cap.speaker.gain.value=veiled?0:(duck!=null?duck:1)}catch{}return}
-                if(veiled){try{video.muted=true}catch{}return}
+                // через узел speaker (или мьют, пока граф не построен). В
+                // режиме системного захвата звук остаётся слышимым — конвейер
+                // слушает выход страницы.
+                if(cap&&cap.speaker&&cap.mode==='element'){try{cap.speaker.gain.value=(veiled&&!loopback)?0:(duck!=null?(loopback?Math.max(duck,0.3):duck):1)}catch{}return}
+                if(veiled&&!loopback){try{video.muted=true}catch{}return}
               };
               let veil=window.__nexusBufferingVeil;
               if(!visible){
@@ -833,6 +836,114 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
             """);
     }
 
+    /// <summary>
+    /// Включает режим системного захвата: тишина вуали и приглушение не
+    /// должны глушить страницу, когда конвейер слушает её системный выход.
+    /// Подготовка становится слышимой — карточка предупреждает об этом.
+    /// </summary>
+    public async Task SetLoopbackCaptureModeAsync(bool enabled)
+    {
+        if (Core is null) return;
+        await Core.ExecuteScriptAsync(
+            $$"""(()=>{window.__nexusLoopbackCapture={{(enabled ? "true" : "false")}};if(window.__nexusApplyMix)window.__nexusApplyMix()})()""");
+    }
+
+    private string? _lastAudioTrackUrl;
+    private TaskCompletionSource<string>? _audioTrackUrlReady;
+
+    /// <summary>
+    /// Включает наблюдение за сетевыми запросами страницы: как только плеер
+    /// запросит очередной кусок отдельной аудиодорожки (YouTube грузит звук
+    /// независимо от видео), URL запоминается. Наблюдение ничего не
+    /// перехватывает и не меняет — плеер работает как раньше.
+    /// </summary>
+    public void EnableAudioTrackWatch()
+    {
+        var core = Core;
+        if (core is null) return;
+        try
+        {
+            _audioTrackUrlReady = new TaskCompletionSource<string>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            core.WebResourceRequested -= OnWebResourceRequested;
+            core.AddWebResourceRequestedFilter("*",
+                Microsoft.Web.WebView2.Core.CoreWebView2WebResourceContext.All);
+            core.WebResourceRequested += OnWebResourceRequested;
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("video-translation", "audio-watch", ex);
+        }
+    }
+
+    private void OnWebResourceRequested(object? sender,
+        Microsoft.Web.WebView2.Core.CoreWebView2WebResourceRequestedEventArgs args)
+    {
+        try
+        {
+            var url = args.Request?.Uri?.ToString();
+            if (string.IsNullOrEmpty(url) || !url.Contains("videoplayback", StringComparison.Ordinal))
+                return;
+            if (!Uri.UnescapeDataString(url).Contains("mime=audio", StringComparison.Ordinal))
+                return;
+            _lastAudioTrackUrl = url;
+            _audioTrackUrlReady?.TrySetResult(url);
+        }
+        catch { }
+    }
+
+    /// <summary>Отключает наблюдение за сетевыми запросами (конец сеанса).</summary>
+    public void DisableAudioTrackWatch()
+    {
+        var core = Core;
+        if (core is null) return;
+        try
+        {
+            core.WebResourceRequested -= OnWebResourceRequested;
+            core.RemoveWebResourceRequestedFilter("*",
+                Microsoft.Web.WebView2.Core.CoreWebView2WebResourceContext.All);
+        }
+        catch { }
+        _audioTrackUrlReady = null;
+    }
+
+    /// <summary>
+    /// URL отдельной аудиодорожки адаптивного потока. Сначала — уже
+    /// подсмотренный в сети (надёжно: performance-записи страницы вытесняются
+    /// из буфера тысячами других записей), затем — короткое ожидание нового
+    /// запроса плеера, и лишь потом — performance-записи.
+    /// </summary>
+    public async Task<(string? Url, string Referer)> GetVideoAudioTrackUrlAsync(
+        int waitForNetworkMs = 8_000)
+    {
+        if (Core is null || UrlService.IsInternal(CurrentUrl)) return (null, CurrentUrl);
+        if (!string.IsNullOrEmpty(_lastAudioTrackUrl))
+            return (_lastAudioTrackUrl, CurrentUrl);
+        if (_audioTrackUrlReady is not null && waitForNetworkMs > 0)
+        {
+            var ready = await Task.WhenAny(_audioTrackUrlReady.Task, Task.Delay(waitForNetworkMs));
+            if (ready == _audioTrackUrlReady.Task && !string.IsNullOrEmpty(_lastAudioTrackUrl))
+                return (_lastAudioTrackUrl, CurrentUrl);
+        }
+        try
+        {
+            var json = await Core.ExecuteScriptAsync("""
+                (()=>{try{
+                  const entries=performance.getEntriesByType('resource')
+                    .filter(e=>e.name&&e.name.indexOf('videoplayback')>=0&&decodeURIComponent(e.name).indexOf('mime=audio')>=0);
+                  entries.sort((a,b)=>b.transferSize-a.transferSize);
+                  const best=entries[0];
+                  return best?JSON.stringify({url:best.name,referrer:location.href}):null}catch{return null}})()
+                """);
+            var payload = JsonSerializer.Deserialize<AudioTrackProbe>(json ?? "null",
+                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            return (payload?.Url, payload?.Referrer ?? CurrentUrl);
+        }
+        catch { return (null, CurrentUrl); }
+    }
+
+    private sealed record AudioTrackProbe(string Url, string Referrer);
+
     /// <summary>Перемещает видео на позицию (для прогона анализа от границы).</summary>
     public async Task SeekVideoAsync(double positionSeconds)
     {
@@ -900,29 +1011,45 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                   .sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
                 const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];
                 if(!video) return {Success:false,Error:'Активное HTML5-видео не найдено.',WavBase64:''};
-                const dispose=state=>{if(!state)return;state.closed=true;try{state.processor.disconnect()}catch{}try{state.source.disconnect()}catch{}try{state.silent.disconnect()}catch{}try{state.speaker.disconnect()}catch{}try{state.tracks.forEach(t=>t.stop())}catch{}try{state.context.close()}catch{}};
+                const dispose=state=>{if(!state)return;state.closed=true;
+                  // Персистентный тап элемента переживает сеанс: контекст и
+                  // источник не закрываются, иначе повторный
+                  // createMediaElementSource на том же элементе невозможен и
+                  // все следующие сеансы упадут в мёртвый captureStream.
+                  try{state.processor.disconnect()}catch{}
+                  try{state.source.disconnect(state.processor)}catch{}
+                  try{state.silent.disconnect()}catch{}
+                  window.__nexusLiveAudioOverlap=null};
                 if(video.paused||video.ended){dispose(window.__nexusLiveAudioCapture);window.__nexusLiveAudioCapture=null;window.__nexusLiveAudioOverlap=null;return {Success:false,WaitingForPlayback:true,Error:'Видео на паузе.',WavBase64:''}}
                 let state=window.__nexusLiveAudioCapture;
                 if(!state||state.closed||state.video!==video){
                   dispose(state);
-                  const context=new AudioContext();
-                  let source=null,tracks=[],mode='element';
-                  // Основной путь — тап звука самого элемента: в WebView2
-                  // captureStream часто не отдаёт аудиодорожек вовсе, а
-                  // MediaElementSource читает звук независимо от громкости
-                  // страницы и позволяет управлять слышимостью отдельным
-                  // узлом усиления.
-                  try{source=context.createMediaElementSource(video)}
-                  catch{mode='stream'}
-                  if(!source){
-                    const capture=video.captureStream||video.mozCaptureStream;
-                    if(!capture){try{context.close()}catch{};return {Success:false,Error:'Этот проигрыватель не разрешает захват звукового потока.',WavBase64:''};}
-                    const stream=capture.call(video);tracks=stream.getAudioTracks();
-                    if(!tracks.length){tracks.forEach(t=>t.stop());try{context.close()}catch{};return {Success:false,Error:'В видеопотоке нет доступной аудиодорожки или она защищена DRM.',WavBase64:''}}
-                    source=context.createMediaStreamSource(stream);
+                  let tap=window.__nexusElementTap;
+                  if(!tap||tap.video!==video||!tap.context){
+                    if(tap){try{tap.context.close()}catch{}}
+                    const context=new AudioContext();
+                    let source=null,tracks=[],mode='element';
+                    // Основной путь — тап звука самого элемента: в WebView2
+                    // captureStream часто не отдаёт аудиодорожек вовсе, а
+                    // MediaElementSource читает звук независимо от громкости
+                    // страницы и позволяет управлять слышимостью отдельным
+                    // узлом усиления.
+                    try{source=context.createMediaElementSource(video)}
+                    catch{mode='stream'}
+                    if(!source){
+                      const capture=video.captureStream||video.mozCaptureStream;
+                      if(!capture){try{context.close()}catch{};return {Success:false,Error:'Этот проигрыватель не разрешает захват звукового потока.',WavBase64:''};}
+                      const stream=capture.call(video);tracks=stream.getAudioTracks();
+                      if(!tracks.length){tracks.forEach(t=>t.stop());try{context.close()}catch{};return {Success:false,Error:'В видеопотоке нет доступной аудиодорожки или она защищена DRM.',WavBase64:''}}
+                      source=context.createMediaStreamSource(stream);
+                    }
+                    const speaker=context.createGain();speaker.gain.value=1;
+                    source.connect(speaker);speaker.connect(context.destination);
+                    tap={video,context,source,speaker,tracks,mode};
+                    window.__nexusElementTap=tap;
                   }
+                  const context=tap.context,source=tap.source,speaker=tap.speaker,tracks=tap.tracks,mode=tap.mode;
                   const processor=context.createScriptProcessor(4096,1,1),silent=context.createGain();silent.gain.value=0;
-                  const speaker=context.createGain();speaker.gain.value=1;
                   if(mode==='element'){
                     // Приглушение и тишина вуали живут в графе (узел speaker),
                     // поэтому элементу возвращаю честные громкость и мьют —
@@ -948,7 +1075,6 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                       const ready=state.waiters;state.waiters=[];ready.forEach(resolve=>resolve());
                     }
                   };
-                  source.connect(speaker);speaker.connect(context.destination);
                   source.connect(processor);processor.connect(silent);silent.connect(context.destination);await context.resume();
                   window.__nexusLiveAudioCapture=state;
                   if(window.__nexusApplyMix)window.__nexusApplyMix();
@@ -968,8 +1094,15 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 }
                 if(video.paused||video.ended){dispose(state);window.__nexusLiveAudioCapture=null;window.__nexusLiveAudioOverlap=null;return {Success:false,WaitingForPlayback:true,Error:'Видео на паузе.',WavBase64:''}}
                 const chunks=state.chunks;state.chunks=[];const length=state.total;state.total=0;
-                const current=new Float32Array(length);let offset=0;
+                let current=new Float32Array(length);let offset=0;
                 for(const chunk of chunks){current.set(chunk,offset);offset+=chunk.length}
+                // Сток ограничен ~20 с: гигантский кусовин whisper гоняет по
+                // полминуте и подвешивает конвейер; хвост остаётся в буфере.
+                if(drain&&current.length>state.sampleRate*20){
+                  const limit=Math.floor(state.sampleRate*20);
+                  const rest=new Float32Array(current.subarray(limit));
+                  current=new Float32Array(current.subarray(0,limit));
+                  state.chunks=[rest];state.total=rest.length}
                 if(!current.length) return {Success:false,Error:'Браузер не получил аудиосэмплы.',WavBase64:''};
                 let energy=0;for(let i=0;i<current.length;i+=32)energy+=current[i]*current[i];
                 if(Math.sqrt(energy/Math.max(1,current.length/32))<0.0001){window.__nexusLiveAudioOverlap=null;return {Success:true,Error:'silence',WavBase64:'',VideoPosition:positionBefore,VideoRate:video.playbackRate||1}}
@@ -1033,7 +1166,12 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         var json = await Core.ExecuteScriptAsync("""
             (()=>{if(window.__nexusStopAudioTranslation)return true;
               const session=window.__nexusLiveVideoSession;if(!session)return false;
-              if(session.href!==location.href)return true;
+              // Плееры дописывают в адрес параметры вроде &t=90 при перемотках:
+              // сессия рвётся только при реальном уходе со страницы или смене
+              // видео, а не от смены параметров воспроизведения.
+              const key=href=>{try{const u=new URL(href);
+                return u.origin+u.pathname+(u.searchParams.get('v')?'|v='+u.searchParams.get('v'):'')}catch{return href}};
+              if(key(session.href)!==key(location.href))return true;
               const video=session.video;
               return Boolean(video&&(!video.isConnected||video.ended))})()
             """);
@@ -1057,10 +1195,11 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 const cap=window.__nexusLiveAudioCapture;
                 const duck=window.__nexusDuckOriginal;
                 const veiled=window.__nexusBufferingVeil;
+                const loopback=window.__nexusLoopbackCapture===true;
                 const target=cap&&cap.video?cap.video:(veiled?veiled.video:null);
                 if(!target)return;
-                if(cap&&cap.speaker&&cap.mode==='element'){try{cap.speaker.gain.value=veiled?0:(duck!=null?duck:1)}catch{}return}
-                if(veiled){try{target.muted=true}catch{}return}
+                if(cap&&cap.speaker&&cap.mode==='element'){try{cap.speaker.gain.value=(veiled&&!loopback)?0:(duck!=null?(loopback?Math.max(duck,0.3):duck):1)}catch{}return}
+                if(veiled&&!loopback){try{target.muted=true}catch{}return}
               };
               window.__nexusApplyMix();return true;})()
             """.Replace("__ORIGINAL_VOLUME__",
@@ -1075,7 +1214,12 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         if (Core is null) return;
         await Core.ExecuteScriptAsync("""
             ((status)=>{window.__nexusStopAudioTranslation=true;window.__nexusLiveAudioOverlap=null;window.__nexusLiveVideoSession=null;window.__nexusDuckOriginal=null;
-              const capture=window.__nexusLiveAudioCapture;window.__nexusLiveAudioCapture=null;if(capture){capture.closed=true;try{capture.processor.disconnect()}catch{}try{capture.source.disconnect()}catch{}try{capture.silent.disconnect()}catch{}try{capture.speaker.disconnect()}catch{}try{capture.tracks.forEach(t=>t.stop())}catch{}try{capture.context.close()}catch{}}
+              // Тап элемента (__nexusElementTap) намеренно переживает сеанс:
+              // контекст и источник нельзя закрывать, иначе повторный захват
+              // того же видео на этой вкладке станет невозможен.
+              const capture=window.__nexusLiveAudioCapture;window.__nexusLiveAudioCapture=null;
+              if(capture){capture.closed=true;try{capture.processor.disconnect()}catch{}try{capture.source.disconnect(capture.processor)}catch{}try{capture.silent.disconnect()}catch{}}
+              const tap=window.__nexusElementTap;if(tap&&tap.speaker)try{tap.speaker.gain.value=1}catch{}
               window.__nexusSpokenVideoState=null;
               const dubbing=window.__nexusDubbingVideoState;window.__nexusDubbingVideoState=null;if(dubbing?.video?.isConnected){dubbing.video.muted=dubbing.muted;dubbing.video.volume=dubbing.volume}
               const captions=window.__nexusCaptionSuppression;window.__nexusCaptionSuppression=null;if(captions){try{captions.observer.disconnect()}catch{}try{captions.entries.forEach(x=>{if(x.track)x.track.mode=x.mode})}catch{}try{captions.style.remove()}catch{}}

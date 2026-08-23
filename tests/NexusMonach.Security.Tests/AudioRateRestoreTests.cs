@@ -91,4 +91,30 @@ public class AudioRateRestoreTests
         var wav = BuildWav(new short[32000]);
         Assert.Equal(2.0, AudioRateRestore.PcmDurationSeconds(wav), 3);
     }
+
+    [Fact]
+    public void ExtraListChunk_DurationAndSliceUseRealDataOffset()
+    {
+        // ffmpeg пишет WAV с чанком LIST: данные начинаются позже 44-го
+        // байта, и нарезка «в лоб по 44» даёт мусор — ловится whisper'ом
+        // как «failed to read audio file».
+        var samples = new short[16000]; // 1 секунда
+        var core = BuildWav(samples);
+        var listPad = 26;
+        // Плоский макет: RIFF + WAVE + LIST(26) + fmt + data из канонического
+        // WAV — ровно как пишет ffmpeg.
+        var tail = core.Length - 12; // fmt и data без RIFF-заголовка
+        var rebuilt = new byte[12 + 8 + listPad + tail];
+        rebuilt[0] = (byte)'R'; rebuilt[1] = (byte)'I'; rebuilt[2] = (byte)'F'; rebuilt[3] = (byte)'F';
+        rebuilt[8] = (byte)'W'; rebuilt[9] = (byte)'A'; rebuilt[10] = (byte)'V'; rebuilt[11] = (byte)'E';
+        rebuilt[12] = (byte)'L'; rebuilt[13] = (byte)'I'; rebuilt[14] = (byte)'S'; rebuilt[15] = (byte)'T';
+        rebuilt[16] = (byte)listPad; rebuilt[17] = (byte)(listPad >> 8);
+        core.AsSpan(12).CopyTo(rebuilt.AsSpan(12 + 8 + listPad));
+
+        Assert.Equal(1.0, AudioRateRestore.PcmDurationSeconds(rebuilt), 3);
+        var slice = AudioRateRestore.SliceByTime(rebuilt, 0, 0.5);
+        Assert.Equal(0.5, AudioRateRestore.PcmDurationSeconds(slice), 3);
+        foreach (var sample in slice.Skip(44))
+            Assert.Equal(0, sample);
+    }
 }

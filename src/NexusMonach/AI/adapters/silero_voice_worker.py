@@ -15,7 +15,8 @@ from pathlib import Path
 
 
 SAMPLE_RATE = 48_000
-SPEAKER = "kseniya"
+DEFAULT_SPEAKER = "kseniya"
+VALID_SPEAKERS = {"kseniya", "eugene", "aidar", "baya", "xenia"}
 MAX_SPEECH_CHUNK = 150
 PAUSE_SECONDS = 0.11
 STRESS_MARKER = "\ue000"
@@ -113,19 +114,19 @@ def _split_speech_chunks(text: str) -> list[str]:
     return chunks
 
 
-def _synthesize(model, text: str, rate: int, style: str):
+def _synthesize(model, text: str, rate: int, style: str, speaker: str):
     """Synthesize through Silero's reliable plain-text path.
 
-    V5's optional SSML parser corrupts its parser state after some perfectly
-    valid multi-word Russian phrases. Live dubbing must not lose the current
-    and every following phrase merely to change tempo, so tempo is left at the
-    native Kseniya rate and Silero's accentor handles the complete plain text.
+    The speaker parameter selects the voice: «kseniya» (female, default),
+    «eugene» (male), «aidar» (male), «baya», «xenia».
     """
     normalized = _normalize_plain_text(text)
     if not normalized:
         raise ValueError("Speech text is empty after Silero normalization")
+    if speaker not in VALID_SPEAKERS:
+        speaker = DEFAULT_SPEAKER
     common = {
-        "speaker": SPEAKER,
+        "speaker": speaker,
         "sample_rate": SAMPLE_RATE,
         "put_accent": True,
         "put_yo": True,
@@ -178,8 +179,9 @@ def main() -> int:
             text = str(request["text"]).strip()
             if not text:
                 raise ValueError("Speech text is empty")
+            speaker = str(request.get("speaker", DEFAULT_SPEAKER))
             with contextlib.redirect_stdout(sys.stderr), torch.inference_mode():
-                audio, used_plain_text = _synthesize(model, text, rate, style)
+                audio, used_plain_text = _synthesize(model, text, rate, style, speaker)
             _write_wave(str(output_path), audio)
             reply = {
                 "id": request.get("id"),

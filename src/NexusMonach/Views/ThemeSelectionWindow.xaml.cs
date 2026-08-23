@@ -8,6 +8,7 @@ public partial class ThemeSelectionWindow : Window
 {
     public BrowserTheme ResultTheme { get; private set; }
     public BrowserThemeMode ResultMode { get; private set; }
+    public NeuralVoiceProfile ResultVoice { get; private set; }
 
     public ThemeSelectionWindow(BrowserTheme current, BrowserThemeMode mode)
     {
@@ -35,6 +36,9 @@ public partial class ThemeSelectionWindow : Window
         ResultMode = LightModeChoice.IsChecked == true
             ? BrowserThemeMode.Light
             : BrowserThemeMode.Dark;
+        ResultVoice = VoiceEugeneChoice.IsChecked == true
+            ? NeuralVoiceProfile.Eugene
+            : NeuralVoiceProfile.Natasha;
         ThemeService.Apply(ResultTheme, ResultMode);
         DialogResult = true;
     }

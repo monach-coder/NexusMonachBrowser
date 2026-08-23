@@ -206,7 +206,7 @@
                 <Button.ContextMenu>
                     <ContextMenu>
                         <MenuItem Header="Озвучить статью и перевести интерфейс" Click="TranslateTop_Click" />
-                        <MenuItem Header="Синхронный перевод видео · с предпереводом" Click="PrecomputeDubbing_Click" />
+                        <MenuItem Header="Синхронный перевод видео" Click="LiveDubbing_Click" />
                     </ContextMenu>
                 </Button.ContextMenu>
             </Button>

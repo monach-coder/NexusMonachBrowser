@@ -28,8 +28,11 @@ internal static partial class RussianStressDictionary
     }
 
     /// <summary>
-    /// Возвращает текст с маркерами «+» перед ударной гласной каждого знакомого
-    /// слова. Незнакомые слова, слова с «ё» и односложные остаются как есть.
+    /// Готовит русский текст к синтезу: восстанавливает «ё» и ставит маркер
+    /// ударения «^» перед ударной гласной знакомых слов. Воркер Silero
+    /// понимает именно «^» (проверено замером длительности озвучки), а
+    /// прежний маркер «+» молча игнорировался и местами зачитывался как
+    /// «плюс».
     /// </summary>
     public static string ApplyStress(string text)
     {
@@ -40,9 +43,8 @@ internal static partial class RussianStressDictionary
         {
             var word = match.Value;
             if (word.Length > MaximumWordLength) return word;
-            // Машинный перевод пишет по-русски без «ё», и слово теряет
-            // подсказку об ударении: сначала возвращаем «ё», и только слово
-            // без неё уходит в словарь ударений.
+            // Машинный перевод пишет по-русски без «ё»: сначала возвращаем
+            // букву целиком — она сама несёт ударение.
             if (!word.Contains('ё') && !word.Contains('Ё'))
             {
                 var restored = TryRestoreYo(_yoBlob, word);
@@ -85,6 +87,9 @@ internal static partial class RussianStressDictionary
         {
             if (vowels <= stressIndex && IsVowel(symbol))
             {
+                // Воркер Silero распознаёт «+» между кириллическими буквами
+                // как ручное ударение (защищено регэкспом до замены на
+                // « плюс »). Проверено: «+» работает, «^» вырезается.
                 if (vowels == stressIndex) builder.Append('+');
                 vowels++;
             }

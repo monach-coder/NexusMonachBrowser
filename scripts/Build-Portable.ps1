@@ -214,8 +214,13 @@ if (-not $SkipArchive) {
 }
 
 # Профиль возвращается после создания архива: пользовательские данные не
-# должны попадать в распространяемый zip.
-if ($hasPreservedData -and (Test-Path $preservedData)) {
+# должны попадать в распространяемый zip. Условие — только наличие архива
+# с профилем: прерванная пересборка оставляет профиль снаружи, и повторный
+# прогон обязан вернуть его, а не потерять.
+if (Test-Path $preservedData) {
+    if (Test-Path (Join-Path $publish "Data")) {
+        Remove-Item (Join-Path $publish "Data") -Recurse -Force
+    }
     Move-Item $preservedData (Join-Path $publish "Data")
     Write-Host "User portable profile (Data) carried over the rebuild." -ForegroundColor Green
 }

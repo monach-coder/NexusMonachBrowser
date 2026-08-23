@@ -98,9 +98,10 @@ public partial class SettingsWindow : Window
         };
         var neuralVoiceChoices = new[]
         {
-            new Choice<NeuralVoiceProfile>("Естественный · живой темп (рекомендуется)", NeuralVoiceProfile.Natasha),
-            new Choice<NeuralVoiceProfile>("Спокойный · мягче и медленнее", NeuralVoiceProfile.Irina),
-            new Choice<NeuralVoiceProfile>("Выразительный · больше интонации", NeuralVoiceProfile.Aurora)
+            new Choice<NeuralVoiceProfile>("Ксения · женский (рекомендуется)", NeuralVoiceProfile.Natasha),
+            new Choice<NeuralVoiceProfile>("Ирина · женский, спокойный", NeuralVoiceProfile.Irina),
+            new Choice<NeuralVoiceProfile>("Аврора · женский, выразительный", NeuralVoiceProfile.Aurora),
+            new Choice<NeuralVoiceProfile>("Евгений · мужский", NeuralVoiceProfile.Eugene)
         };
         var videoTranslationChoices = new[]
         {

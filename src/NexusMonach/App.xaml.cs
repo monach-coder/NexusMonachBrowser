@@ -25,10 +25,151 @@ public partial class App : Application
     private void GlassClose_Click(object sender, RoutedEventArgs e) =>
         Window.GetWindow(sender as DependencyObject)?.Close();
 
+    /// <summary>
+    /// Прогон полного конвейера дубляжа на файле дорожки: пишет отчёт с
+    /// таймкодами, текстами и длительностями — численная проверка
+    /// синхронности без прослушивания.
+    /// </summary>
+    private async Task RunDubTrackDiagnosticAsync(string trackPath, string reportPath)
+    {
+        var exitCode = 0;
+        try
+        {
+            // Путь приходит из командной строки: в декод допускается только
+            // существующий локальный аудиофайл из белого списка расширений —
+            // никакие другие значения до аргументов процесса не доходят.
+            var allowed = new[]
+            {
+                ".wav", ".m4a", ".mp4", ".mp3", ".flac", ".ogg", ".oga", ".aac", ".webm", ".bin"
+            };
+            var extension = Path.GetExtension(trackPath);
+            if (!Path.IsPathRooted(trackPath) ||
+                !File.Exists(trackPath) ||
+                trackPath.IndexOf('\0') >= 0 ||
+                !allowed.Contains(extension, StringComparer.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    "Путь дорожки должен быть абсолютным путём к существующему аудиофайлу " +
+                    "(" + string.Join(", ", allowed) + ").");
+            AppPaths.Initialize(["--dub-track", trackPath]);
+            CrashReportService.Initialize();
+            NexusFabricRuntime.Initialize();
+            await SettingsService.InitializeAsync();
+            var report = string.IsNullOrWhiteSpace(reportPath)
+                ? Path.ChangeExtension(trackPath, ".dubreport.txt")
+                : reportPath;
+            var lines = new List<string>
+            {
+                $"дорожка: {trackPath}",
+                $"ffmpeg: {AiModelCatalog.FfmpegExecutable ?? "нет"}",
+                $"whisper: {AiModelCatalog.WhisperServer ?? "нет"}"
+            };
+            await File.WriteAllLinesAsync(report, lines);
+
+            byte[] trackWav;
+            if (Path.GetExtension(trackPath).Equals(".wav", StringComparison.OrdinalIgnoreCase))
+            {
+                trackWav = await File.ReadAllBytesAsync(trackPath);
+            }
+            else
+            {
+                var decoded = Path.Combine(Path.GetTempPath(),
+                    "nexus-dubtrack-" + Guid.NewGuid().ToString("N") + ".wav");
+                var ffmpeg = AiModelCatalog.FfmpegExecutable
+                             ?? throw new InvalidOperationException("ffmpeg недоступен");
+                var psi = new System.Diagnostics.ProcessStartInfo(ffmpeg)
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardError = true
+                };
+                psi.ArgumentList.Add("-hide_banner");
+                psi.ArgumentList.Add("-loglevel");
+                psi.ArgumentList.Add("error");
+                psi.ArgumentList.Add("-y");
+                psi.ArgumentList.Add("-i");
+                psi.ArgumentList.Add(trackPath);
+                psi.ArgumentList.Add("-vn");
+                psi.ArgumentList.Add("-ar");
+                psi.ArgumentList.Add("16000");
+                psi.ArgumentList.Add("-ac");
+                psi.ArgumentList.Add("1");
+                psi.ArgumentList.Add(decoded);
+                using (var process = System.Diagnostics.Process.Start(psi) ??
+                                     throw new InvalidOperationException("ffmpeg не запустился"))
+                {
+                    _ = process.StandardError.ReadToEndAsync();
+                    await process.WaitForExitAsync();
+                }
+                trackWav = await File.ReadAllBytesAsync(decoded);
+                try { File.Delete(decoded); } catch { }
+            }
+            lines.Add($"длительность дорожки: {AudioRateRestore.PcmDurationSeconds(trackWav):F1} с");
+
+            var progress = new Progress<string>(step =>
+            {
+                try
+                {
+                    File.AppendAllText(report,
+                        $"{DateTimeOffset.Now:HH:mm:ss.fff} {step}\n");
+                }
+                catch { }
+            });
+            var wavs = new List<string>();
+            var phrases = await TrackDubbingComposer.ComposeAsync(
+                trackWav, 0, double.MaxValue, wavs, progress, CancellationToken.None);
+            // Диагностика качества: исходные реплики whisper с маркерами.
+            var raw = await WhisperService.TranscribeDetailedAsync(
+                AudioRateRestore.SliceByTime(trackWav, 0, 20),
+                WhisperLane.Dubbing, CancellationToken.None);
+            var rawLines = new List<string> { string.Empty, "=== WHISPER СЫРЬЁ (0–20 с) ===" };
+            foreach (var segment in raw.Segments)
+                rawLines.Add(
+                    $"{segment.Start,6:F2}-{segment.End,6:F2} nospeech={segment.NoSpeechProb:F2} logp={segment.AvgLogProb:F2} | {segment.Text}");
+            await File.AppendAllLinesAsync(report, rawLines);
+            lines.Add(string.Empty);
+            lines.Add("=== РЕПЛИКИ ===");
+            foreach (var phrase in phrases)
+            {
+                var dubSeconds = phrase.WavPaths.Sum(path =>
+                    AudioRateRestore.PcmDurationSeconds(File.ReadAllBytes(path)));
+                lines.Add(
+                    $"{phrase.StartSeconds,7:F2} → {phrase.SlotEndSeconds,7:F2} " +
+                    $"(слот {phrase.SlotEndSeconds - phrase.StartSeconds,5:F2} с, дуб {dubSeconds,5:F2} с, " +
+                    $"файлы {phrase.WavPaths.Count}) | {phrase.RussianText}");
+            }
+            lines.Add(string.Empty);
+            lines.Add($"итого реплик: {phrases.Count}");
+            await File.AppendAllLinesAsync(report, lines);
+            Console.WriteLine($"готово: {phrases.Count} реплик, отчёт: {report}");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine("ошибка: " + ex.Message);
+            exitCode = 1;
+        }
+        finally
+        {
+            VideoDubbingVoiceService.Stop();
+            TranslationService.Stop();
+            WhisperService.Shutdown();
+            Shutdown(exitCode);
+        }
+    }
+
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
         if (RedirectPortableLaunchToGuardian(e.Args)) return;
+        // Диагностический стенд дубляжа: полный конвейер на файле без окна —
+        // верификация синхронности оффлайн, без браузера и страницы.
+        if (e.Args.Length >= 2 &&
+            e.Args[0].Equals("--dub-track", StringComparison.OrdinalIgnoreCase))
+        {
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            _ = RunDubTrackDiagnosticAsync(e.Args[1],
+                e.Args.Length >= 3 ? e.Args[2] : string.Empty);
+            return;
+        }
         // Unattended readiness probe: initialize everything, show the real
         // window, then exit with code 0. CI uses it to catch startup crashes
         // that unit tests cannot see; interactive flows stay untouched.
@@ -71,6 +212,7 @@ public partial class App : Application
                     var firstRunSettings = SettingsService.Current.Clone();
                     firstRunSettings.Theme = themePicker.ResultTheme;
                     firstRunSettings.ThemeMode = themePicker.ResultMode;
+                    firstRunSettings.NeuralVoiceProfile = themePicker.ResultVoice;
                     firstRunSettings.ThemeSelectionCompleted = true;
                     await SettingsService.SaveAsync(firstRunSettings);
                     splash.Show();

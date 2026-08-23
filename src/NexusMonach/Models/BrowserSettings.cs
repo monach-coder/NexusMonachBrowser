@@ -75,9 +75,10 @@ public enum VoiceAssistantMode
 
 public enum NeuralVoiceProfile
 {
-    Natasha,
-    Irina,
-    Aurora
+    Natasha,   // Ксения — женский (по умолчанию)
+    Irina,     // Ирина — женский (спокойный)
+    Aurora,    // Аврора — женский (выразительный)
+    Eugene     // Евгений — мужской
 }
 
 public enum VideoTranslationMode

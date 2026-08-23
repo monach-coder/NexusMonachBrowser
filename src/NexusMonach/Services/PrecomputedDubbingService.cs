@@ -27,12 +27,22 @@ internal sealed class PrecomputedDubbingPlayer : IDisposable
     private WaveFileReader? _reader;
     private bool _paused;
     private bool _disposed;
+    private long _playedChains;
 
     public PrecomputedDubbingPlayer()
     {
         _thread = new Thread(Run) { IsBackground = true, Name = "Nexus precomputed dubbing" };
         _thread.Start();
     }
+
+    /// <summary>Сыгранные цепочки реплик — телеметрия для статуса сессии.</summary>
+    public long PlayedChains => Interlocked.Read(ref _playedChains);
+
+    /// <summary>Глубина очереди воспроизведения.</summary>
+    public int QueueDepth => _queue.Count;
+
+    /// <summary>Жив ли поток воспроизведения.</summary>
+    public bool ThreadAlive => _thread.IsAlive;
 
     public bool IsPlaying
     {
@@ -102,38 +112,64 @@ internal sealed class PrecomputedDubbingPlayer : IDisposable
             {
                 foreach (var path in chain)
                 {
-                    WaveOutEvent output;
-                    WaveFileReader reader;
-                    lock (_sync)
-                    {
-                        if (_disposed) { try { File.Delete(path); } catch { } return; }
-                        while (_paused && !_disposed)
-                            Monitor.Wait(_sync);
-                        if (_disposed) { try { File.Delete(path); } catch { } return; }
-                        StopCurrentLocked();
-                        reader = new WaveFileReader(path);
-                        output = new WaveOutEvent();
-                        _reader = reader;
-                        _output = output;
-                    }
-                    using var completed = new ManualResetEventSlim(false);
-                    output.PlaybackStopped += (_, _) => completed.Set();
                     try
                     {
-                        output.Init(reader);
-                        output.Play();
-                        completed.Wait();
+                        WaveOutEvent output;
+                        WaveFileReader reader;
+                        lock (_sync)
+                        {
+                            if (_disposed) { try { File.Delete(path); } catch { } return; }
+                            while (_paused && !_disposed)
+                                Monitor.Wait(_sync);
+                            if (_disposed) { try { File.Delete(path); } catch { } return; }
+                            StopCurrentLocked();
+                            reader = new WaveFileReader(path);
+                            output = new WaveOutEvent();
+                            _reader = reader;
+                            _output = output;
+                        }
+                        using var completed = new ManualResetEventSlim(false);
+                        output.PlaybackStopped += (_, _) => completed.Set();
+                        try
+                        {
+                            output.Init(reader);
+                            // Перевод — главный голос: полная громкость устройства,
+                            // оригинал к этому моменту приглушён до фона.
+                            output.Volume = 1.0f;
+                            output.Play();
+                            // Watchdog: если аудиоустройство не отдаёт события
+                            // (виртуальные/переключенные выходы), реплика не
+                            // имеет права блокировать плеер навсегда.
+                            if (!completed.Wait(TimeSpan.FromSeconds(35)))
+                            {
+                                CrashReportService.RecordNonFatal("video-translation",
+                                    "dubbing-play-watchdog",
+                                    new InvalidOperationException(
+                                        "Аудиовыход не завершил реплику за 35 с — принудительный переход."));
+                            }
+                        }
+                        catch
+                        {
+                            // Повреждённый или занятый файл не должен ронять сессию.
+                        }
+                        lock (_sync)
+                        {
+                            StopCurrentLocked();
+                        }
                     }
                     catch
                     {
-                        // Повреждённый или занятый файл не должен ронять сессию.
-                    }
-                    lock (_sync)
-                    {
-                        StopCurrentLocked();
+                        // Ни одно исключение не имеет права убить поток плеера:
+                        // мёртвый поток оставит очередь замороженной, IsPlaying
+                        // навсегда true — и планировщик перестанет ставить реплики.
+                        lock (_sync)
+                        {
+                            StopCurrentLocked();
+                        }
                     }
                     try { File.Delete(path); } catch { }
                 }
+                Interlocked.Increment(ref _playedChains);
             }
         }
         catch (OperationCanceledException) { }

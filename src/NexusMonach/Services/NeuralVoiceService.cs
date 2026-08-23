@@ -310,6 +310,16 @@ public static class NeuralVoiceService
         lock (state.RequestSync)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            // Мужской голос (Евгений) идёт через Piper: Silero-воркер не
+            // умеет менять спикера (захардкожена Ксения), а пересборка
+            // PyInstaller-воркера несовместима по torch.
+            if (profile == NeuralVoiceProfile.Eugene && EugenePiperReady)
+            {
+                SynthesizeWithPiperCli(AiModelCatalog.PiperCli!, text, profile,
+                    rate, lane, output, state, cancellationToken);
+                state.IsReady = true;
+                return;
+            }
             if (!AiModelCatalog.SileroVoiceReady &&
                 AiModelCatalog.PiperCli is { } piperCli && File.Exists(piperCli))
             {
@@ -330,7 +340,7 @@ public static class NeuralVoiceService
                 text = spokenText,
                 output,
                 style = VoiceStyle(profile),
-                speaker = SpeakerId(profile),
+                speaker = SpeakerName(profile),
                 rate = Math.Clamp(rate, -4, 4)
             });
             worker.StandardInput.WriteLine(request);
@@ -524,6 +534,22 @@ public static class NeuralVoiceService
         throw new InvalidOperationException("Локальный TTS вернул слишком много служебных строк без ответа.");
     }
 
+    /// <summary>
+    /// Готов ли мужской голос (Piper): exe и модель замализированы в
+    /// ASCII-безопасный кэш, откуда Piper читает без падения на кириллице.
+    /// </summary>
+    private static bool EugenePiperReady
+    {
+        get
+        {
+            var cache = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "NexusMonach", "VoiceCache", "piper");
+            return File.Exists(Path.Combine(cache, "piper.exe")) &&
+                   File.Exists(Path.Combine(cache, "ru_RU-denis-medium.onnx"));
+        }
+    }
+
     private static string VoiceStyle(NeuralVoiceProfile profile) => profile switch
     {
         NeuralVoiceProfile.Irina => "calm",
@@ -531,11 +557,12 @@ public static class NeuralVoiceService
         _ => "natural"
     };
 
-    private static int SpeakerId(NeuralVoiceProfile profile) => profile switch
+    private static string SpeakerName(NeuralVoiceProfile profile) => profile switch
     {
-        NeuralVoiceProfile.Irina => 0,
-        NeuralVoiceProfile.Natasha => 1,
-        _ => 2
+        NeuralVoiceProfile.Eugene => "eugene",
+        NeuralVoiceProfile.Irina => "baya",
+        NeuralVoiceProfile.Aurora => "xenia",
+        _ => "kseniya"
     };
 
     private static LaneState StateFor(NeuralVoiceLane lane) =>

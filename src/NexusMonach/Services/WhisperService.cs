@@ -7,7 +7,15 @@ using System.Text.Json;
 
 namespace NexusMonach.Services;
 
-public sealed record WhisperTranscript(string Text, string Language);
+public sealed record WhisperTranscript(string Text, string Language)
+{
+    /// <summary>Сегменты с таймкодами (только для verbose_json-ответов).</summary>
+    public IReadOnlyList<WhisperTimedSegment> Segments { get; init; } = [];
+}
+
+/// <summary>Реплика оригинала с точным положением на таймлайне аудио.</summary>
+public sealed record WhisperTimedSegment(double Start, double End, string Text,
+    double NoSpeechProb = 0, double AvgLogProb = 0);
 
 public enum WhisperLane
 {
@@ -22,7 +30,17 @@ public enum WhisperLane
 /// </summary>
 public static class WhisperService
 {
-    private static readonly HttpClient Client = LocalAiLoopbackTransport.CreateClient();
+    private static readonly HttpClient Client = CreateWhisperClient();
+
+    private static HttpClient CreateWhisperClient()
+    {
+        // Каждая просьба — свежее соединение: после первой отменённой просьбы
+        // повторное использование pooled-соединения к whisper-server однажды
+        // зависало на десятки секунд при полностью здоровом сервере.
+        var client = LocalAiLoopbackTransport.CreateClient();
+        client.DefaultRequestHeaders.ConnectionClose = true;
+        return client;
+    }
     private static readonly LaneState CommandsLane = new();
     private static readonly LaneState DubbingLane = new();
 
@@ -102,11 +120,21 @@ public static class WhisperService
                 await EnsureServerStartedAsync(state, lane, cancellationToken);
                 return await RunServerInferenceAsync(state, wav, cancellationToken);
             }
-            catch (OperationCanceledException) { throw; }
-            catch
+            catch (OperationCanceledException)
+            {
+                // Бюджет истёк — сервер под подозрением: следующая просьба
+                // поднимет его заново, а не пойдёт по зависшему соединению.
+                StopServer(state);
+                throw;
+            }
+            catch (Exception ex)
             {
                 // Один аварийный сервер не должен убивать перевод. Старый CLI
                 // остаётся безопасным резервом, если он есть в комплекте.
+                // Причина падения сервера пишется в Crash Vault: тихий уход
+                // в фолбэк однажды стоил часа слепой отладки «нулевых реплик».
+                CrashReportService.RecordNonFatal("whisper",
+                    "server-inference-" + lane.ToString().ToLowerInvariant(), ex);
                 StopServer(state);
                 if (AiModelCatalog.WhisperCli is null) throw;
             }
@@ -130,7 +158,7 @@ public static class WhisperService
                            ?? throw new InvalidOperationException("Локальная сессия Whisper не запущена.");
             LocalAiLoopbackTransport.EnsureAllowedEndpoint(endpoint);
             using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            budget.CancelAfter(TimeSpan.FromSeconds(55));
+            budget.CancelAfter(TimeSpan.FromSeconds(30));
             using var content = new MultipartFormDataContent();
             var audio = new ByteArrayContent(wav);
             audio.Headers.ContentType = new("audio/wav");
@@ -164,13 +192,44 @@ public static class WhisperService
             var text = FindString(document.RootElement, "text") ?? string.Empty;
             var language = FindString(document.RootElement, "detected_language") ??
                            FindString(document.RootElement, "language") ?? string.Empty;
-            return new WhisperTranscript(NormalizeTranscript(text), language.Trim());
+            var segments = new List<WhisperTimedSegment>();
+            if (document.RootElement.TryGetProperty("segments", out var segmentsElement) &&
+                segmentsElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var segment in segmentsElement.EnumerateArray())
+                {
+                    var segmentText = NormalizeTranscript(
+                        FindString(segment, "text") ?? string.Empty);
+                    if (segmentText.Length == 0) continue;
+                    if (!TryFindNumber(segment, "start", out var start) ||
+                        !TryFindNumber(segment, "end", out var end)) continue;
+                    if (end <= start) continue;
+                    // Вероятности — классические маркеры галлюцинаций на тишине.
+                    TryFindNumber(segment, "no_speech_prob", out var noSpeechProb);
+                    TryFindNumber(segment, "avg_logprob", out var avgLogProb);
+                    segments.Add(new WhisperTimedSegment(start, end, segmentText,
+                        noSpeechProb, avgLogProb));
+                }
+            }
+            return new WhisperTranscript(NormalizeTranscript(text), language.Trim())
+            {
+                Segments = segments
+            };
         }
         catch (JsonException)
         {
             return new WhisperTranscript(
                 NormalizeTranscript(payload.Trim('"', '\r', '\n', ' ')), string.Empty);
         }
+    }
+
+    private static bool TryFindNumber(JsonElement parent, string name, out double value)
+    {
+        value = 0;
+        return parent.ValueKind == JsonValueKind.Object &&
+               parent.TryGetProperty(name, out var element) &&
+               element.ValueKind == JsonValueKind.Number &&
+               element.TryGetDouble(out value);
     }
 
     internal static string NormalizeTranscript(string? text) =>
@@ -350,7 +409,7 @@ public static class WhisperService
             {
                 log = log.Trim();
                 throw new InvalidOperationException("Whisper завершился с ошибкой: " +
-                                                    log[..Math.Min(log.Length, 700)]);
+                                                    log[..Math.Min(log.Length, 2500)]);
             }
             return (await File.ReadAllTextAsync(output, cancellationToken)).Trim();
         }

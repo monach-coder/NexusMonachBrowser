@@ -29,6 +29,29 @@ public sealed class VoiceCommandRouterTests
     }
 
     [Fact]
+    public void HandsFree_AcceptsGarbledWakeWord()
+    {
+        // Живой whisper слышит слово-пароль по-разному — точное сравнение
+        // роняло почти каждую попытку, браузер «слушал и молчал».
+        Assert.Equal(VoiceCommandKind.OpenSettings,
+            VoiceCommandRouter.Parse("нэксус открой настройки", requireWakeWord: true).Kind);
+        Assert.Equal(VoiceCommandKind.OpenSettings,
+            VoiceCommandRouter.Parse("нексис, настройки", requireWakeWord: true).Kind);
+        Assert.Equal(VoiceCommandKind.NewTab,
+            VoiceCommandRouter.Parse("некст новая вкладка", requireWakeWord: true).Kind);
+    }
+
+    [Fact]
+    public void HandsFree_IgnoresOrdinarySpeech()
+    {
+        // Нечёткое совпадение не должно превращать любую похожесть в пароль.
+        Assert.Equal(VoiceCommandKind.None,
+            VoiceCommandRouter.Parse("открой настройки пожалуйста", requireWakeWord: true).Kind);
+        Assert.Equal(VoiceCommandKind.None,
+            VoiceCommandRouter.Parse("просто текст про экспорт", requireWakeWord: true).Kind);
+    }
+
+    [Fact]
     public void UnknownSpeech_DoesNotBecomeSearchAutomatically()
     {
         Assert.Equal(VoiceCommandKind.None,

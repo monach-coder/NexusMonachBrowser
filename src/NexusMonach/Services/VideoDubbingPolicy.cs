@@ -42,7 +42,7 @@ internal static class VideoDubbingPolicy
     /// видео и очередь продолжаются.
     /// </summary>
     public const int MaxConsecutivePlaybackFailures = 4;
-    public const double OriginalVolume = 0.12;
+    public const double OriginalVolume = 0.09;
     public const double MinimumAudibleRms = 0.00018;
     public const double MinimumAudiblePeak = 0.0015;
     public const double TargetRecognitionRms = 0.055;

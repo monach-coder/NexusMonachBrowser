@@ -15,7 +15,8 @@ public sealed class VideoDubbingPolicyTests
         Assert.InRange(VideoDubbingPolicy.SegmentOverlapMilliseconds, 700, 900);
         Assert.InRange(VideoDubbingPolicy.MaxBufferedSegments, 5, 8);
         Assert.InRange(VideoDubbingPolicy.MaxSegmentAgeMilliseconds, 10_000, 15_000);
-        Assert.InRange(VideoDubbingPolicy.OriginalVolume, 0.08, 0.16);
+        // Оригинал при дубляже — слышным фоном, перевод читается поверх.
+        Assert.InRange(VideoDubbingPolicy.OriginalVolume, 0.07, 0.12);
         Assert.InRange(VideoDubbingPolicy.DirectSilenceProbeLimit, 2, 4);
         Assert.InRange(VideoDubbingPolicy.FirstLoopbackSegmentTimeoutMilliseconds, 8_000, 15_000);
     }
