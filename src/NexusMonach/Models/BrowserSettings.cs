@@ -143,7 +143,7 @@ public sealed class BrowserSettings
     public bool ThemeSelectionCompleted { get; set; }
     public VoiceAssistantMode VoiceAssistantMode { get; set; } = VoiceAssistantMode.ImportantOnly;
     public bool VoiceSpeakAtStartup { get; set; } = true;
-    public bool VoiceHandsFreeEnabled { get; set; }
+    public bool VoiceHandsFreeEnabled { get; set; } = false;
     public int VoiceRate { get; set; } = 0;
     public NeuralVoiceProfile NeuralVoiceProfile { get; set; } = NeuralVoiceProfile.Natasha;
     public VideoTranslationMode VideoTranslationMode { get; set; } = VideoTranslationMode.Balanced;

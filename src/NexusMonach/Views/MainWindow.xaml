@@ -219,16 +219,18 @@
                     Foreground="{StaticResource AccentBrush}" ToolTip="SSH-терминал Linux"
                     Click="SshTerminal_Click" />
 
-            <Button x:Name="VoiceButton" Grid.Column="9" Content="&#xE720;"
-                    Style="{StaticResource IconButton}" Foreground="{StaticResource AccentBrush}"
-                    ToolTip="Nexus Voice: нажмите и говорите" Click="VoiceButton_Click">
+            <!-- Кнопка микрофона убрана: голосовое управление заморожено.
+                 На её месте — индикатор загрузки Guardian (постоянно виден). -->
+            <Button x:Name="GuardianStatusButton" Grid.Column="9" Content="&#xE895;"
+                    Style="{StaticResource IconButton}" Foreground="{StaticResource GoldBrush}"
+                    ToolTip="Статус системы · Guardian" Click="ShowGuardianCenter_Click">
                 <Button.ContextMenu>
                     <ContextMenu>
-                        <MenuItem Header="Сказать команду" Click="VoiceListenMenu_Click" />
-                        <MenuItem Header="Остановить голос" Click="VoiceStopMenu_Click" />
+                        <MenuItem Header="Guardian Center · рапорты" Click="ShowGuardianCenter_Click" />
+                        <MenuItem Header="Сетевой Дозор · активная защита" Click="ShowNetworkWatchdog_Click" />
                         <Separator />
                         <MenuItem x:Name="HandsFreeMenuItem" Header="Свободные руки · слово «Нексус»"
-                                  IsCheckable="True" Click="HandsFreeMenuItem_Click" />
+                                  IsCheckable="True" IsChecked="False" Click="HandsFreeMenuItem_Click" />
                     </ContextMenu>
                 </Button.ContextMenu>
             </Button>

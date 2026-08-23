@@ -256,9 +256,10 @@ public partial class MainWindow : Window
             SecureRestartSessionService.Delete();
         if (!_isPrivate)
             HandleCoreUpdateSnapshot(WebView2RuntimeMonitor.Check());
-        VoiceButton.IsEnabled = !_isPrivate;
-        HandsFreeMenuItem.IsChecked = !_isPrivate && SettingsService.Current.VoiceHandsFreeEnabled;
-        StartHandsFreeIfEnabled();
+        GuardianStatusButton.IsEnabled = !_isPrivate;
+        // Свободные руки: выключены по умолчанию, пользователь решает сам.
+        HandsFreeMenuItem.IsChecked = false;
+        SettingsService.Current.VoiceHandsFreeEnabled = false;
     }
 
     private BrowserTab AddTab(string url, bool navigateOnInitialize = true, bool insertAfterActive = false)
@@ -366,6 +367,7 @@ public partial class MainWindow : Window
             if (_networkWatchdog is null)
             {
                 _networkWatchdog = new Services.Tor.NetworkWatchdog();
+                _networkWatchdog.ThreatDetected += OnWatchdogThreat;
                 _networkWatchdog.Start();
             }
             try
@@ -1253,13 +1255,82 @@ public partial class MainWindow : Window
 
     private void ShowNetworkWatchdog_Click(object sender, RoutedEventArgs e)
     {
-        // Если Дозор не запущен (Trail Mode выключен) — запускаем для просмотра.
+        // Если Дозор не запущен — запускаем для просмотра.
         if (_networkWatchdog is null)
         {
             _networkWatchdog = new Services.Tor.NetworkWatchdog();
+            _networkWatchdog.ThreatDetected += OnWatchdogThreat;
             _networkWatchdog.Start();
         }
         new NetworkWatchdogWindow(_networkWatchdog) { Owner = this }.Show();
+    }
+
+    /// <summary>
+    /// Озвучивает угрозу голосом и показывает всплывающее уведомление.
+    /// Подписывается на ThreatDetected при старте Дозора.
+    /// </summary>
+    private void OnWatchdogThreat(Services.Tor.ThreatEvent threat)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            // Голосовое уведомление — что произошло и что сделано.
+            var spokenText = threat.Type switch
+            {
+                Services.Tor.ThreatType.PortScan =>
+                    $"Внимание! Обнаружено сканирование портов от {threat.Source}. " +
+                    "Источник заблокирован.",
+                Services.Tor.ThreatType.HoneypotTriggered =>
+                    $"Тревога! Сканер подключился к ловушке на порту. " +
+                    $"Атакующий IP: {threat.Source}. Заблокирован и обманут.",
+                Services.Tor.ThreatType.ArpSpoofing =>
+                    "Критическая угроза! Обнаружен ARP-спуфинг. " +
+                    "Шлюз подменён — возможен перехват трафика. Проверьте сеть!",
+                Services.Tor.ThreatType.DnsLeak =>
+                    $"Предупреждение! Обнаружена утечка DNS на {threat.Source}. " +
+                    "Запрос шёл мимо Tor. Заблокировано.",
+                Services.Tor.ThreatType.SuspiciousConnection =>
+                    $"Обнаружено подозрительное подключение к {threat.Source}.",
+                _ => "Обнаружена сетевая угроза."
+            };
+            VoiceAssistantService.Announce(spokenText,
+                VoiceAnnouncementPriority.Critical);
+
+            // Всплывающая карточка в углу — видно даже если звук выключен.
+            var notification = new Window
+            {
+                Title = "Сетевой Дозор",
+                Width = 380,
+                SizeToContent = SizeToContent.Height,
+                WindowStyle = WindowStyle.ToolWindow,
+                ResizeMode = ResizeMode.NoResize,
+                WindowStartupLocation = WindowStartupLocation.Manual,
+                Topmost = true,
+                ShowInTaskbar = false,
+                Background = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(0x1A, 0x1A, 0x2E)),
+                Foreground = System.Windows.Media.Brushes.White,
+                Content = new TextBlock
+                {
+                    Text = spokenText,
+                    TextWrapping = TextWrapping.Wrap,
+                    Padding = new Thickness(16),
+                    FontSize = 13,
+                    FontWeight = FontWeights.Medium
+                }
+            };
+            // Позиция: правый нижний угол над часами.
+            var workArea = SystemParameters.WorkArea;
+            notification.Left = workArea.Right - notification.Width - 16;
+            notification.Top = workArea.Bottom - 140;
+            notification.Show();
+            // Автозакрытие через 8 секунд.
+            var timer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(8)
+            };
+            timer.Tick += (_, _) => { timer.Stop(); notification.Close(); };
+            timer.Start();
+        });
     }
 
     private void ShowGuardianCenter_Click(object sender, RoutedEventArgs e)
