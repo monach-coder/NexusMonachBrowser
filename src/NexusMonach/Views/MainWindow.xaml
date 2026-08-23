@@ -128,22 +128,6 @@
                            Foreground="#D7C0FF" VerticalAlignment="Center" />
             </Border>
 
-            <!-- Кнопка загрузок: постоянно видна, показывает прогресс -->
-            <Border x:Name="DownloadsIndicator" Grid.Column="9" Margin="6,8,4,5" Padding="9,0"
-                    MinWidth="52" CornerRadius="12" Background="{StaticResource PanelBrush}"
-                    BorderBrush="{StaticResource GoldBrush}" BorderThickness="1" Cursor="Hand"
-                    Visibility="Visible" ToolTip="Загрузки — наведите, чтобы открыть список"
-                    MouseEnter="DownloadsIndicator_MouseEnter" MouseLeave="DownloadsIndicator_MouseLeave">
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock x:Name="DownloadsIndicatorGlyph" Text="&#xE896;"
-                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"
-                               Foreground="{StaticResource GoldBrush}" VerticalAlignment="Center" />
-                    <TextBlock x:Name="DownloadsIndicatorText" Text="0" Margin="5,0,0,0"
-                               FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"
-                               Foreground="{StaticResource GoldBrush}" />
-                </StackPanel>
-            </Border>
-
             <Button Grid.Column="4" Content="&#xE921;" Style="{StaticResource TitleButtonStyle}"
                     ToolTip="Свернуть" Click="Minimize_Click" />
             <Button x:Name="MaximizeButton" Grid.Column="5" Content="&#xE922;"
@@ -221,6 +205,22 @@
                     Foreground="{StaticResource AccentBrush}" ToolTip="SSH-терминал Linux"
                     Click="SshTerminal_Click" />
 
+            <!-- Индикатор загрузок на месте кнопки микрофона -->
+            <Border x:Name="DownloadsIndicator" Grid.Column="9" Margin="4,8,4,8" Padding="9,0"
+                    MinWidth="48" CornerRadius="12" Background="{StaticResource PanelBrush}"
+                    BorderBrush="{StaticResource GoldBrush}" BorderThickness="1" Cursor="Hand"
+                    Visibility="Visible" ToolTip="Загрузки — наведите, чтобы открыть список"
+                    MouseEnter="DownloadsIndicator_MouseEnter" MouseLeave="DownloadsIndicator_MouseLeave">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock x:Name="DownloadsIndicatorGlyph" Text="&#xE896;"
+                               FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"
+                               Foreground="{StaticResource GoldBrush}" VerticalAlignment="Center" />
+                    <TextBlock x:Name="DownloadsIndicatorText" Text="0" Margin="5,0,0,0"
+                               FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"
+                               Foreground="{StaticResource GoldBrush}" />
+                </StackPanel>
+            </Border>
+
             <!-- Кнопка Guardian и микрофон убраны из тулбара.
                  Дозор и голосовое управление — через меню (шестерёнка). -->
 
@@ -243,9 +243,6 @@
                         <MenuItem Header="SSH-терминал Linux" Click="SshTerminal_Click" />
                         <MenuItem Header="Сетевой Дозор · активная защита" Click="ShowNetworkWatchdog_Click" />
                         <MenuItem Header="Nexus Guardian · локальные рапорты" Click="ShowGuardianCenter_Click" />
-                        <Separator />
-                        <MenuItem x:Name="HandsFreeMenuItem" Header="Свободные руки · слово «Нексус»"
-                                  IsCheckable="True" IsChecked="False" Click="HandsFreeMenuItem_Click" />
                         <MenuItem Header="Настройки" Click="ShowSettings_Click" />
                         <Separator />
                         <MenuItem Header="О браузере" Click="About_Click" />

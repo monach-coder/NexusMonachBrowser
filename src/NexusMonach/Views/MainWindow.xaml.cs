@@ -257,9 +257,8 @@ public partial class MainWindow : Window
             SecureRestartSessionService.Delete();
         if (!_isPrivate)
             HandleCoreUpdateSnapshot(WebView2RuntimeMonitor.Check());
-        // Guardian status button removed; hands-free stays in the main menu.
-        // Свободные руки: выключены по умолчанию, пользователь решает сам.
-        HandsFreeMenuItem.IsChecked = false;
+        // Голосовое управление браузером убрано полностью: команд больше нет.
+        // Осталась только озвучка перевода и уведомлений Дозора (TTS).
         SettingsService.Current.VoiceHandsFreeEnabled = false;
     }
 
@@ -996,44 +995,25 @@ public partial class MainWindow : Window
         await LocalAiDock.PrepareShoppingAgentAsync(tab);
     }
 
+    // ═════════════════════════════════════════════════════════
+    // Голосовое УПРАВЛЕНИЕ браузером убрано полностью.
+    // Озвучка (TTS) для перевода, загрузок и уведомлений — остаётся.
+    // ═════════════════════════════════════════════════════════
+
     private async void VoiceButton_Click(object sender, RoutedEventArgs e) =>
-        await StartPushToTalkAsync();
+        await Task.CompletedTask;
 
     private async void VoiceListenMenu_Click(object sender, RoutedEventArgs e) =>
-        await StartPushToTalkAsync();
+        await Task.CompletedTask;
 
     private void VoiceStopMenu_Click(object sender, RoutedEventArgs e)
     {
-        _voiceListenCancellation?.Cancel();
-        VideoDubbingVoiceService.Stop();
         VoiceAssistantService.StopSpeaking();
-        SetVoiceStatus("Голос остановлен", visible: true);
-        _ = HideVoiceStatusLaterAsync();
+        VideoDubbingVoiceService.Stop();
     }
 
-    private async void HandsFreeMenuItem_Click(object sender, RoutedEventArgs e)
-    {
-        if (_isPrivate)
-        {
-            HandsFreeMenuItem.IsChecked = false;
-            return;
-        }
-        var settings = SettingsService.Current.Clone();
-        settings.VoiceHandsFreeEnabled = HandsFreeMenuItem.IsChecked == true;
-        if (settings.VoiceHandsFreeEnabled && settings.VoiceAssistantMode == VoiceAssistantMode.Off)
-            settings.VoiceAssistantMode = VoiceAssistantMode.Assistant;
-        await SettingsService.SaveAsync(settings);
-        if (settings.VoiceHandsFreeEnabled)
-        {
-            StartHandsFreeIfEnabled();
-            VoiceAssistantService.Announce("Режим свободные руки включён. Обращайтесь ко мне: Нексус.");
-        }
-        else
-        {
-            StopHandsFree();
-            VoiceAssistantService.Announce("Режим свободные руки выключен.");
-        }
-    }
+    private async void HandsFreeMenuItem_Click(object sender, RoutedEventArgs e) =>
+        await Task.CompletedTask;
 
     private async Task StartPushToTalkAsync()
     {
@@ -1076,20 +1056,13 @@ public partial class MainWindow : Window
 
     private void StartHandsFreeIfEnabled()
     {
-        if (_isPrivate || !SettingsService.Current.VoiceHandsFreeEnabled ||
-            SettingsService.Current.VoiceAssistantMode == VoiceAssistantMode.Off ||
-            _handsFreeCancellation is { IsCancellationRequested: false }) return;
-        var cancellation = new CancellationTokenSource();
-        _handsFreeCancellation = cancellation;
-        HandsFreeMenuItem.IsChecked = true;
-        _ = RunHandsFreeLoopAsync(cancellation);
+        // Голосовое управление полностью отключено — цикл не запускается.
     }
 
     private void StopHandsFree()
     {
         var cancellation = Interlocked.Exchange(ref _handsFreeCancellation, null);
         cancellation?.Cancel();
-        HandsFreeMenuItem.IsChecked = false;
         if (_voiceListenCancellation is null) VoiceStatusBadge.Visibility = Visibility.Collapsed;
     }
 
@@ -1368,12 +1341,9 @@ public partial class MainWindow : Window
         if (!_isPrivate)
             await PrivacyDock.SetEnabledAsync(SettingsService.Current.ShowPrivacyMonitor);
         ExtensionsMenuItem.IsEnabled = !_isPrivate && BrowserEnvironment.ExtensionsEnabledAtStartup;
-        if (!_isPrivate)
-        {
-            HandsFreeMenuItem.IsChecked = SettingsService.Current.VoiceHandsFreeEnabled;
-            if (SettingsService.Current.VoiceHandsFreeEnabled) StartHandsFreeIfEnabled();
-            else StopHandsFree();
-        }
+        // Голосовое управление отключено: не запускаем hands-free ни при каких настройках.
+        if (!_isPrivate && SettingsService.Current.VoiceHandsFreeEnabled)
+            StopHandsFree();
         if (extensionsChanged || proxyChanged || secureNetworkChanged)
         {
             var reasons = new List<string>();
