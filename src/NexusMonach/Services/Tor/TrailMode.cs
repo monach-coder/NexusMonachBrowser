@@ -10,8 +10,8 @@ namespace NexusMonach.Services.Tor;
 public static class TrailMode
 {
     /// <summary>
-    /// Применяет конфигурацию «Режима След»: Tor-прокси на loopback,
-    /// строгая приватность, всё лишнее выключено.
+    /// Применяет конфигурацию «Режима След»: Tor SOCKS5 на loopback,
+    /// строгая приватность, WebRTC выключен, DNS через Tor, порт-страж.
     /// </summary>
     public static BrowserSettings Apply(BrowserSettings settings)
     {
@@ -32,6 +32,23 @@ public static class TrailMode
         settings.ClearBrowsingDataOnExit = true;
         return settings;
     }
+
+    /// <summary>
+    /// Активирует защиту портов на вкладке: WebRTC блокируется,
+    /// DNS идёт через Tor SOCKS, mDNS/SSDP отключены.
+    /// </summary>
+    public static (bool Success, string Message) ProtectTab(Models.BrowserTab tab)
+    {
+        var vpn = VpnDetector.Detect();
+        var guard = PortGuard.Protect(tab);
+        var vpnText = vpn.VpnActive ? $" VPN: {vpn.AdapterName}." : "";
+        return (guard.Success, guard.Message + vpnText);
+    }
+
+    /// <summary>
+    /// Снимает защиту портов при выходе из режима.
+    /// </summary>
+    public static void ReleaseTab(Models.BrowserTab tab) => PortGuard.Release(tab);
 
     /// <summary>Человекочитаемый статус Tor для UI.</summary>
     public static (bool Ready, string Status) CheckTorStatus()
