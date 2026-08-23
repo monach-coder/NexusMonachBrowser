@@ -88,6 +88,19 @@ public enum VideoTranslationMode
     Quality
 }
 
+/// <summary>Транспорт для обхода DPI-блокировки Tor.</summary>
+public enum TorTransportMode
+{
+    /// <summary>Напрямую, без обфускации — работает только там, где Tor не заблокирован.</summary>
+    Direct,
+    /// <summary>obfs4 через lyrebird — трафик выглядит как случайный шум. По умолчанию.</summary>
+    Obfs4,
+    /// <summary>Snowflake — трафик выглядит как WebRTC-видеозвонок. Тяжело заблокировать.</summary>
+    Snowflake,
+    /// <summary>meek-azure — трафик выглядит как HTTPS к Microsoft CDN. Почти не заблокировать, но медленно.</summary>
+    MeekAzure
+}
+
 public sealed class BrowserSettings
 {
     public SearchEngineKind SearchEngine { get; set; } = SearchEngineKind.DuckDuckGo;
@@ -134,6 +147,11 @@ public sealed class BrowserSettings
     public int VoiceRate { get; set; } = 0;
     public NeuralVoiceProfile NeuralVoiceProfile { get; set; } = NeuralVoiceProfile.Natasha;
     public VideoTranslationMode VideoTranslationMode { get; set; } = VideoTranslationMode.Balanced;
+    public bool TrailModeEnabled { get; set; }
+    public TorTransportMode TorTransport { get; set; } = TorTransportMode.Obfs4;
+    public bool TorBridgeEnabled { get; set; }
+    /// <summary>Приватные мосты пользователя (obfs4 IP:PORT KEY cert=...).</summary>
+    public string TorCustomBridges { get; set; } = string.Empty;
 
     public BrowserSettings Clone() => new()
     {
