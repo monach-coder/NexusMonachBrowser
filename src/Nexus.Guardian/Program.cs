@@ -282,16 +282,35 @@ internal static class Program
                     ? exceptionValue.GetString() : null;
                 var stack = root.TryGetProperty("StackTrace", out var stackValue)
                     ? stackValue.GetString() ?? string.Empty : string.Empty;
-                if (component?.Equals("wpf", StringComparison.OrdinalIgnoreCase) == true &&
-                    exception?.Equals("System.OutOfMemoryException", StringComparison.Ordinal) == true &&
-                    (stack.Contains("DUCE.Channel", StringComparison.Ordinal) ||
-                     stack.Contains("HwndTarget", StringComparison.Ordinal)))
+                if (IsGraphicsFailureReport(component, exception, stack))
                     return true;
             }
         }
         catch { /* Safe-mode detection is best effort. */ }
 
         return false;
+    }
+
+    /// <summary>
+    /// Сбой графики: либо нехватка памяти в канале композиции WPF, либо гибель
+    /// потока рендеринга (UCEERR_RENDERTHREADFAILURE). Оба состояния не лечатся
+    /// на лету — лечатся безопасным режимом с программной отрисовкой и без GPU
+    /// у WebView2, поэтому после такого рапорта следующий запуск — безопасный.
+    /// </summary>
+    internal static bool IsGraphicsFailureReport(string? component, string? exceptionType, string stack)
+    {
+        if (!string.Equals(component, "wpf", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var inCompositionChannel =
+            stack.Contains("DUCE.Channel", StringComparison.Ordinal) ||
+            stack.Contains("HwndTarget", StringComparison.Ordinal);
+        var isOutOfMemory = string.Equals(exceptionType,
+            "System.OutOfMemoryException", StringComparison.Ordinal);
+        var isRenderThreadFailure =
+            string.Equals(exceptionType,
+                "System.Runtime.InteropServices.COMException", StringComparison.Ordinal) &&
+            stack.Contains("UCEERR_RENDERTHREADFAILURE", StringComparison.Ordinal);
+        return (isOutOfMemory || isRenderThreadFailure) && inCompositionChannel;
     }
 
     private static void RecordExit(bool clean)

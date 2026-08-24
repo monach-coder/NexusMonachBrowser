@@ -273,6 +273,23 @@ public partial class App : Application
                     await Dispatcher.InvokeAsync(() => Shutdown(0));
                 });
             }
+            // Самопроверка окна Дозора: конструкция когда-то падала на
+            // XamlParseException (SettingsCard), убивая браузер по клику меню.
+            // Прогон конструирования и показа ловит этот класс багов в CI.
+            if (e.Args.Any(x => x.Equals("--self-test-watchdog-window", StringComparison.OrdinalIgnoreCase)))
+            {
+                CrashReportService.AddBreadcrumb("watchdog", "window-self-test");
+                var watchdog = new Services.Tor.NetworkWatchdog();
+                var watchdogWindow = new NetworkWatchdogWindow(watchdog) { Owner = mainWindow };
+                watchdogWindow.Show();
+                await Task.Delay(TimeSpan.FromSeconds(2));
+                if (!watchdogWindow.IsLoaded)
+                    throw new InvalidOperationException("Окно Сетевого Дозора не загрузилось.");
+                watchdogWindow.Close();
+                CrashReportService.AddBreadcrumb("watchdog", "window-self-test-ok");
+                Shutdown(0);
+                return;
+            }
             _ = ProcessCrashQueueAsync(mainWindow);
         }
         catch (Exception ex)

@@ -311,9 +311,90 @@ public static partial class CrashReportService
 
     private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
+        // Перезапуск DWM (краш dwm.exe, смена темы, отключение монитора) на
+        // секунды отключает композицию рабочего стола — WindowChrome не может
+        // растянуть стеклянную рамку и бросает COMException. Это проходящее
+        // состояние: DWM поднимется и отрисует заново. Гасим и работаем дальше
+        // вместо убийства браузера.
+        if (IsTransientDesktopCompositionFailure(e.Exception))
+        {
+            RecordNonFatal("wpf", "dwm-composition-restart", e.Exception);
+            e.Handled = true;
+            return;
+        }
+        // Гибель потока рендеринга WPF (UCEERR_RENDERTHREADFAILURE): окно уже
+        // не отрисуется, но процесс жив. Молча закрываться нельзя — рапорт
+        // пишем, озвучиваем причину и перезапускаемся через Guardian, который
+        // по этому же рапорту поднимет безопасный режим (программная отрисовка
+        // и WebView2 без GPU — лечит и зависания его рендерера).
+        if (IsRenderThreadFailure(e.Exception) && !GuardianRuntime.IsSafeMode)
+        {
+            RecordNonFatal("wpf", "render-thread-failure", e.Exception);
+            e.Handled = true;
+            BeginGraphicsRecoveryRestart();
+            return;
+        }
         RecordFatalCore(e.Exception, "wpf", "dispatcher-unhandled");
         e.Handled = true;
         Application.Current.Shutdown(-1);
+    }
+
+    /// <summary>0x80263001 — {Композиция рабочего стола отключена}.</summary>
+    private static bool IsTransientDesktopCompositionFailure(Exception exception) =>
+        exception is COMException com && unchecked((uint)com.HResult) == 0x80263001u;
+
+    /// <summary>0x88980406 — UCEERR_RENDERTHREADFAILURE, поток отрисовки WPF умер.</summary>
+    private static bool IsRenderThreadFailure(Exception exception) =>
+        exception is COMException com &&
+        (unchecked((uint)com.HResult) == 0x88980406u ||
+         exception.Message.Contains("UCEERR_RENDERTHREADFAILURE", StringComparison.Ordinal));
+
+    private static int _graphicsRestartStarted;
+
+    /// <summary>
+    /// Перезапуск после сбоя графики: голосом объясняем, что произошло,
+    /// стартуем новый Guardian-процесс (он дождётся нашего выхода и поднимет
+    /// браузер в безопасном режиме) и завершаемся.
+    /// </summary>
+    private static void BeginGraphicsRecoveryRestart()
+    {
+        if (Interlocked.Exchange(ref _graphicsRestartStarted, 1) != 0) return;
+        try
+        {
+            VoiceAssistantService.Announce(
+                "Внимание! Графический сбой окна. Перезапускаю браузер в безопасном режиме отрисовки.",
+                VoiceAnnouncementPriority.Critical);
+        }
+        catch { /* Озвучка не должна мешать восстановлению. */ }
+        _ = Task.Run(async () =>
+        {
+            // Даём фразе прозвучать до остановки голосовых сервисов в OnExit.
+            await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            try
+            {
+                var root = AppContext.BaseDirectory;
+                var guardian = Path.Combine(root, "NexusMonach.exe");
+                if (File.Exists(guardian))
+                {
+                    var info = new ProcessStartInfo(guardian)
+                    {
+                        UseShellExecute = false,
+                        WorkingDirectory = root
+                    };
+                    info.ArgumentList.Add("--wait-for-previous-instance");
+                    Process.Start(info);
+                }
+                else
+                {
+                    var browser = Environment.ProcessPath;
+                    if (!string.IsNullOrWhiteSpace(browser))
+                        Process.Start(new ProcessStartInfo(browser) { UseShellExecute = true });
+                }
+            }
+            catch { /* Новый процесс не стартовал — завершаемся как обычно. */ }
+            try { Application.Current?.Dispatcher.BeginInvoke(() => Application.Current.Shutdown(-1)); }
+            catch { Environment.Exit(-1); }
+        });
     }
 
     private static void OnUnhandledException(object? sender, UnhandledExceptionEventArgs e)
@@ -324,8 +405,36 @@ public static partial class CrashReportService
 
     private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
     {
+        // Сокеты ловушек и тарпита Дозора прерываются при остановке — это
+        // плановый шум, а не сбой: не засоряем сейф отчётами о норме.
+        if (IsPlannedSocketAbort(e.Exception))
+        {
+            e.SetObserved();
+            return;
+        }
         WriteReport(e.Exception, "tasks", "unobserved-task", fatal: false);
         e.SetObserved();
+    }
+
+    private static bool IsPlannedSocketAbort(Exception exception)
+    {
+        var candidates = exception is AggregateException aggregate
+            ? aggregate.InnerExceptions
+            : (IReadOnlyList<Exception>)[exception];
+        return candidates.Count > 0 && candidates.All(IsSocketAbortCore);
+    }
+
+    private static bool IsSocketAbortCore(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is System.Net.Sockets.SocketException socket)
+                return socket.SocketErrorCode is
+                    System.Net.Sockets.SocketError.OperationAborted or
+                    System.Net.Sockets.SocketError.Interrupted or
+                    System.Net.Sockets.SocketError.ConnectionAborted;
+        }
+        return false;
     }
 
     private static void RecordFatalCore(Exception exception, string component, string stage)

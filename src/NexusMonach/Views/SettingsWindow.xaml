@@ -16,13 +16,9 @@
             <Setter Property="Margin" Value="6,0,0,0" />
             <Setter Property="Cursor" Value="Hand" />
         </Style>
-        <Style x:Key="SettingsCard" TargetType="Border">
+        <Style x:Key="SettingsCard" TargetType="Border" BasedOn="{StaticResource SettingsCard}">
             <Setter Property="Margin" Value="0,0,12,14" />
             <Setter Property="Padding" Value="18" />
-            <Setter Property="Background" Value="{StaticResource PanelBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
-            <Setter Property="CornerRadius" Value="10" />
         </Style>
         <Style TargetType="TreeViewItem" BasedOn="{StaticResource {x:Type TreeViewItem}}">
             <Setter Property="FontSize" Value="13" />

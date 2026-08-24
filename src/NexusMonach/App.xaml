@@ -187,6 +187,15 @@
             </Setter>
         </Style>
 
+        <!-- Общая карточка-панель: используется окнами настроек и Дозора,
+             поэтому живёт на уровне приложения, а не в ресурсах одного окна. -->
+        <Style x:Key="SettingsCard" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource PanelBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="10" />
+        </Style>
+
         <Style x:Key="NexusButton" TargetType="Button">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="Foreground" Value="{StaticResource TextBrush}" />

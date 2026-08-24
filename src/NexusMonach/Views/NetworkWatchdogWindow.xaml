@@ -5,13 +5,14 @@
         MinWidth="640" MinHeight="400" WindowStartupLocation="CenterOwner"
         Background="{StaticResource BackgroundBrush}" Foreground="{StaticResource TextBrush}"
         Icon="/Assets/nexus-monach.ico" Style="{StaticResource GlassPopupWindow}">
-    <Grid Margin="20">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-            <RowDefinition Height="Auto" />
-        </Grid.RowDefinitions>
+        <Grid Margin="20">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
 
         <StackPanel>
             <TextBlock Text="Сетевой Дозор" FontSize="22" FontWeight="SemiBold" />
@@ -97,7 +98,54 @@
             </ListView>
         </Border>
 
-        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,14,0,0"
+        <Border Grid.Row="3" Style="{StaticResource SettingsCard}" Padding="12,10" Margin="0,12,0,0">
+            <StackPanel>
+                <DockPanel Margin="0,0,0,8">
+                    <Button x:Name="ScanPortsButton" DockPanel.Dock="Right" Content="Сканировать мои порты"
+                            Style="{StaticResource NexusButton}" Padding="14,7"
+                            Click="ScanPorts_Click" />
+                    <TextBlock Text="Сканирование портов этой машины" FontSize="13" FontWeight="SemiBold"
+                               VerticalAlignment="Center" />
+                </DockPanel>
+                <TextBlock x:Name="ScanSummary" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8"
+                           Foreground="{StaticResource MutedTextBrush}"
+                           Text="Проверка покажет все открытые порты, кому они принадлежат и что опасно при анонимном режиме." />
+                <ListView x:Name="PortResults" Background="Transparent" BorderThickness="0" MaxHeight="160"
+                          Visibility="Collapsed"
+                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListView.View>
+                        <GridView>
+                            <GridViewColumn Header="Протокол" Width="70"
+                                            DisplayMemberBinding="{Binding Protocol}" />
+                            <GridViewColumn Header="Порт" Width="60"
+                                            DisplayMemberBinding="{Binding Port}" />
+                            <GridViewColumn Header="Адрес" Width="100"
+                                            DisplayMemberBinding="{Binding Address}" />
+                            <GridViewColumn Header="Процесс" Width="120"
+                                            DisplayMemberBinding="{Binding ProcessName}" />
+                            <GridViewColumn Header="Оценка" Width="150">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Risk}" Foreground="{Binding RiskBrush}"
+                                                   FontWeight="SemiBold" />
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                            <GridViewColumn Header="Детали" Width="190">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Note}" TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding Note}" />
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                        </GridView>
+                    </ListView.View>
+                </ListView>
+            </StackPanel>
+        </Border>
+
+        <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,14,0,0"
                     HorizontalAlignment="Right">
             <Button Content="Разблокировать все" Style="{StaticResource NexusButton}"
                     Padding="14,7" Margin="0,0,12,0" Click="UnblockAll_Click" />
