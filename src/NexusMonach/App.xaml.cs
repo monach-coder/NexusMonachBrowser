@@ -183,6 +183,13 @@ public partial class App : Application
             RenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly;
             CrashReportService.AddBreadcrumb("guardian", "software-rendering-enabled");
         }
+        else if (GuardianRuntime.DisableGpuOnly)
+        {
+            // Осторожный режим после одиночного сбоя графики: рисуем без GPU,
+            // но AI, расширения и голос работают — фишки браузера не теряем.
+            RenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly;
+            CrashReportService.AddBreadcrumb("guardian", "cautious-gpu-off-rendering");
+        }
         if (!GuardianRuntime.IsSafeMode)
         {
             NexusFabricRuntime.Initialize();
@@ -250,9 +257,11 @@ public partial class App : Application
                 VoiceAssistantService.Announce(
                     GuardianRuntime.IsSafeMode
                         ? "Nexus запущен в безопасном режиме."
-                        : GuardianRuntime.IntegrityStatus.Equals("verified", StringComparison.OrdinalIgnoreCase)
-                            ? "Nexus готов. Целостность браузера подтверждена."
-                            : "Nexus готов к работе.",
+                        : GuardianRuntime.DisableGpuOnly
+                            ? "Nexus готов. Графическое ускорение временно отключено после сбоя графики."
+                            : GuardianRuntime.IntegrityStatus.Equals("verified", StringComparison.OrdinalIgnoreCase)
+                                ? "Nexus готов. Целостность браузера подтверждена."
+                                : "Nexus готов к работе.",
                     GuardianRuntime.IsSafeMode
                         ? VoiceAnnouncementPriority.Critical
                         : VoiceAnnouncementPriority.Important);

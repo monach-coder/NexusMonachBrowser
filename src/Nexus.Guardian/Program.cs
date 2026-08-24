@@ -154,6 +154,9 @@ internal static class Program
         }
 
         var safeMode = ShouldUseSafeMode();
+        // Одиночный недавний сбой графики: отключаем только ускорение GPU,
+        // оставляя AI, расширения и голос. Полный безопасный режим — со второго.
+        var disableGpuOnly = !safeMode && CountRecentGraphicsFailures() >= 1;
         if (integrity.State == IntegrityState.NonCriticalMismatch)
         {
             safeMode = true;
@@ -181,6 +184,7 @@ internal static class Program
         info.Environment["NEXUS_GUARDIAN_SESSION"] = sessionId;
         info.Environment["NEXUS_INTEGRITY_STATUS"] = integrity.CompactStatus;
         info.Environment["NEXUS_SAFE_MODE"] = safeMode ? "1" : "0";
+        info.Environment["NEXUS_DISABLE_GPU"] = disableGpuOnly ? "1" : "0";
 
         using var process = Process.Start(info) ?? throw new InvalidOperationException("Windows не создал процесс браузера.");
         process.WaitForExit();
@@ -229,7 +233,44 @@ internal static class Program
         var state = ReadCrashState();
         var threshold = DateTimeOffset.UtcNow.AddMinutes(-10);
         state.AbnormalExitsUtc.RemoveAll(x => x < threshold);
-        return state.AbnormalExitsUtc.Count >= 3 || HasRecentGraphicsMemoryCrash();
+        // Полный безопасный режим — только после повторения: два графических
+        // сбоя за полчаса или три аномальных выхода за десять минут. Одиночный
+        // сбой графики лечится отключением GPU без потери AI и голоса.
+        return state.AbnormalExitsUtc.Count >= 3 || CountRecentGraphicsFailures() >= 2;
+    }
+
+    /// <summary>Число графических сбоев из рапортов за последние 30 минут.</summary>
+    private static int CountRecentGraphicsFailures()
+    {
+        var vault = Path.Combine(GuardianRoot, "CrashVault");
+        if (!Directory.Exists(vault)) return 0;
+
+        try
+        {
+            var recent = DateTimeOffset.UtcNow.AddMinutes(-30);
+            var count = 0;
+            foreach (var path in Directory.EnumerateFiles(vault, "*.json")
+                         .OrderByDescending(File.GetLastWriteTimeUtc).Take(40))
+            {
+                using var document = JsonDocument.Parse(File.ReadAllText(path));
+                var root = document.RootElement;
+                if (!root.TryGetProperty("TimestampUtc", out var timestamp) ||
+                    !timestamp.TryGetDateTimeOffset(out var timestampUtc) || timestampUtc < recent)
+                    continue;
+                var component = root.TryGetProperty("Component", out var componentValue)
+                    ? componentValue.GetString() : null;
+                var exception = root.TryGetProperty("ExceptionType", out var exceptionValue)
+                    ? exceptionValue.GetString() : null;
+                var stack = root.TryGetProperty("StackTrace", out var stackValue)
+                    ? stackValue.GetString() ?? string.Empty : string.Empty;
+                if (IsGraphicsFailureReport(component, exception, stack))
+                    count++;
+            }
+            return count;
+        }
+        catch { /* Safe-mode detection is best effort. */ }
+
+        return 0;
     }
 
     private static bool HasManagedFatalReport(string sessionId)
@@ -256,37 +297,6 @@ internal static class Program
             }
         }
         catch { /* A damaged local report must not block the native fallback. */ }
-
-        return false;
-    }
-
-    private static bool HasRecentGraphicsMemoryCrash()
-    {
-        var vault = Path.Combine(GuardianRoot, "CrashVault");
-        if (!Directory.Exists(vault)) return false;
-
-        try
-        {
-            var recent = DateTimeOffset.UtcNow.AddMinutes(-30);
-            foreach (var path in Directory.EnumerateFiles(vault, "*.json")
-                         .OrderByDescending(File.GetLastWriteTimeUtc).Take(40))
-            {
-                using var document = JsonDocument.Parse(File.ReadAllText(path));
-                var root = document.RootElement;
-                if (!root.TryGetProperty("TimestampUtc", out var timestamp) ||
-                    !timestamp.TryGetDateTimeOffset(out var timestampUtc) || timestampUtc < recent)
-                    continue;
-                var component = root.TryGetProperty("Component", out var componentValue)
-                    ? componentValue.GetString() : null;
-                var exception = root.TryGetProperty("ExceptionType", out var exceptionValue)
-                    ? exceptionValue.GetString() : null;
-                var stack = root.TryGetProperty("StackTrace", out var stackValue)
-                    ? stackValue.GetString() ?? string.Empty : string.Empty;
-                if (IsGraphicsFailureReport(component, exception, stack))
-                    return true;
-            }
-        }
-        catch { /* Safe-mode detection is best effort. */ }
 
         return false;
     }
