@@ -262,7 +262,8 @@ public partial class MainWindow : Window
         SettingsService.Current.VoiceHandsFreeEnabled = false;
     }
 
-    private BrowserTab AddTab(string url, bool navigateOnInitialize = true, bool insertAfterActive = false)
+    // internal: окна-центры (Guardian и др.) открывают вкладки браузера.
+    internal BrowserTab AddTab(string url, bool navigateOnInitialize = true, bool insertAfterActive = false)
     {
         var tab = new BrowserTab(url, _isPrivate, navigateOnInitialize);
         tab.StateChanged += (_, _) => Dispatcher.Invoke(SyncUi);

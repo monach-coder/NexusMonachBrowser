@@ -328,12 +328,25 @@ public static partial class CrashReportService
         // пишем, озвучиваем причину и перезапускаемся через Guardian, который
         // по этому же рапорту поднимет безопасный режим (программная отрисовка
         // и WebView2 без GPU — лечит и зависания его рендерера).
-        if (IsRenderThreadFailure(e.Exception) && !GuardianRuntime.IsSafeMode)
+        if (IsRenderThreadFailure(e.Exception))
         {
-            RecordNonFatal("wpf", "render-thread-failure", e.Exception);
-            e.Handled = true;
-            BeginGraphicsRecoveryRestart();
-            return;
+            // Если прямо сейчас шла аппаратная проба восстановления — сбой
+            // означает «драйвер ещё не ожил»: сбрасываем счётчик и остаёмся
+            // в осторожном режиме, без перезапуска.
+            if (GpuRecoveryService.ProbeInProgress)
+            {
+                GpuRecoveryService.NotifyProbeRenderFailure();
+                RecordNonFatal("gpu-recovery", "probe-render-failure", e.Exception);
+                e.Handled = true;
+                return;
+            }
+            if (!GuardianRuntime.IsSafeMode)
+            {
+                RecordNonFatal("wpf", "render-thread-failure", e.Exception);
+                e.Handled = true;
+                BeginGraphicsRecoveryRestart();
+                return;
+            }
         }
         RecordFatalCore(e.Exception, "wpf", "dispatcher-unhandled");
         e.Handled = true;

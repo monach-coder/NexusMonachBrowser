@@ -154,6 +154,7 @@
                 <Button Content="Журнал Следопыта" Style="{StaticResource GuardianButton}"
                         Click="SledopytJournal_Click" />
                 <Button Content="Копировать" Style="{StaticResource GuardianButton}" Click="Copy_Click" />
+                <Button Content="3D-граф" Style="{StaticResource GuardianButton}" Click="ShowGraph3d_Click" />
                 <Button Content="Экспорт" Style="{StaticResource GuardianButton}" Click="Export_Click" />
                 <Button Content="Отправить по почте" Style="{StaticResource GuardianButton}"
                         Click="SendEmail_Click" />

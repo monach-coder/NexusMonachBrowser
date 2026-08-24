@@ -248,6 +248,9 @@ internal static class Program
         try
         {
             var recent = DateTimeOffset.UtcNow.AddMinutes(-30);
+            // Маркер самовосстановления: браузер подтвердил здоровую серию
+            // аппаратных проб — сбои до этого момента устарели и не считаются.
+            var recoveredAt = ReadGpuRecoveryMarker();
             var count = 0;
             foreach (var path in Directory.EnumerateFiles(vault, "*.json")
                          .OrderByDescending(File.GetLastWriteTimeUtc).Take(40))
@@ -256,6 +259,8 @@ internal static class Program
                 var root = document.RootElement;
                 if (!root.TryGetProperty("TimestampUtc", out var timestamp) ||
                     !timestamp.TryGetDateTimeOffset(out var timestampUtc) || timestampUtc < recent)
+                    continue;
+                if (recoveredAt is { } marker && timestampUtc < marker)
                     continue;
                 var component = root.TryGetProperty("Component", out var componentValue)
                     ? componentValue.GetString() : null;
@@ -271,6 +276,21 @@ internal static class Program
         catch { /* Safe-mode detection is best effort. */ }
 
         return 0;
+    }
+
+    private static DateTimeOffset? ReadGpuRecoveryMarker()
+    {
+        try
+        {
+            var path = Path.Combine(GuardianRoot, "gpu-recovery.json");
+            if (!File.Exists(path)) return null;
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            if (document.RootElement.TryGetProperty("recoveredAtUtc", out var value) &&
+                value.TryGetDateTimeOffset(out var recovered))
+                return recovered;
+        }
+        catch { /* Повреждённый маркер просто игнорируем. */ }
+        return null;
     }
 
     private static bool HasManagedFatalReport(string sessionId)

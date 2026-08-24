@@ -271,6 +271,8 @@ public partial class App : Application
                     TranslationService.WarmUpInBackground();
                     LocalAiService.WarmUpInBackground();
                     _ = Task.Run(RussianStressDictionary.WarmUp);
+                    // Осторожный режим: пробуем вернуть полный режим сами.
+                    GpuRecoveryService.StartIfCautiousMode();
                 }
             }
             if (smokeSelfTest)
@@ -335,6 +337,7 @@ public partial class App : Application
         ShutdownCoordinator.RunStep("local-ai", LocalAiService.Shutdown, timeout);
         ShutdownCoordinator.RunStep("video-voice", VideoDubbingVoiceService.Shutdown, timeout);
         ShutdownCoordinator.RunStep("assistant-voice", VoiceAssistantService.Shutdown, timeout);
+        ShutdownCoordinator.RunStep("gpu-recovery", GpuRecoveryService.Stop, timeout);
         CrashReportService.MarkCleanExit();
         base.OnExit(e);
     }

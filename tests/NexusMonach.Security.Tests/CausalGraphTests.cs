@@ -153,4 +153,30 @@ public sealed class CausalGraphTests
         Assert.NotEmpty(xml.Root.Descendants(ns + "node"));
         Assert.NotEmpty(xml.Root.Descendants(ns + "edge"));
     }
+
+    [Fact]
+    public void InternalTabUrl_RoundTripsGraphThroughQuery()
+    {
+        var graph = CausalGraphBuilder.Build(RenderFailureContext());
+        var url = CausalGraphExporter.ToInternalTabUrl(graph);
+
+        Assert.StartsWith("https://nexus.local/causal-graph-3d.html?g=", url);
+        var payload = Uri.UnescapeDataString(url.Split("?g=")[1]);
+        var restored = System.Text.Json.JsonSerializer.Deserialize<CausalGraph>(payload);
+        Assert.NotNull(restored);
+        Assert.Equal(graph.Nodes.Count, restored!.Nodes.Count);
+        Assert.Equal(graph.RootCauseNodeId, restored.RootCauseNodeId);
+    }
+
+    [Fact]
+    public void InteractiveHtml_EmbedsGraphData()
+    {
+        var graph = CausalGraphBuilder.Build(RenderFailureContext());
+        var html = CausalGraphExporter.ToInteractiveHtml(graph);
+
+        // Маркер заменён встроенными данными, страница осталась целой.
+        Assert.DoesNotContain("/*__GRAPH_OVERRIDE__*/", html);
+        Assert.Contains("<!doctype html>", html);
+        Assert.Contains(graph.RootCauseNodeId, html);
+    }
 }

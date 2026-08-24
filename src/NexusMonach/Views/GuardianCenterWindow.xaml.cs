@@ -1,9 +1,12 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.IO;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Interop;
 using Microsoft.Win32;
 using NexusMonach.Services;
+using NexusMonach.Services.Diagnostics;
 
 namespace NexusMonach.Views;
 
@@ -230,6 +233,60 @@ public partial class GuardianCenterWindow : Window
         {
             GlassDialogWindow.Show(this, "Не удалось скопировать рапорт:\n\n" + ex.Message, "Nexus Guardian",
                 MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>
+    /// Открывает причинный граф рапорта как вкладку с 3D-визуализацией:
+    /// вращение мышью, клик по узлам, ползунок времени проигрывает каскад
+    /// отказа. Без хозяина-браузера предлагает автономный HTML-файл.
+    /// </summary>
+    private void ShowGraph3d_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedReport is null || _showingSledopytJournal) return;
+        try
+        {
+            using var document = JsonDocument.Parse(SelectedReport.Json);
+            if (!document.RootElement.TryGetProperty("CausalGraph", out var graphElement) ||
+                graphElement.ValueKind == JsonValueKind.Null)
+            {
+                GlassDialogWindow.Show(this,
+                    "Этот рапорт записан до появления причинных графов — данных для 3D-визуализации нет.\n\n" +
+                    "Все новые рапорты содержат граф автоматически.",
+                    "Nexus Guardian · 3D-граф", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            var graph = graphElement.Deserialize<CausalGraph>();
+            if (graph is null || graph.Nodes.Count == 0)
+            {
+                GlassDialogWindow.Show(this, "Граф этого рапорта пуст.",
+                    "Nexus Guardian · 3D-граф", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            if (Owner is MainWindow mainWindow)
+            {
+                Close();
+                mainWindow.AddTab(CausalGraphExporter.ToInternalTabUrl(graph), insertAfterActive: true);
+            }
+            else
+            {
+                var dialog = new SaveFileDialog
+                {
+                    Title = "Экспорт интерактивного 3D-графа отказа",
+                    FileName = "nexus-crash-graph-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".html",
+                    DefaultExt = ".html",
+                    Filter = "Интерактивный отчёт (*.html)|*.html|Все файлы (*.*)|*.*"
+                };
+                if (dialog.ShowDialog(this) != true) return;
+                File.WriteAllText(dialog.FileName, CausalGraphExporter.ToInteractiveHtml(graph));
+            }
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("guardian", "graph3d-open", ex);
+            GlassDialogWindow.Show(this, "Не удалось открыть 3D-граф:\n\n" + ex.Message,
+                "Nexus Guardian · 3D-граф", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }
 

@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Причинный граф отказа · Nexus Monach</title>
+<style>
+  html, body { margin:0; height:100%; overflow:hidden; background:#0d0d16;
+    color:#eef4f8; font-family:'Segoe UI',system-ui,sans-serif; }
+  #scene { position:absolute; inset:0; cursor:grab; }
+  #scene.dragging { cursor:grabbing; }
+  #panel { position:absolute; top:16px; right:16px; width:340px; max-width:42vw;
+    background:rgba(18,20,32,.92); border:1px solid #2c3350; border-radius:12px;
+    padding:14px 16px; box-shadow:0 8px 32px rgba(0,0,0,.5); backdrop-filter:blur(6px); }
+  #panel h1 { font-size:14px; margin:0 0 4px; color:#8fb7ff; font-weight:600; }
+  #summary { font-size:12px; color:#a8b3cf; line-height:1.45; margin:0 0 10px; }
+  #nodeTitle { font-size:13px; font-weight:600; margin:8px 0 4px; word-break:break-word; }
+  #nodeDetails { font-size:11.5px; color:#a8b3cf; white-space:pre-wrap; word-break:break-word;
+    max-height:34vh; overflow:auto; }
+  #controls { position:absolute; left:16px; bottom:16px; right:380px;
+    background:rgba(18,20,32,.92); border:1px solid #2c3350; border-radius:12px;
+    padding:10px 16px; box-shadow:0 8px 32px rgba(0,0,0,.5); font-size:12px; color:#a8b3cf; }
+  #controls label { display:block; margin-bottom:4px; }
+  #timeRow { display:flex; align-items:center; gap:10px; }
+  #time { flex:1; accent-color:#5b9dff; }
+  #play { background:#1b2440; color:#cfe0ff; border:1px solid #34406b; border-radius:8px;
+    padding:3px 12px; cursor:pointer; font-size:12px; }
+  #play:hover { background:#243059; }
+  #legend { position:absolute; left:16px; top:16px; background:rgba(18,20,32,.92);
+    border:1px solid #2c3350; border-radius:12px; padding:10px 14px; font-size:11.5px;
+    line-height:1.7; color:#a8b3cf; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:7px; }
+  #hint { position:absolute; left:50%; transform:translateX(-50%); bottom:86px; font-size:11px;
+    color:#67718f; transition:opacity 1s; pointer-events:none; }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+
+<div id="legend">
+  <div><span class="dot" style="background:#ff6b6b"></span>отказ / исключение</div>
+  <div><span class="dot" style="background:#ffb86c"></span>системное событие</div>
+  <div><span class="dot" style="background:#5b9dff"></span>событие браузера</div>
+  <div><span class="dot" style="background:none;border:2px solid #ff6b6b"></span>корневая причина</div>
+</div>
+
+<div id="panel">
+  <h1>Причинный граф отказа</h1>
+  <p id="summary"></p>
+  <div id="nodeTitle">Кликните узел для деталей</div>
+  <div id="nodeDetails"></div>
+</div>
+
+<div id="controls">
+  <label>Ось времени — <b>4D</b>: двигайте ползунок, чтобы увидеть, как отказ расползался
+    по системе</label>
+  <div id="timeRow">
+    <button id="play">▶ проиграть</button>
+    <input type="range" id="time" min="0" max="1000" value="1000">
+    <span id="timeLabel" style="min-width:72px;text-align:right"></span>
+  </div>
+</div>
+<div id="hint">тяните мышью — вращение · колесо — зум · клик — детали узла</div>
+
+<script>
+'use strict';
+// Данные графа: либо встроены экспортёром (автономный файл отчёта),
+// либо приходят из адресной строки при открытии во вкладке браузера.
+const OVERRIDE = null /*__GRAPH_OVERRIDE__*/;
+const graph = OVERRIDE || loadFromQuery();
+
+function loadFromQuery() {
+  const raw = new URLSearchParams(location.search).get('g');
+  if (!raw) return { Nodes: [], Edges: [], RootCauseNodeId: '', Summary: 'нет данных' };
+  try { return JSON.parse(raw); } catch (e) { return { Nodes: [], Edges: [], RootCauseNodeId: '', Summary: 'не удалось прочитать данные' }; }
+}
+
+const KIND_COLOR = { exception:'#ff6b6b', system:'#ffb86c', event:'#5b9dff' };
+const canvas = document.getElementById('scene');
+const ctx = canvas.getContext('2d');
+const summaryEl = document.getElementById('summary');
+const nodeTitleEl = document.getElementById('nodeTitle');
+const nodeDetailsEl = document.getElementById('nodeDetails');
+const timeEl = document.getElementById('time');
+const timeLabelEl = document.getElementById('timeLabel');
+const playEl = document.getElementById('play');
+const hintEl = document.getElementById('hint');
+
+summaryEl.textContent = graph.Summary || '';
+
+// --- Узлы и физика -----------------------------------------------------------
+const nodes = (graph.Nodes || []).map((n, i) => {
+  const t = Date.parse(n.TimestampUtc) || 0;
+  const angle = i * 2.399963; // золотой угол — равномерная сфера
+  const ring = Math.sqrt((i + 0.5) / Math.max(1, graph.Nodes.length));
+  return {
+    id: n.Id, kind: n.Kind || 'event', title: n.Title || n.Id,
+    details: n.Details || '', time: t,
+    isRoot: n.Id === graph.RootCauseNodeId,
+    degree: 0,
+    x: Math.cos(angle) * ring * 220, y: (ring - 0.5) * 260, z: Math.sin(angle) * ring * 220,
+    vx: 0, vy: 0, vz: 0, px: 0, py: 0, visibleR: 0
+  };
+});
+const byId = new Map(nodes.map(n => [n.id, n]));
+const edges = (graph.Edges || []).filter(e => byId.has(e.FromId) && byId.has(e.ToId));
+edges.forEach(e => { byId.get(e.FromId).degree++; byId.get(e.ToId).degree++; });
+
+const minTime = nodes.length ? Math.min(...nodes.map(n => n.time)) : 0;
+const maxTime = nodes.length ? Math.max(...nodes.map(n => n.time)) : 0;
+const span = Math.max(1, maxTime - minTime);
+
+let yaw = 0.35, pitch = 0.25, zoom = 1, autoSpin = 0.0016;
+let timeCutoff = 1, selected = null, hover = null;
+let dragging = false, dragged = false, lastX = 0, lastY = 0;
+
+function visible(n) { return (n.time - minTime) / span <= timeCutoff + 1e-9; }
+
+function physics() {
+  const rep = 2600, spring = 0.012, grav = 0.0016, damp = 0.86;
+  for (let i = 0; i < nodes.length; i++) {
+    const a = nodes[i];
+    for (let j = i + 1; j < nodes.length; j++) {
+      const b = nodes[j];
+      let dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+      const d2 = dx * dx + dy * dy + dz * dz + 40;
+      const f = rep / d2;
+      const d = Math.sqrt(d2);
+      dx /= d; dy /= d; dz /= d;
+      const fa = f * (visible(a) && visible(b) ? 1 : 0.25);
+      a.vx += dx * fa; a.vy += dy * fa; a.vz += dz * fa;
+      b.vx -= dx * fa; b.vy -= dy * fa; b.vz -= dz * fa;
+    }
+    a.vx -= a.x * grav; a.vy -= a.y * grav; a.vz -= a.z * grav;
+  }
+  for (const e of edges) {
+    const a = byId.get(e.FromId), b = byId.get(e.ToId);
+    const w = e.Relation === 'вызвало' ? spring * 1.9 : spring;
+    const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+    a.vx += dx * w; a.vy += dy * w; a.vz += dz * w;
+    b.vx -= dx * w; b.vy -= dy * w; b.vz -= dz * w;
+  }
+  for (const n of nodes) {
+    n.vx *= damp; n.vy *= damp; n.vz *= damp;
+    n.x += n.vx; n.y += n.vy; n.z += n.vz;
+  }
+}
+
+function project(n) {
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const x1 = n.x * cy - n.z * sy;
+  const z1 = n.x * sy + n.z * cy;
+  const y2 = n.y * cp - z1 * sp;
+  const z2 = n.y * sp + z1 * cp;
+  const persp = 900 / (900 + z2 * zoom);
+  return { sx: canvas.width / 2 + x1 * persp * zoom, sy: canvas.height / 2 + y2 * persp * zoom,
+           depth: z2, persp };
+}
+
+function radius(n) {
+  const base = 5 + Math.min(9, n.degree * 1.6);
+  return n.id === 'crash' || n.isRoot ? base + 4 : base;
+}
+
+function fmtTime(t) {
+  const d = new Date(t);
+  return d.toLocaleTimeString('ru-RU', { hour12: false });
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const ordered = nodes.map(n => ({ n, p: project(n) })).sort((a, b) => b.p.depth - a.p.depth);
+
+  for (const e of edges) {
+    const a = byId.get(e.FromId), b = byId.get(e.ToId);
+    if (!visible(a) || !visible(b)) continue;
+    const pa = project(a), pb = project(b);
+    const causal = e.Relation === 'вызвало';
+    ctx.strokeStyle = causal ? 'rgba(255,107,107,.55)' : 'rgba(120,134,175,.30)';
+    ctx.lineWidth = causal ? 2 : 1;
+    ctx.beginPath(); ctx.moveTo(pa.sx, pa.sy); ctx.lineTo(pb.sx, pb.sy); ctx.stroke();
+    if (causal) {
+      const mx = (pa.sx + pb.sx) / 2, my = (pa.sy + pb.sy) / 2;
+      ctx.fillStyle = 'rgba(255,150,140,.8)';
+      ctx.font = '10px Segoe UI';
+      ctx.fillText('+' + Math.round(e.LagMs / 100) / 10 + ' с', mx + 4, my - 4);
+    }
+  }
+
+  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 350);
+  for (const { n, p } of ordered) {
+    if (!visible(n)) continue;
+    const r = radius(n) * p.persp * zoom;
+    n.px = p.sx; n.py = p.sy; n.visibleR = r;
+    const alpha = 0.35 + 0.65 * Math.max(0, 1 - p.depth / 700);
+    if (n.isRoot) {
+      ctx.beginPath(); ctx.arc(p.sx, p.sy, r + 6 + pulse * 5, 0, 7);
+      ctx.strokeStyle = 'rgba(255,107,107,' + (0.35 + 0.4 * pulse) + ')';
+      ctx.lineWidth = 2; ctx.stroke();
+    }
+    ctx.beginPath(); ctx.arc(p.sx, p.sy, r, 0, 7);
+    ctx.fillStyle = KIND_COLOR[n.kind] || KIND_COLOR.event;
+    ctx.globalAlpha = alpha;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    if (n === selected || n === hover || n.isRoot || n.id === 'crash') {
+      ctx.fillStyle = 'rgba(238,244,248,.92)';
+      ctx.font = (n === selected ? '600 ' : '') + '11.5px Segoe UI';
+      ctx.fillText(n.title, p.sx + r + 6, p.sy + 4);
+    }
+  }
+}
+
+function frame() {
+  physics();
+  if (!dragging) yaw += autoSpin;
+  draw();
+  requestAnimationFrame(frame);
+}
+
+// --- Взаимодействие ----------------------------------------------------------
+canvas.addEventListener('mousedown', e => {
+  dragging = true; dragged = false; lastX = e.clientX; lastY = e.clientY;
+  canvas.classList.add('dragging');
+});
+window.addEventListener('mousemove', e => {
+  if (dragging) {
+    const dx = e.clientX - lastX, dy = e.clientY - lastY;
+    if (Math.abs(dx) + Math.abs(dy) > 3) dragged = true;
+    yaw += dx * 0.006; pitch = Math.max(-1.4, Math.min(1.4, pitch + dy * 0.006));
+    lastX = e.clientX; lastY = e.clientY;
+    return;
+  }
+  hover = pick(e.clientX, e.clientY);
+});
+window.addEventListener('mouseup', e => {
+  canvas.classList.remove('dragging');
+  if (dragging && !dragged) {
+    selected = pick(e.clientX, e.clientY);
+    showSelected();
+  }
+  dragging = false;
+});
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  zoom = Math.max(0.35, Math.min(4, zoom * (e.deltaY < 0 ? 1.12 : 0.89)));
+}, { passive: false });
+
+function pick(cx, cy) {
+  const rect = canvas.getBoundingClientRect();
+  const x = cx - rect.left, y = cy - rect.top;
+  let best = null, bestD = 28 * 28;
+  for (const n of nodes) {
+    if (!visible(n)) continue;
+    const d = (n.px - x) * (n.px - x) + (n.py - y) * (n.py - y);
+    if (d < bestD) { bestD = d; best = n; }
+  }
+  return best;
+}
+
+function showSelected() {
+  if (!selected) { nodeTitleEl.textContent = 'Кликните узел для деталей'; nodeDetailsEl.textContent = ''; return; }
+  const kindName = { exception: 'отказ', system: 'системное событие', event: 'событие браузера' }[selected.kind] || selected.kind;
+  nodeTitleEl.textContent = (selected.isRoot ? '⚠ КОРНЕВАЯ ПРИЧИНА · ' : '') + selected.title;
+  nodeDetailsEl.textContent =
+    'Тип: ' + kindName + '\nВремя: ' + new Date(selected.time).toLocaleString('ru-RU') +
+    '\nСвязей: ' + selected.degree + (selected.details ? '\n\n' + selected.details : '');
+}
+
+// --- Ось времени (4D) --------------------------------------------------------
+function cutoffToText(c) {
+  const t = minTime + c * span;
+  const shown = nodes.filter(n => (n.time - minTime) / span <= c + 1e-9).length;
+  return fmtTime(t) + ' · ' + shown + '/' + nodes.length;
+}
+timeEl.addEventListener('input', () => {
+  timeCutoff = timeEl.value / 1000;
+  timeLabelEl.textContent = cutoffToText(timeCutoff);
+});
+let playing = false;
+playEl.addEventListener('click', () => {
+  playing = !playing;
+  playEl.textContent = playing ? '❚❚ пауза' : '▶ проиграть';
+  if (playing && timeCutoff >= 0.999) { timeCutoff = 0; timeEl.value = 0; }
+});
+setInterval(() => {
+  if (!playing) return;
+  timeCutoff += 0.006;
+  if (timeCutoff >= 1) { timeCutoff = 1; playing = false; playEl.textContent = '▶ проиграть'; }
+  timeEl.value = timeCutoff * 1000;
+  timeLabelEl.textContent = cutoffToText(timeCutoff);
+}, 40);
+
+function resize() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+timeLabelEl.textContent = cutoffToText(1);
+setTimeout(() => { hintEl.style.opacity = '0'; }, 7000);
+frame();
+</script>
+</body>
+</html>

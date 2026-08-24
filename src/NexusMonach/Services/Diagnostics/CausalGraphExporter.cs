@@ -1,4 +1,6 @@
+using System.IO;
 using System.Text;
+using System.Text.Json;
 using System.Xml.Linq;
 
 namespace NexusMonach.Services.Diagnostics;
@@ -69,6 +71,33 @@ public static class CausalGraphExporter
 
     private static string TitleWithTime(CausalNode node) =>
         $"{node.TimestampUtc:HH:mm:ss} {node.Title}";
+
+    /// <summary>
+    /// Адрес внутренней страницы с 3D-графом: данные едут в query-параметре,
+    /// страница живёт в Assets/Web и открывается в обычной вкладке браузера.
+    /// </summary>
+    public static string ToInternalTabUrl(CausalGraph graph)
+    {
+        var json = JsonSerializer.Serialize(graph);
+        return "https://nexus.local/causal-graph-3d.html?g=" + Uri.EscapeDataString(json);
+    }
+
+    /// <summary>
+    /// Автономный HTML-файл с встроенными данными: открывается где угодно,
+    /// без браузера и сети — подробный отчёт одним файлом.
+    /// </summary>
+    public static string ToInteractiveHtml(CausalGraph graph)
+    {
+        var templatePath = Path.Combine(
+            AppContext.BaseDirectory, "Assets", "Web", "causal-graph-3d.html");
+        var template = File.ReadAllText(templatePath);
+        var marker = "null /*__GRAPH_OVERRIDE__*/";
+        if (!template.Contains(marker, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "Шаблон causal-graph-3d.html не содержит маркер данных.");
+        return template.Replace(marker, JsonSerializer.Serialize(graph),
+            StringComparison.Ordinal);
+    }
 
     private static string EscapeMermaid(string value) =>
         value.Replace("\"", "&quot;", StringComparison.Ordinal);
