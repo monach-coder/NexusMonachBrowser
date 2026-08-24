@@ -18,6 +18,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="System.Diagnostics.EventLog" Version="8.0.1" />
     <ProjectReference Include="..\Nexus.Intelligence.Contracts\Nexus.Intelligence.Contracts.csproj" />
     <ProjectReference Include="..\Nexus.Intelligence.Fabric\Nexus.Intelligence.Fabric.csproj" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
@@ -38,16 +39,14 @@
   </ItemGroup>
 
   <ItemGroup Condition="Exists('..\..\security\crash-report-public-key.pem')">
-    <EmbeddedResource Include="..\..\security\crash-report-public-key.pem"
-                      LogicalName="NexusMonach.crash-report-public-key.pem" />
+    <EmbeddedResource Include="..\..\security\crash-report-public-key.pem" LogicalName="NexusMonach.crash-report-public-key.pem" />
   </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="NexusMonach.Security.Tests" />
   </ItemGroup>
 
-  <Target Name="RequireSelfContainedReleasePublish" BeforeTargets="Publish"
-          Condition="'$(Configuration)' == 'Release' and ('$(SelfContained)' != 'true' or '$(RuntimeIdentifier)' != 'win-x64')">
+  <Target Name="RequireSelfContainedReleasePublish" BeforeTargets="Publish" Condition="'$(Configuration)' == 'Release' and ('$(SelfContained)' != 'true' or '$(RuntimeIdentifier)' != 'win-x64')">
     <Error Text="Release builds must be published as self-contained win-x64. Use --runtime win-x64 --self-contained true." />
   </Target>
 </Project>

@@ -10,6 +10,7 @@ using System.Windows;
 using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
 using NexusMonach.Models;
+using NexusMonach.Services.Diagnostics;
 
 namespace NexusMonach.Services;
 
@@ -449,9 +450,21 @@ public static partial class CrashReportService
         try
         {
             Directory.CreateDirectory(VaultPath);
+
+            // Причинный граф: хронология breadcrumbs + системные события
+            // Windows + само исключение. Корневая причина видна сразу, а не
+            // выискивается вручную по логам.
+            var exceptionType = exception.GetType().FullName ?? exception.GetType().Name;
+            var sanitizedMessage = SanitizeForReport(exception.Message);
+            var systemEvents = SystemEventReader.ReadRecent(TimeSpan.FromMinutes(10));
+            var causalGraph = CausalGraphBuilder.Build(new CausalGraphBuilder.CrashContext(
+                exceptionType, sanitizedMessage, LimitToken(component), LimitToken(stage),
+                Breadcrumbs.Select(b => (b.TimestampUtc, b.Component, b.Stage)).ToArray(),
+                systemEvents));
+
             var report = new CrashReport
             {
-                SchemaVersion = 1,
+                SchemaVersion = 2,
                 Id = Guid.NewGuid().ToString("N"),
                 TimestampUtc = DateTimeOffset.UtcNow,
                 Fatal = fatal,
@@ -461,19 +474,36 @@ public static partial class CrashReportService
                 ProcessArchitecture = RuntimeInformation.ProcessArchitecture.ToString(),
                 Component = LimitToken(component),
                 Stage = LimitToken(stage),
-                ExceptionType = exception.GetType().FullName ?? exception.GetType().Name,
-                Message = SanitizeForReport(exception.Message),
+                ExceptionType = exceptionType,
+                Message = sanitizedMessage,
                 StackTrace = FormatExceptionForReport(exception),
                 IntegrityStatus = GuardianRuntime.IntegrityStatus,
                 SafeMode = GuardianRuntime.IsSafeMode,
                 GuardianSession = GuardianRuntime.SessionId,
-                Breadcrumbs = Breadcrumbs.ToArray()
+                Breadcrumbs = Breadcrumbs.ToArray(),
+                CausalGraph = causalGraph
             };
-            var path = Path.Combine(VaultPath, $"{report.TimestampUtc:yyyyMMdd-HHmmss}-{report.Id}.pending.json");
+            var basePath = Path.Combine(VaultPath, $"{report.TimestampUtc:yyyyMMdd-HHmmss}-{report.Id}");
             lock (FileGate)
-                File.WriteAllText(path, JsonSerializer.Serialize(report, JsonOptions));
+            {
+                File.WriteAllText(basePath + ".pending.json", JsonSerializer.Serialize(report, JsonOptions));
+                // Стандартные выгрузки графа: Mermaid для issue, DOT для Graphviz,
+                // GraphML для Gephi. Падение экспорта не мешает основному рапорту.
+                TryWriteGraphArtifacts(basePath, causalGraph);
+            }
         }
         catch { /* Обработчик аварии не должен вызвать второе падение. */ }
+    }
+
+    private static void TryWriteGraphArtifacts(string basePath, CausalGraph causalGraph)
+    {
+        try
+        {
+            File.WriteAllText(basePath + ".pending.mermaid", CausalGraphExporter.ToMermaid(causalGraph));
+            File.WriteAllText(basePath + ".pending.dot", CausalGraphExporter.ToDot(causalGraph));
+            File.WriteAllText(basePath + ".pending.graphml", CausalGraphExporter.ToGraphML(causalGraph));
+        }
+        catch { /* Графовые выгрузки необязательны. */ }
     }
 
     private static void WriteSessionResult(bool cleanExit)
@@ -557,6 +587,7 @@ public static partial class CrashReportService
         public bool SafeMode { get; set; }
         public string GuardianSession { get; set; } = string.Empty;
         public IReadOnlyList<CrashBreadcrumb> Breadcrumbs { get; set; } = [];
+        public CausalGraph? CausalGraph { get; set; }
     }
 
     private sealed record CrashBreadcrumb(DateTimeOffset TimestampUtc, string Component, string Stage);
