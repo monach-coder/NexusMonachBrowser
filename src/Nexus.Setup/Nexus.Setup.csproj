@@ -9,7 +9,7 @@
     <AssemblyName>NexusMonach-Setup</AssemblyName>
     <RootNamespace>Nexus.Setup</RootNamespace>
     <ApplicationIcon>..\NexusMonach\Assets\nexus-monach.ico</ApplicationIcon>
-    <Version>2.9.0.0</Version>
+    <Version>$(NexusProductVersion)</Version>
     <Product>Nexus Monach Setup</Product>
     <!-- One-file self-contained: запускается на чистой Windows без .NET. -->
     <SelfContained>true</SelfContained>

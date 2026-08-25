@@ -1,5 +1,6 @@
 param(
     [switch]$OfficialGuardianBuild,
+    [string]$PrivateKeyPath,
     [switch]$SkipArchive,
     [string]$GuardianReportEndpoint = $env:NEXUS_GUARDIAN_REPORT_ENDPOINT,
     [string]$GuardianReportIngestKey = $env:NEXUS_GUARDIAN_REPORT_INGEST_KEY,
@@ -141,6 +142,13 @@ $manifestPrivateKey = $null
 if ($OfficialGuardianBuild) {
     $publicKey = Join-Path $root "security\integrity-public-key.pem"
     if (Test-Path $publicKey) { Copy-Item $publicKey $publish -Force }
+    # Официальная сборка подписывается ключом с доверенной машины:
+    # без подписи Guardian со встроенным ключом откажется запускаться.
+    if (-not [string]::IsNullOrWhiteSpace($PrivateKeyPath) -and (Test-Path $PrivateKeyPath)) {
+        $manifestPrivateKey = (Resolve-Path $PrivateKeyPath).Path
+    } else {
+        Write-Host "WARNING: official build without an integrity private key - manifest will be unsigned." -ForegroundColor Yellow
+    }
 } else {
     # Exercise the same signed-manifest path in a local build. This key remains
     # outside the portable archive and is ignored by Git.

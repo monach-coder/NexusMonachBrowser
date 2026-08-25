@@ -15,7 +15,11 @@ internal static class SilentUpdateCoordinator
 {
     private const string ReleaseApi =
         "https://api.github.com/repos/monach-coder/NexusMonachBrowser/releases/latest";
-    private const string ReleaseAssetName = "NexusMonach-Portable-win-x64.zip";
+    // Лёгкое ядро вместо полного архива: AI-файлы в обновлении не участвуют —
+    // остаются на месте (записи Pending в манифесте) и докачиваются сетевой
+    // поставкой только при смене версии моделей. Полный офлайн-архив больше
+    // лимита GitHub Release и для автообновления не используется.
+    private const string ReleaseAssetName = "nexus-core.zip";
     private const long MaxArchiveBytes = 8L * 1024 * 1024 * 1024;
     private const long MaxExpandedBytes = 12L * 1024 * 1024 * 1024;
     private const int MaxArchiveEntries = 150_000;
