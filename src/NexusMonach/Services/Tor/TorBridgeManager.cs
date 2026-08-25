@@ -48,10 +48,14 @@ public static class TorBridgeManager
     }
 
     /// <summary>
-    /// Генерирует полный torrc на основе пользовательских мостов и выбранного
-    /// транспорта. Файл кладётся во временную папку — основной torrc не трогаем.
+    /// Генерирует полный torrc на основе пользовательских мостов, релейного
+    /// моста и выбранного транспорта. Файл кладётся во временную папку —
+    /// основной torrc не трогаем.
     /// </summary>
-    public static string GenerateTorrc(List<ParsedBridge> bridges, int socksPort)
+    public static string GenerateTorrc(
+        List<ParsedBridge> bridges, int socksPort, bool relayEnabled = false,
+        string relayNickname = "", int relayOrPort = TorRelayService.DefaultOrPort,
+        int relayObfs4Port = TorRelayService.DefaultObfs4Port)
     {
         var lines = new List<string>
         {
@@ -112,12 +116,17 @@ public static class TorBridgeManager
             }
         }
 
+        // Релейный мост: эта копия браузера помогает цензурным пользователям.
+        lines.AddRange(TorRelayService.BuildRelayLines(
+            relayEnabled, relayNickname, relayOrPort, relayObfs4Port));
+
         return string.Join(Environment.NewLine, lines) + Environment.NewLine;
     }
 
     /// <summary>
-    /// Запускает Tor с мостами из настроек. Перезапускает, если Tor уже
-    /// работает с другим конфигом.
+    /// Запускает Tor с мостами и релеем из настроек. Перезапускает, если Tor
+    /// уже работает с другим конфигом. Сгенерированный torrc передаётся
+    /// процессу явно — основной torrc пользователя не используется.
     /// </summary>
     public static async Task<TorState> RestartWithBridgesAsync(
         BrowserSettings settings, CancellationToken ct = default)
@@ -125,15 +134,18 @@ public static class TorBridgeManager
         TorService.Stop();
 
         var bridges = ParseBridges(settings.TorCustomBridges);
-        var torrcContent = GenerateTorrc(bridges, TorService.SocksPort);
+        var torrcContent = GenerateTorrc(
+            bridges, TorService.SocksPort,
+            settings.TorRelayEnabled, settings.TorRelayNickname,
+            settings.TorRelayOrPort, settings.TorRelayObfs4Port);
 
-        // Записываем torrc во временную папку.
+        // Записываем torrc во временную папку и стартуем Tor именно с ним.
         var dataDir = Path.Combine(Path.GetTempPath(), "nexus-tor-data");
         Directory.CreateDirectory(dataDir);
         var torrcPath = Path.Combine(dataDir, "torrc");
         await File.WriteAllTextAsync(torrcPath, torrcContent, ct);
 
-        return await TorService.EnsureRunningAsync(ct);
+        return await TorService.EnsureRunningAsync(torrcPath, ct);
     }
 
     private static string? FindTorDirectory()

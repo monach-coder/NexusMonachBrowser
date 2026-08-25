@@ -19,10 +19,11 @@ public static class TorService
     public static bool IsManaged { get; private set; }
 
     /// <summary>
-    /// Запускает tor.exe с пользовательским torrc. Если torrc не найден —
-    /// минимальная конфигурация без мостов (только там, где Tor не душат).
+    /// Запускает tor.exe. Явный torrcPath — конфиг, сгенерированный браузером
+    /// (мосты + релей); без него используется torrc пользователя.
     /// </summary>
-    public static async Task<TorState> EnsureRunningAsync(CancellationToken ct = default)
+    public static async Task<TorState> EnsureRunningAsync(
+        string? torrcPath = null, CancellationToken ct = default)
     {
         if (IsRunning) return TorState.Connected;
         var exe = FindTor();
@@ -41,9 +42,8 @@ public static class TorService
                 RedirectStandardError = true,
                 WorkingDirectory = dir
             };
-            // torrc пользователя уже настроен — мосты, обфускация, всё готово.
             psi.ArgumentList.Add("-f");
-            psi.ArgumentList.Add(Path.Combine(dir, "torrc"));
+            psi.ArgumentList.Add(torrcPath ?? Path.Combine(dir, "torrc"));
             process = Process.Start(psi) ?? throw new InvalidOperationException("Tor не запустился.");
             _process = process;
             IsManaged = true;

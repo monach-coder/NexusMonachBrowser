@@ -312,6 +312,13 @@
                                 <TextBlock Text="Публичные мосты блокируют за минуты. Приватный мост на своём VPS ($3/мес) живёт долго."
                                            TextWrapping="Wrap" Margin="0,6,0,0" FontSize="11"
                                            Foreground="{StaticResource MutedTextBrush}" />
+                                <CheckBox x:Name="TorRelayCheck" Margin="0,14,0,6">
+                                    <TextBlock TextWrapping="Wrap"
+                                               Text="Работать мостом Tor — помогать пользователям цензурных сетей. Браузер никогда не становится выходным узлом; для работы извне нужен проброс портов 9101–9102 на роутере." />
+                                </CheckBox>
+                                <TextBlock x:Name="TorRelayStatusText" FontSize="11"
+                                           Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap"
+                                           Margin="0,4,0,0" />
                             </StackPanel>
                         </Border>
                     </StackPanel>

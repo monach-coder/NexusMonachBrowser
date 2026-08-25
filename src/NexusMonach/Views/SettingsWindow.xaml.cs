@@ -152,6 +152,8 @@ public partial class SettingsWindow : Window
         ProxyPortBox.Text = settings.ProxyPort.ToString();
         ProxyBypassBox.Text = settings.ProxyBypassList;
         TrailModeCheck.IsChecked = settings.TrailModeEnabled;
+        TorRelayCheck.IsChecked = settings.TorRelayEnabled;
+        UpdateRelayStatus(settings);
         TorBridgesBox.Text = settings.TorCustomBridges;
         UpdateTorStatus();
         HttpsFirstCheck.IsChecked = settings.HttpsFirstEnabled;
@@ -173,6 +175,15 @@ public partial class SettingsWindow : Window
             ShowSection(section);
             if (section == "Network") UpdateTorStatus();
         }
+    }
+
+    private void UpdateRelayStatus(BrowserSettings settings)
+    {
+        if (TorRelayStatusText is null) return;
+        var state = Services.Tor.TorRelayService.GetState(
+            settings.TorRelayEnabled, settings.TorRelayOrPort, settings.TorRelayObfs4Port);
+        TorRelayStatusText.Text = Services.Tor.TorRelayService.Describe(
+            state, settings.TorRelayOrPort, settings.TorRelayObfs4Port);
     }
 
     private async void TorStartButton_Click(object sender, RoutedEventArgs e)
@@ -331,6 +342,9 @@ public partial class SettingsWindow : Window
         _settings.ProxyBypassList = ProxyBypassBox.Text.Trim();
         _settings.TrailModeEnabled = TrailModeCheck.IsChecked == true;
         _settings.TorCustomBridges = TorBridgesBox.Text.Trim();
+        _settings.TorRelayEnabled = TorRelayCheck.IsChecked == true;
+        if (string.IsNullOrWhiteSpace(_settings.TorRelayNickname))
+            _settings.TorRelayNickname = Services.Tor.TorRelayService.DefaultNickname();
         if (_settings.TrailModeEnabled)
         {
             // «Режим След» применяет полную анонимную конфигурацию поверх

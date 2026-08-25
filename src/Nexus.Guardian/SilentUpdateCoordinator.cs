@@ -182,6 +182,8 @@ internal static class SilentUpdateCoordinator
                 throw new CryptographicException("Проверка установленного обновления не прошла: " +
                                                  string.Join("; ", result.Problems.Take(8)));
             File.Delete(PendingPath(guardianRoot));
+            // Каталог staging больше не нужен: обновление применено и проверено.
+            try { Directory.Delete(staging, recursive: true); } catch { }
             if (relaunch)
                 Process.Start(new ProcessStartInfo(Path.Combine(target, "NexusMonach.exe"))
                 {

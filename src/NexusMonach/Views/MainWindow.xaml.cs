@@ -388,6 +388,7 @@ public partial class MainWindow : Window
         // Сетевой Дозор запускается один раз и ловит сканеров.
         if (SettingsService.Current.TrailModeEnabled)
         {
+            StartTrailTorOnce();
             if (_networkWatchdog is null)
             {
                 _networkWatchdog = new Services.Tor.NetworkWatchdog();
@@ -430,6 +431,40 @@ public partial class MainWindow : Window
         else
             tab.Navigate(UrlService.Resolve(input));
         return Task.CompletedTask;
+    }
+
+    private static int _trailTorStarted;
+
+    /// <summary>
+    /// Автостарт Tor при Режиме След — один раз на сессию: Tor поднимается
+    /// с мостами пользователя и релейным мостом, если он включён.
+    /// </summary>
+    private static void StartTrailTorOnce()
+    {
+        if (Interlocked.Exchange(ref _trailTorStarted, 1) != 0) return;
+        if (Services.Tor.TorService.IsRunning) return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var settings = SettingsService.Current;
+                if (string.IsNullOrWhiteSpace(settings.TorRelayNickname))
+                {
+                    settings.TorRelayNickname = Services.Tor.TorRelayService.DefaultNickname();
+                    await SettingsService.SaveAsync(settings);
+                }
+                var state = await Services.Tor.TorBridgeManager.RestartWithBridgesAsync(settings);
+                CrashReportService.AddBreadcrumb("tor", "trail-autostart-" + state);
+                if (state == Services.Tor.TorState.Connected && settings.TorRelayEnabled)
+                    Services.Ui.Post(() => Services.VoiceAssistantService.Announce(
+                        "Режим След активен. Ваш браузер работает мостом Тор для цензурных пользователей.",
+                        Services.VoiceAnnouncementPriority.Important));
+            }
+            catch (Exception ex)
+            {
+                CrashReportService.RecordNonFatal("tor", "trail-autostart", ex);
+            }
+        });
     }
 
     private void BeginPendingSiteResearch(BrowserTab tab, string query, string trigger, string surface)

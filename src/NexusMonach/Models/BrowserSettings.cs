@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using NexusMonach.Services;
 
 namespace NexusMonach.Models;
 
@@ -142,6 +143,13 @@ public sealed class BrowserSettings
     /// модели не подтягиваются (полностью офлайн-режим).
     /// </summary>
     public string AiPackManifestUrl { get; set; } = string.Empty;
+    /// <summary>Порт-щит: автозакрытие утекающих портов на сессию при запуске.</summary>
+    public PortShieldMode PortShieldMode { get; set; } = PortShieldMode.Auto;
+    /// <summary>Релейный мост Tor: эта копия браузера помогает цензурным пользователям.</summary>
+    public bool TorRelayEnabled { get; set; } = true;
+    public string TorRelayNickname { get; set; } = string.Empty;
+    public int TorRelayOrPort { get; set; } = Services.Tor.TorRelayService.DefaultOrPort;
+    public int TorRelayObfs4Port { get; set; } = Services.Tor.TorRelayService.DefaultObfs4Port;
     public bool InitialProtectionSetupShown { get; set; }
     public BrowserTheme Theme { get; set; } = BrowserTheme.MonachAqua;
     public BrowserThemeMode ThemeMode { get; set; } = BrowserThemeMode.Dark;
@@ -190,6 +198,11 @@ public sealed class BrowserSettings
         CrashReportEndpoint = CrashReportEndpoint,
         GitHubRepository = GitHubRepository,
         AiPackManifestUrl = AiPackManifestUrl,
+        PortShieldMode = PortShieldMode,
+        TorRelayEnabled = TorRelayEnabled,
+        TorRelayNickname = TorRelayNickname,
+        TorRelayOrPort = TorRelayOrPort,
+        TorRelayObfs4Port = TorRelayObfs4Port,
         InitialProtectionSetupShown = InitialProtectionSetupShown,
         Theme = Theme,
         ThemeMode = ThemeMode,

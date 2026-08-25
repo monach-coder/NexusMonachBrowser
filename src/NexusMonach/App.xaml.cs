@@ -276,6 +276,8 @@ public partial class App : Application
                     GpuRecoveryService.StartIfCautiousMode();
                     // Недостающие AI-модели подтягиваются по сети в фоне.
                     Services.OnlinePack.AiPackFetchService.StartBackgroundFetch();
+                    // Порт-щит: скан и автозакрытие утекающих портов на сессию.
+                    Services.PortShieldService.StartAsync(SettingsService.Current);
                 }
             }
             if (smokeSelfTest)
@@ -341,6 +343,8 @@ public partial class App : Application
         ShutdownCoordinator.RunStep("video-voice", VideoDubbingVoiceService.Shutdown, timeout);
         ShutdownCoordinator.RunStep("assistant-voice", VoiceAssistantService.Shutdown, timeout);
         ShutdownCoordinator.RunStep("gpu-recovery", GpuRecoveryService.Stop, timeout);
+        // Правила порт-щита живут только пока работает браузер.
+        Services.PortShieldService.RemoveSessionShield();
         CrashReportService.MarkCleanExit();
         base.OnExit(e);
     }
