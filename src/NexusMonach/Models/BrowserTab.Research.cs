@@ -33,7 +33,11 @@ public sealed partial class BrowserTab
             })();
             """);
         try { return JsonSerializer.Deserialize<string>(json) ?? string.Empty; }
-        catch { return string.Empty; }
+        catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("browser-tab", "GetReadablePageTextAsync", swallowed);
+            return string.Empty;
+        }
     }
 
     public async Task<IReadOnlyList<string>> GetResearchLinksAsync(string query, int maximum = 12)
@@ -77,7 +81,11 @@ public sealed partial class BrowserTab
             })();
             """);
         try { return JsonSerializer.Deserialize<List<string>>(json) ?? []; }
-        catch { return []; }
+        catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("browser-tab", "GetResearchLinksAsync", swallowed);
+            return [];
+        }
     }
 
     public async Task<string> GetAgentDomSnapshotAsync()
@@ -142,7 +150,11 @@ public sealed partial class BrowserTab
             var json = await Core.ExecuteScriptAsync(script);
             string result;
             try { result = JsonSerializer.Deserialize<string>(json) ?? json; }
-            catch { result = json; }
+            catch (Exception swallowed)
+            {
+                Services.SwallowLog.Log("browser-tab", "ExecuteAgentPlanAsync", swallowed);
+                result = json;
+            }
             results.Add(step.Description + ": " + result);
             await Task.Delay(250);
         }
@@ -244,7 +256,11 @@ public sealed partial class BrowserTab
               return location.href+'#'+nodes.length+'#'+document.documentElement.scrollHeight+'#'+sample;})()
             """);
         try { return JsonSerializer.Deserialize<string>(json) ?? string.Empty; }
-        catch (JsonException) { return string.Empty; }
+        catch (JsonException swallowed)
+        {
+            Services.SwallowLog.Log("browser-tab", "GetShoppingCatalogFingerprintAsync", swallowed);
+            return string.Empty;
+        }
     }
 
     public async Task<string> ExtractShoppingCardsAsync()
@@ -359,13 +375,21 @@ public sealed partial class BrowserTab
         var json = await Core.ExecuteScriptAsync(script);
         string? dataUrl;
         try { dataUrl = JsonSerializer.Deserialize<string>(json); }
-        catch (JsonException) { return null; }
+        catch (JsonException swallowed)
+        {
+            Services.SwallowLog.Log("browser-tab", "CaptureShoppingProductImageAsync", swallowed);
+            return null;
+        }
         if (string.IsNullOrWhiteSpace(dataUrl) || !dataUrl.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
             return null;
         var separator = dataUrl.IndexOf(',');
         if (separator < 0 || dataUrl.Length - separator > 1_500_000) return null;
         try { return Convert.FromBase64String(dataUrl[(separator + 1)..]); }
-        catch (FormatException) { return null; }
+        catch (FormatException swallowed)
+        {
+            Services.SwallowLog.Log("browser-tab", "CaptureShoppingProductImageAsync", swallowed);
+            return null;
+        }
     }
 
     public async Task<string?> GetNextShoppingPageUrlAsync()
@@ -383,7 +407,11 @@ public sealed partial class BrowserTab
             """);
         string? value;
         try { value = JsonSerializer.Deserialize<string>(json); }
-        catch { return null; }
+        catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("browser-tab", "GetNextShoppingPageUrlAsync", swallowed);
+            return null;
+        }
         if (!Uri.TryCreate(value, UriKind.Absolute, out var next) ||
             !Uri.TryCreate(CurrentUrl, UriKind.Absolute, out var current) ||
             !IsSameSite(next.Host, current.Host) ||
@@ -400,7 +428,11 @@ public sealed partial class BrowserTab
         void Handler(object? _, CoreWebView2NavigationCompletedEventArgs e) => source.TrySetResult(e);
         Core.NavigationCompleted += Handler;
         try { Core.Navigate(url); return (await source.Task.WaitAsync(timeout)).IsSuccess; }
-        catch (TimeoutException) { return false; }
+        catch (TimeoutException swallowed)
+        {
+            Services.SwallowLog.Log("browser-tab", "NavigateAndWaitAsync", swallowed);
+            return false;
+        }
         finally { Core.NavigationCompleted -= Handler; }
     }
 
@@ -411,7 +443,11 @@ public sealed partial class BrowserTab
         void Handler(object? _, CoreWebView2NavigationCompletedEventArgs e) => source.TrySetResult(e);
         Core.NavigationCompleted += Handler;
         try { Core.Navigate(url); return (await source.Task.WaitAsync(timeout)).IsSuccess; }
-        catch (TimeoutException) { return false; }
+        catch (TimeoutException swallowed)
+        {
+            Services.SwallowLog.Log("browser-tab", "NavigateInternalAndWaitAsync", swallowed);
+            return false;
+        }
         finally { Core.NavigationCompleted -= Handler; }
     }
 

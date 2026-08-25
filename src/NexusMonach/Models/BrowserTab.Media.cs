@@ -37,7 +37,11 @@ public sealed partial class BrowserTab
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
             return state is { Duration: > 0 } ? state : null;
         }
-        catch { return null; }
+        catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("browser-tab", "GetVideoStateAsync", swallowed);
+            return null;
+        }
     }
 
     /// <summary>Устанавливает скорость анализа (ускоренный прогон фильма).</summary>
@@ -283,7 +287,11 @@ public sealed partial class BrowserTab
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
             return (payload?.Url, payload?.Referrer ?? CurrentUrl);
         }
-        catch { return (null, CurrentUrl); }
+        catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("browser-tab", "GetVideoAudioTrackUrlAsync", swallowed);
+            return (null, CurrentUrl);
+        }
     }
 
     private sealed record AudioTrackProbe(string Url, string Referrer);
@@ -334,7 +342,11 @@ public sealed partial class BrowserTab
                 ? duration
                 : null;
         }
-        catch { return null; }
+        catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("browser-tab", "GetActiveVideoDurationAsync", swallowed);
+            return null;
+        }
     }
 
     /// <summary>
@@ -470,7 +482,11 @@ public sealed partial class BrowserTab
                 StringComparison.Ordinal);
         var json = await Core.ExecuteScriptAsync(script).WaitAsync(cancellationToken);
         try { return JsonSerializer.Deserialize<AudioCaptureResult>(json) ?? new AudioCaptureResult { Error = "Пустой результат захвата." }; }
-        catch { return new AudioCaptureResult { Error = "Не удалось прочитать аудиопоток страницы." }; }
+        catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("browser-tab", "CaptureActiveVideoAudioAsync", swallowed);
+            return new AudioCaptureResult { Error = "Не удалось прочитать аудиопоток страницы." };
+        }
     }
 
     public async Task BeginLiveAudioTranslationAsync()

@@ -50,7 +50,11 @@ public sealed partial class BrowserTab
                 JsonSerializer.Serialize(PageTranslationPolicy.ArticleExclusionSelector), StringComparison.Ordinal);
         var json = await Core.ExecuteScriptAsync(script);
         try { return JsonSerializer.Deserialize<List<TranslationSegment>>(json) ?? []; }
-        catch { return []; }
+        catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("browser-tab", "CaptureTranslationSegmentsAsync", swallowed);
+            return [];
+        }
     }
 
     public async Task<IReadOnlyList<TranslationSegment>> CaptureInteractiveTranslationSegmentsAsync()
@@ -100,7 +104,11 @@ public sealed partial class BrowserTab
                 StringComparison.Ordinal);
         var json = await Core.ExecuteScriptAsync(script);
         try { return JsonSerializer.Deserialize<List<TranslationSegment>>(json) ?? []; }
-        catch { return []; }
+        catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("browser-tab", "CaptureInteractiveTranslationSegmentsAsync", swallowed);
+            return [];
+        }
     }
 
     public async Task<int> ApplyInteractiveTranslationSegmentsAsync(

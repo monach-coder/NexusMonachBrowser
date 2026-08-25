@@ -218,8 +218,9 @@ public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
         {
             await Core.ExecuteScriptAsync($"window.nexusConfigureStartPage?.({configuration});");
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException swallowed)
         {
+            Services.SwallowLog.Log("browser-tab", "ConfigureStartPageAsync", swallowed);
             // The tab may have navigated away while the theme was being applied.
         }
     }
@@ -250,7 +251,11 @@ public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
         if (Core is null || _isSuspended || IsLoading || Core.IsDocumentPlayingAudio)
             return;
         try { _isSuspended = await Core.TrySuspendAsync(); }
-        catch { _isSuspended = false; }
+        catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("browser-tab", "TrySuspendAsync", swallowed);
+            _isSuspended = false;
+        }
     }
 
     public TabNetworkSnapshot GetNetworkSnapshot()

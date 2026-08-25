@@ -50,8 +50,9 @@ public sealed partial class BrowserTab
             Core.Reload();
             return true;
         }
-        catch
+        catch (Exception swallowed)
         {
+            Services.SwallowLog.Log("browser-tab", "ClearCurrentSiteDataAsync", swallowed);
             return false;
         }
     }
@@ -106,8 +107,9 @@ public sealed partial class BrowserTab
             return JsonSerializer.Deserialize<SecureRestartTabState>(json,
                        new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? fallback;
         }
-        catch
+        catch (Exception swallowed)
         {
+            Services.SwallowLog.Log("browser-tab", "CaptureSecureRestartStateAsync", swallowed);
             return fallback;
         }
     }
@@ -159,7 +161,11 @@ public sealed partial class BrowserTab
                 _pendingRestartState = null;
             }
         }
-        catch { /* Неподдерживаемая страница открывается без восстановления полей. */ }
+        catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("browser-tab", "TryRestoreSecureRestartStateAsync", swallowed);
+            /* Неподдерживаемая страница открывается без восстановления полей. */
+        }
         finally { _restartStateRestoreRunning = false; }
     }
 
