@@ -216,22 +216,20 @@
                                                Margin="0,12,0,5" />
                                     <TextBox x:Name="CrashReportEndpointBox" Padding="9,7" />
                                 </StackPanel>
-                                <StackPanel x:Name="MatrixSettingsPanel" Visibility="Collapsed">
-                                    <TextBlock Text="Matrix homeserver" Margin="0,12,0,5" />
-                                    <TextBox x:Name="MatrixHomeserverBox" Padding="9,7"
-                                             ToolTip="Например: https://matrix.example.org" />
-                                    <TextBlock Text="Room ID" Margin="0,12,0,5" />
-                                    <TextBox x:Name="MatrixRoomIdBox" Padding="9,7"
-                                             ToolTip="Внутренний ID вида !room:example.org" />
-                                    <TextBlock Text="Access token бота" Margin="0,12,0,5" />
-                                    <PasswordBox x:Name="MatrixAccessTokenBox" Padding="9,7" />
-                                    <TextBlock x:Name="MatrixTokenStatusText" Margin="0,5,0,0"
+                                <StackPanel x:Name="GitHubSettingsPanel" Visibility="Collapsed">
+                                    <TextBlock Text="Репозиторий GitHub (владелец/имя)" Margin="0,12,0,5" />
+                                    <TextBox x:Name="GitHubRepositoryBox" Padding="9,7"
+                                             ToolTip="Например: monach-coder/NexusMonachBrowser" />
+                                    <TextBlock Text="Access token (fine-grained PAT, только Issues: Read &amp; Write)"
+                                               Margin="0,12,0,5" />
+                                    <PasswordBox x:Name="GitHubAccessTokenBox" Padding="9,7" />
+                                    <TextBlock x:Name="GitHubTokenStatusText" Margin="0,5,0,0"
                                                FontSize="11" Foreground="{StaticResource MutedTextBrush}" />
-                                    <CheckBox x:Name="DeleteMatrixTokenCheck"
-                                              Content="Удалить ранее сохранённый Matrix token" />
-                                    <Button Content="Проверить Matrix" Style="{StaticResource ActionButton}"
+                                    <CheckBox x:Name="DeleteGitHubTokenCheck"
+                                              Content="Удалить ранее сохранённый token" />
+                                    <Button Content="Проверить GitHub" Style="{StaticResource ActionButton}"
                                             HorizontalAlignment="Left" Margin="0,8,0,0"
-                                            Click="TestMatrix_Click" />
+                                            Click="TestGitHub_Click" />
                                 </StackPanel>
                             </StackPanel>
                         </Border>

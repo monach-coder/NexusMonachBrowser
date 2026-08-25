@@ -88,7 +88,7 @@ public partial class SettingsWindow : Window
         var crashDestinationChoices = new[]
         {
             new Choice<CrashReportDestination>("HTTPS-приёмник", CrashReportDestination.HttpsCollector),
-            new Choice<CrashReportDestination>("Напрямую в Matrix", CrashReportDestination.MatrixDirect)
+            new Choice<CrashReportDestination>("В GitHub Issues", CrashReportDestination.GitHubIssues)
         };
         var voiceChoices = new[]
         {
@@ -158,11 +158,10 @@ public partial class SettingsWindow : Window
         PrivacyMonitorCheck.IsChecked = settings.ShowPrivacyMonitor;
         PreventWebRtcLeakCheck.IsChecked = settings.PreventWebRtcIpLeak;
         CrashReportEndpointBox.Text = settings.CrashReportEndpoint;
-        MatrixHomeserverBox.Text = settings.MatrixHomeserver;
-        MatrixRoomIdBox.Text = settings.MatrixRoomId;
-        MatrixTokenStatusText.Text = WindowsCredentialStore.HasMatrixAccessToken()
+        GitHubRepositoryBox.Text = settings.GitHubRepository;
+        GitHubTokenStatusText.Text = WindowsCredentialStore.HasGitHubAccessToken()
             ? "Token уже сохранён в Windows Credential Manager. Оставьте поле пустым, чтобы сохранить его."
-            : "Token ещё не сохранён. Создайте отдельного Matrix-бота и вставьте его token.";
+            : "Token ещё не сохранён. Создайте fine-grained PAT с правами Issues: Read & Write на нужный репозиторий.";
         UpdateCrashDestinationVisibility();
         ShowSection("Search");
     }
@@ -247,16 +246,16 @@ public partial class SettingsWindow : Window
 
     private void UpdateCrashDestinationVisibility()
     {
-        if (CollectorSettingsPanel is null || MatrixSettingsPanel is null ||
+        if (CollectorSettingsPanel is null || GitHubSettingsPanel is null ||
             CrashDestinationLabel is null || CrashReportDestinationCombo is null) return;
         var localOnly = CrashReportModeCombo.SelectedItem is Choice<CrashReportMode> mode &&
                         mode.Value == CrashReportMode.LocalOnly;
-        var matrix = CrashReportDestinationCombo.SelectedItem is Choice<CrashReportDestination> choice &&
-                     choice.Value == CrashReportDestination.MatrixDirect;
+        var gitHub = CrashReportDestinationCombo.SelectedItem is Choice<CrashReportDestination> choice &&
+                     choice.Value == CrashReportDestination.GitHubIssues;
         CrashDestinationLabel.Visibility = localOnly ? Visibility.Collapsed : Visibility.Visible;
         CrashReportDestinationCombo.Visibility = localOnly ? Visibility.Collapsed : Visibility.Visible;
-        CollectorSettingsPanel.Visibility = !localOnly && !matrix ? Visibility.Visible : Visibility.Collapsed;
-        MatrixSettingsPanel.Visibility = !localOnly && matrix ? Visibility.Visible : Visibility.Collapsed;
+        CollectorSettingsPanel.Visibility = !localOnly && !gitHub ? Visibility.Visible : Visibility.Collapsed;
+        GitHubSettingsPanel.Visibility = !localOnly && gitHub ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void SearchEngineCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
@@ -350,8 +349,7 @@ public partial class SettingsWindow : Window
         _settings.CrashReportDestination = CrashReportDestinationCombo.SelectedItem is Choice<CrashReportDestination> destination
             ? destination.Value : CrashReportDestination.HttpsCollector;
         _settings.CrashReportEndpoint = CrashReportEndpointBox.Text.Trim();
-        _settings.MatrixHomeserver = MatrixHomeserverBox.Text.Trim().TrimEnd('/');
-        _settings.MatrixRoomId = MatrixRoomIdBox.Text.Trim();
+        _settings.GitHubRepository = GitHubRepositoryBox.Text.Trim();
         if (_settings.CrashReportMode != CrashReportMode.LocalOnly &&
             _settings.CrashReportDestination == CrashReportDestination.HttpsCollector &&
             !string.IsNullOrWhiteSpace(_settings.CrashReportEndpoint) &&
@@ -363,20 +361,20 @@ public partial class SettingsWindow : Window
             CrashReportEndpointBox.Focus();
             return;
         }
-        if (_settings.CrashReportDestination == CrashReportDestination.MatrixDirect &&
+        if (_settings.CrashReportDestination == CrashReportDestination.GitHubIssues &&
             _settings.CrashReportMode != CrashReportMode.LocalOnly &&
-            !TryValidateMatrixSettings(requireToken: true)) return;
+            !TryValidateGitHubSettings(requireToken: true)) return;
 
         try
         {
-            if (DeleteMatrixTokenCheck.IsChecked == true)
-                WindowsCredentialStore.DeleteMatrixAccessToken();
-            else if (!string.IsNullOrWhiteSpace(MatrixAccessTokenBox.Password))
-                WindowsCredentialStore.SaveMatrixAccessToken(MatrixAccessTokenBox.Password);
+            if (DeleteGitHubTokenCheck.IsChecked == true)
+                WindowsCredentialStore.DeleteGitHubAccessToken();
+            else if (!string.IsNullOrWhiteSpace(GitHubAccessTokenBox.Password))
+                WindowsCredentialStore.SaveGitHubAccessToken(GitHubAccessTokenBox.Password);
         }
         catch (Exception ex)
         {
-            GlassDialogWindow.Show(this, "Не удалось сохранить Matrix token в Windows Credential Manager:\n\n" + ex.Message,
+            GlassDialogWindow.Show(this, "Не удалось сохранить GitHub token в Windows Credential Manager:\n\n" + ex.Message,
                 "Nexus Guardian", MessageBoxButton.OK, MessageBoxImage.Error);
             return;
         }
@@ -399,21 +397,20 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private async void TestMatrix_Click(object sender, RoutedEventArgs e)
+    private async void TestGitHub_Click(object sender, RoutedEventArgs e)
     {
-        if (!TryValidateMatrixSettings(requireToken: true)) return;
-        var token = string.IsNullOrWhiteSpace(MatrixAccessTokenBox.Password)
-            ? WindowsCredentialStore.ReadMatrixAccessToken()
-            : MatrixAccessTokenBox.Password.Trim();
+        if (!TryValidateGitHubSettings(requireToken: true)) return;
+        var token = string.IsNullOrWhiteSpace(GitHubAccessTokenBox.Password)
+            ? WindowsCredentialStore.ReadGitHubAccessToken()
+            : GitHubAccessTokenBox.Password.Trim();
         if (string.IsNullOrWhiteSpace(token)) return;
 
         var button = (System.Windows.Controls.Button)sender;
         button.IsEnabled = false;
         try
         {
-            var result = await MatrixCrashReportTransport.TestAsync(
-                MatrixHomeserverBox.Text.Trim(), MatrixRoomIdBox.Text.Trim(), token);
-            GlassDialogWindow.Show(this, result.Message, "Nexus Guardian · Matrix", MessageBoxButton.OK,
+            var result = await GitHubCrashReportTransport.TestAsync(GitHubRepositoryBox.Text.Trim(), token);
+            GlassDialogWindow.Show(this, result.Message, "Nexus Guardian · GitHub", MessageBoxButton.OK,
                 result.Success ? MessageBoxImage.Information : MessageBoxImage.Warning);
         }
         finally { button.IsEnabled = true; }
@@ -425,30 +422,24 @@ public partial class SettingsWindow : Window
         window.ShowDialog();
     }
 
-    private bool TryValidateMatrixSettings(bool requireToken)
+    private bool TryValidateGitHubSettings(bool requireToken)
     {
-        var homeserver = MatrixHomeserverBox.Text.Trim();
-        if (!Uri.TryCreate(homeserver, UriKind.Absolute, out var matrixUri) || matrixUri.Scheme != Uri.UriSchemeHttps)
+        var repository = GitHubRepositoryBox.Text.Trim();
+        if (!GitHubCrashReportTransport.IsValidRepository(repository))
         {
-            GlassDialogWindow.Show(this, "Matrix homeserver должен быть абсолютным HTTPS-адресом.",
+            GlassDialogWindow.Show(this,
+                "Репозиторий указывается в формате «владелец/имя», например monach-coder/NexusMonachBrowser.",
                 "Nexus Guardian", MessageBoxButton.OK, MessageBoxImage.Warning);
-            MatrixHomeserverBox.Focus();
+            GitHubRepositoryBox.Focus();
             return false;
         }
-        if (!MatrixRoomIdBox.Text.Trim().StartsWith("!", StringComparison.Ordinal) ||
-            !MatrixRoomIdBox.Text.Contains(':'))
+        if (requireToken && string.IsNullOrWhiteSpace(GitHubAccessTokenBox.Password) &&
+            !WindowsCredentialStore.HasGitHubAccessToken())
         {
-            GlassDialogWindow.Show(this, "Укажите внутренний Matrix Room ID вида !room:server, а не название комнаты.",
+            GlassDialogWindow.Show(this,
+                "Укажите access token: fine-grained PAT с правами Issues: Read & Write на выбранный репозиторий.",
                 "Nexus Guardian", MessageBoxButton.OK, MessageBoxImage.Warning);
-            MatrixRoomIdBox.Focus();
-            return false;
-        }
-        if (requireToken && string.IsNullOrWhiteSpace(MatrixAccessTokenBox.Password) &&
-            !WindowsCredentialStore.HasMatrixAccessToken())
-        {
-            GlassDialogWindow.Show(this, "Укажите access token отдельного Matrix-бота.",
-                "Nexus Guardian", MessageBoxButton.OK, MessageBoxImage.Warning);
-            MatrixAccessTokenBox.Focus();
+            GitHubAccessTokenBox.Focus();
             return false;
         }
         return true;

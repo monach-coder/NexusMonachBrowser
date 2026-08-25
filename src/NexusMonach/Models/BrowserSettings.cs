@@ -49,7 +49,7 @@ public enum CrashReportMode
 public enum CrashReportDestination
 {
     HttpsCollector,
-    MatrixDirect
+    GitHubIssues
 }
 
 public enum BrowserTheme
@@ -135,8 +135,8 @@ public sealed class BrowserSettings
     public CrashReportMode CrashReportMode { get; set; } = CrashReportMode.LocalOnly;
     public CrashReportDestination CrashReportDestination { get; set; } = CrashReportDestination.HttpsCollector;
     public string CrashReportEndpoint { get; set; } = string.Empty;
-    public string MatrixHomeserver { get; set; } = string.Empty;
-    public string MatrixRoomId { get; set; } = string.Empty;
+    /// <summary>Репозиторий приёма крашей в формате «владелец/имя».</summary>
+    public string GitHubRepository { get; set; } = "monach-coder/NexusMonachBrowser";
     public bool InitialProtectionSetupShown { get; set; }
     public BrowserTheme Theme { get; set; } = BrowserTheme.MonachAqua;
     public BrowserThemeMode ThemeMode { get; set; } = BrowserThemeMode.Dark;
@@ -183,8 +183,7 @@ public sealed class BrowserSettings
         CrashReportMode = CrashReportMode,
         CrashReportDestination = CrashReportDestination,
         CrashReportEndpoint = CrashReportEndpoint,
-        MatrixHomeserver = MatrixHomeserver,
-        MatrixRoomId = MatrixRoomId,
+        GitHubRepository = GitHubRepository,
         InitialProtectionSetupShown = InitialProtectionSetupShown,
         Theme = Theme,
         ThemeMode = ThemeMode,

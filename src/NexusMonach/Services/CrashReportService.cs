@@ -173,9 +173,9 @@ public static partial class CrashReportService
         get
         {
             var settings = SettingsService.Current;
-            return settings.CrashReportDestination == CrashReportDestination.MatrixDirect
-                ? IsHttps(settings.MatrixHomeserver) && !string.IsNullOrWhiteSpace(settings.MatrixRoomId) &&
-                  WindowsCredentialStore.HasMatrixAccessToken()
+            return settings.CrashReportDestination == CrashReportDestination.GitHubIssues
+                ? GitHubCrashReportTransport.IsValidRepository(settings.GitHubRepository) &&
+                  WindowsCredentialStore.HasGitHubAccessToken()
                 : IsHttps(settings.CrashReportEndpoint);
         }
     }
@@ -186,12 +186,13 @@ public static partial class CrashReportService
         if (settings.CrashReportMode == CrashReportMode.LocalOnly) return 0;
         if (settings.CrashReportMode == CrashReportMode.AskBeforeSending && !userApproved) return 0;
         Uri? endpoint = null;
-        string? matrixToken = null;
-        if (settings.CrashReportDestination == CrashReportDestination.MatrixDirect)
+        string? gitHubToken = null;
+        var gitHub = settings.CrashReportDestination == CrashReportDestination.GitHubIssues;
+        if (gitHub)
         {
-            if (!IsHttps(settings.MatrixHomeserver) || string.IsNullOrWhiteSpace(settings.MatrixRoomId)) return 0;
-            matrixToken = WindowsCredentialStore.ReadMatrixAccessToken();
-            if (string.IsNullOrWhiteSpace(matrixToken)) return 0;
+            if (!GitHubCrashReportTransport.IsValidRepository(settings.GitHubRepository)) return 0;
+            gitHubToken = WindowsCredentialStore.ReadGitHubAccessToken();
+            if (string.IsNullOrWhiteSpace(gitHubToken)) return 0;
         }
         else if (!Uri.TryCreate(settings.CrashReportEndpoint, UriKind.Absolute, out endpoint) ||
                  endpoint.Scheme != Uri.UriSchemeHttps)
@@ -206,9 +207,9 @@ public static partial class CrashReportService
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                var delivered = settings.CrashReportDestination == CrashReportDestination.MatrixDirect
-                    ? await MatrixCrashReportTransport.SendReportAsync(client, settings.MatrixHomeserver,
-                        settings.MatrixRoomId, matrixToken!, file, cancellationToken)
+                var delivered = gitHub
+                    ? await GitHubCrashReportTransport.SendReportAsync(
+                        client, settings.GitHubRepository, gitHubToken!, file, cancellationToken)
                     : await PostToCollectorAsync(client, endpoint!, file, cancellationToken);
                 if (!delivered) continue;
                 var sentPath = file.EndsWith(".pending.json", StringComparison.OrdinalIgnoreCase)
