@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO.Compression;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace Nexus.Guardian;
@@ -189,7 +190,19 @@ internal static class SilentUpdateCoordinator
                 })?.Dispose();
             return 0;
         }
-        catch { return 5; }
+        catch (Exception ex)
+        {
+            // Молчаливый отказ обновления — худший исход для диагностики:
+            // причина обязана остаться на диске для следующего рапорта.
+            try
+            {
+                File.WriteAllText(Path.Combine(guardianRoot, "Updates", "apply-error.log"),
+                    DateTimeOffset.UtcNow.ToString("O") + " " + ex + Environment.NewLine,
+                    new UTF8Encoding(false));
+            }
+            catch { }
+            return 5;
+        }
     }
 
     internal static void ExtractArchiveSafely(string archivePath, string destination)
