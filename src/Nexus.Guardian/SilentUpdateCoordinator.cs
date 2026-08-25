@@ -244,8 +244,14 @@ internal static class SilentUpdateCoordinator
         var entries = newManifest.Files.OrderBy(entry =>
             entry.Path.Equals("NexusMonach.exe", StringComparison.OrdinalIgnoreCase) ? 1 : 0).ToArray();
         foreach (var entry in entries)
-            CopyAtomically(Path.Combine(staging, entry.Path.Replace('/', Path.DirectorySeparatorChar)),
-                Path.Combine(target, entry.Path.Replace('/', Path.DirectorySeparatorChar)));
+        {
+            var relative = entry.Path.Replace('/', Path.DirectorySeparatorChar);
+            var source = Path.Combine(staging, relative);
+            // Pending-файлы (AI-пакеты) приезжают сетевой поставкой, а не ядром
+            // обновления: их отсутствие в staging — норма, а не ошибка.
+            if (entry.Pending && !File.Exists(source)) continue;
+            CopyAtomically(source, Path.Combine(target, relative));
+        }
 
         if (oldManifest is not null)
         {
