@@ -54,6 +54,11 @@ public partial class SettingsWindow : Window
             new Choice<BrowserTheme>("Forest — спокойный зелёный", BrowserTheme.Forest),
             new Choice<BrowserTheme>("Amethyst — тёмный фиолетовый", BrowserTheme.Amethyst)
         };
+        var themeModeChoices = new[]
+        {
+            new Choice<BrowserThemeMode>("Тёмный — тёмный фон и светлый текст", BrowserThemeMode.Dark),
+            new Choice<BrowserThemeMode>("Светлый — светлый фон и тёмный текст", BrowserThemeMode.Light)
+        };
         var proxyChoices = new[]
         {
             new Choice<ProxyKind>("SOCKS5 — подходит для Tor и локальных туннелей", ProxyKind.Socks5),
@@ -83,7 +88,7 @@ public partial class SettingsWindow : Window
         var crashDestinationChoices = new[]
         {
             new Choice<CrashReportDestination>("HTTPS-приёмник", CrashReportDestination.HttpsCollector),
-            new Choice<CrashReportDestination>("Напрямую в Matrix", CrashReportDestination.MatrixDirect)
+            new Choice<CrashReportDestination>("В GitHub Issues", CrashReportDestination.GitHubIssues)
         };
         var voiceChoices = new[]
         {
@@ -91,24 +96,45 @@ public partial class SettingsWindow : Window
             new Choice<VoiceAssistantMode>("Только важное — рекомендуется", VoiceAssistantMode.ImportantOnly),
             new Choice<VoiceAssistantMode>("Помощник — важное и ход операций", VoiceAssistantMode.Assistant)
         };
+        var neuralVoiceChoices = new[]
+        {
+            new Choice<NeuralVoiceProfile>("Ксения · женский (рекомендуется)", NeuralVoiceProfile.Natasha),
+            new Choice<NeuralVoiceProfile>("Ирина · женский, спокойный", NeuralVoiceProfile.Irina),
+            new Choice<NeuralVoiceProfile>("Аврора · женский, выразительный", NeuralVoiceProfile.Aurora),
+            new Choice<NeuralVoiceProfile>("Евгений · мужский", NeuralVoiceProfile.Eugene)
+        };
+        var videoTranslationChoices = new[]
+        {
+            new Choice<VideoTranslationMode>("Быстрый · минимальная задержка", VideoTranslationMode.Fast),
+            new Choice<VideoTranslationMode>("Сбалансированный · рекомендуется", VideoTranslationMode.Balanced),
+            new Choice<VideoTranslationMode>("Качественный · больше контекста", VideoTranslationMode.Quality)
+        };
         SearchEngineCombo.ItemsSource = searchChoices;
         PrivacyLevelCombo.ItemsSource = privacyChoices;
         ThemeCombo.ItemsSource = themeChoices;
+        ThemeModeCombo.ItemsSource = themeModeChoices;
         ProxyTypeCombo.ItemsSource = proxyChoices;
         SecureDnsModeCombo.ItemsSource = secureDnsModeChoices;
         SecureDnsProviderCombo.ItemsSource = secureDnsProviderChoices;
         CrashReportModeCombo.ItemsSource = crashChoices;
         CrashReportDestinationCombo.ItemsSource = crashDestinationChoices;
         VoiceModeCombo.ItemsSource = voiceChoices;
+        NeuralVoiceCombo.ItemsSource = neuralVoiceChoices;
+        VideoTranslationModeCombo.ItemsSource = videoTranslationChoices;
         SearchEngineCombo.SelectedItem = searchChoices.FirstOrDefault(x => x.Value == settings.SearchEngine) ?? searchChoices[0];
         PrivacyLevelCombo.SelectedItem = privacyChoices.First(x => x.Value == settings.PrivacyLevel);
         ThemeCombo.SelectedItem = themeChoices.First(x => x.Value == settings.Theme);
+        ThemeModeCombo.SelectedItem = themeModeChoices.First(x => x.Value == settings.ThemeMode);
         ProxyTypeCombo.SelectedItem = proxyChoices.First(x => x.Value == settings.ProxyKind);
         SecureDnsModeCombo.SelectedItem = secureDnsModeChoices.First(x => x.Value == settings.SecureDnsMode);
         SecureDnsProviderCombo.SelectedItem = secureDnsProviderChoices.First(x => x.Value == settings.SecureDnsProvider);
         CrashReportModeCombo.SelectedItem = crashChoices.First(x => x.Value == settings.CrashReportMode);
         CrashReportDestinationCombo.SelectedItem = crashDestinationChoices.First(x => x.Value == settings.CrashReportDestination);
         VoiceModeCombo.SelectedItem = voiceChoices.First(x => x.Value == settings.VoiceAssistantMode);
+        NeuralVoiceCombo.SelectedItem = neuralVoiceChoices.First(x => x.Value == settings.NeuralVoiceProfile);
+        VideoTranslationModeCombo.SelectedItem = videoTranslationChoices.FirstOrDefault(
+            x => x.Value == settings.VideoTranslationMode) ?? videoTranslationChoices[1];
+        VoiceEngineStatusText.Text = VoiceAssistantService.EngineStatus;
         HomePageBox.Text = settings.HomePage;
         DntCheck.IsChecked = settings.SendDoNotTrack;
         GpcCheck.IsChecked = settings.SendGlobalPrivacyControl;
@@ -125,15 +151,17 @@ public partial class SettingsWindow : Window
         ProxyHostBox.Text = settings.ProxyHost;
         ProxyPortBox.Text = settings.ProxyPort.ToString();
         ProxyBypassBox.Text = settings.ProxyBypassList;
+        TrailModeCheck.IsChecked = settings.TrailModeEnabled;
+        TorBridgesBox.Text = settings.TorCustomBridges;
+        UpdateTorStatus();
         HttpsFirstCheck.IsChecked = settings.HttpsFirstEnabled;
         PrivacyMonitorCheck.IsChecked = settings.ShowPrivacyMonitor;
         PreventWebRtcLeakCheck.IsChecked = settings.PreventWebRtcIpLeak;
         CrashReportEndpointBox.Text = settings.CrashReportEndpoint;
-        MatrixHomeserverBox.Text = settings.MatrixHomeserver;
-        MatrixRoomIdBox.Text = settings.MatrixRoomId;
-        MatrixTokenStatusText.Text = WindowsCredentialStore.HasMatrixAccessToken()
+        GitHubRepositoryBox.Text = settings.GitHubRepository;
+        GitHubTokenStatusText.Text = WindowsCredentialStore.HasGitHubAccessToken()
             ? "Token уже сохранён в Windows Credential Manager. Оставьте поле пустым, чтобы сохранить его."
-            : "Token ещё не сохранён. Создайте отдельного Matrix-бота и вставьте его token.";
+            : "Token ещё не сохранён. Создайте fine-grained PAT с правами Issues: Read & Write на нужный репозиторий.";
         UpdateCrashDestinationVisibility();
         ShowSection("Search");
     }
@@ -141,7 +169,51 @@ public partial class SettingsWindow : Window
     private void SettingsTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
         if (e.NewValue is TreeViewItem { Tag: string section })
+        {
             ShowSection(section);
+            if (section == "Network") UpdateTorStatus();
+        }
+    }
+
+    private async void TorStartButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (TorStartButton is null) return;
+        TorStartButton.IsEnabled = false;
+        TorStartButton.Content = "Запускаю Tor…";
+        try
+        {
+            var settings = SettingsService.Current.Clone();
+            settings.TorCustomBridges = TorBridgesBox.Text.Trim();
+            var state = await Services.Tor.TorBridgeManager.RestartWithBridgesAsync(settings);
+            UpdateTorStatus();
+            if (state == Services.Tor.TorState.Failed)
+                GlassDialogWindow.Show(this,
+                    "Tor не смог запуститься. Проверьте, что tor.exe установлен (C:\\Tor) и мосты указаны верно.",
+                    "Tor", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("tor", "start-from-settings", ex);
+        }
+        finally
+        {
+            TorStartButton.IsEnabled = true;
+            TorStartButton.Content = "Запустить Tor";
+        }
+    }
+
+    private void UpdateTorStatus()
+    {
+        if (TorStatusLabel is null) return;
+        var (ready, status) = Services.Tor.TrailMode.CheckTorStatus();
+        var vpn = Services.Tor.VpnDetector.Detect();
+        var vpnText = vpn.VpnActive
+            ? $"\nVPN: {vpn.AdapterName} ({vpn.AdapterType})"
+            : "\nVPN: не найден";
+        var portsText = vpn.OpenPorts.Count > 0
+            ? $"\nОткрытые порты: {string.Join(", ", vpn.OpenPorts)}"
+            : "";
+        TorStatusLabel.Text = status + vpnText + portsText;
     }
 
     private void ShowSection(string section)
@@ -174,16 +246,16 @@ public partial class SettingsWindow : Window
 
     private void UpdateCrashDestinationVisibility()
     {
-        if (CollectorSettingsPanel is null || MatrixSettingsPanel is null ||
+        if (CollectorSettingsPanel is null || GitHubSettingsPanel is null ||
             CrashDestinationLabel is null || CrashReportDestinationCombo is null) return;
         var localOnly = CrashReportModeCombo.SelectedItem is Choice<CrashReportMode> mode &&
                         mode.Value == CrashReportMode.LocalOnly;
-        var matrix = CrashReportDestinationCombo.SelectedItem is Choice<CrashReportDestination> choice &&
-                     choice.Value == CrashReportDestination.MatrixDirect;
+        var gitHub = CrashReportDestinationCombo.SelectedItem is Choice<CrashReportDestination> choice &&
+                     choice.Value == CrashReportDestination.GitHubIssues;
         CrashDestinationLabel.Visibility = localOnly ? Visibility.Collapsed : Visibility.Visible;
         CrashReportDestinationCombo.Visibility = localOnly ? Visibility.Collapsed : Visibility.Visible;
-        CollectorSettingsPanel.Visibility = !localOnly && !matrix ? Visibility.Visible : Visibility.Collapsed;
-        MatrixSettingsPanel.Visibility = !localOnly && matrix ? Visibility.Visible : Visibility.Collapsed;
+        CollectorSettingsPanel.Visibility = !localOnly && !gitHub ? Visibility.Visible : Visibility.Collapsed;
+        GitHubSettingsPanel.Visibility = !localOnly && gitHub ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void SearchEngineCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
@@ -223,6 +295,8 @@ public partial class SettingsWindow : Window
             ? level.Value : PrivacyLevel.Balanced;
         _settings.Theme = ThemeCombo.SelectedItem is Choice<BrowserTheme> theme
             ? theme.Value : BrowserTheme.MonachAqua;
+        _settings.ThemeMode = ThemeModeCombo.SelectedItem is Choice<BrowserThemeMode> mode
+            ? mode.Value : BrowserThemeMode.Dark;
         _settings.ThemeSelectionCompleted = true;
         _settings.HomePage = string.IsNullOrWhiteSpace(HomePageBox.Text) ? "app://newtab" : HomePageBox.Text.Trim();
         _settings.SendDoNotTrack = DntCheck.IsChecked == true;
@@ -242,6 +316,10 @@ public partial class SettingsWindow : Window
         _settings.EnableDevTools = false;
         _settings.VoiceAssistantMode = VoiceModeCombo.SelectedItem is Choice<VoiceAssistantMode> voiceMode
             ? voiceMode.Value : VoiceAssistantMode.ImportantOnly;
+        _settings.NeuralVoiceProfile = NeuralVoiceCombo.SelectedItem is Choice<NeuralVoiceProfile> neuralVoice
+            ? neuralVoice.Value : NeuralVoiceProfile.Natasha;
+        _settings.VideoTranslationMode = VideoTranslationModeCombo.SelectedItem is Choice<VideoTranslationMode> videoMode
+            ? videoMode.Value : VideoTranslationMode.Balanced;
         _settings.VoiceSpeakAtStartup = VoiceStartupCheck.IsChecked == true;
         _settings.VoiceHandsFreeEnabled = VoiceHandsFreeCheck.IsChecked == true &&
                                           _settings.VoiceAssistantMode != VoiceAssistantMode.Off;
@@ -251,6 +329,14 @@ public partial class SettingsWindow : Window
         _settings.ProxyHost = ProxyHostBox.Text.Trim();
         _settings.ProxyPort = proxyPort;
         _settings.ProxyBypassList = ProxyBypassBox.Text.Trim();
+        _settings.TrailModeEnabled = TrailModeCheck.IsChecked == true;
+        _settings.TorCustomBridges = TorBridgesBox.Text.Trim();
+        if (_settings.TrailModeEnabled)
+        {
+            // «Режим След» применяет полную анонимную конфигурацию поверх
+            // обычных настроек: Tor SOCKS5, строгая приватность, всё выключено.
+            Services.Tor.TrailMode.Apply(_settings);
+        }
         _settings.HttpsFirstEnabled = HttpsFirstCheck.IsChecked == true;
         _settings.SecureDnsMode = SecureDnsModeCombo.SelectedItem is Choice<SecureDnsMode> dnsMode
             ? dnsMode.Value : SecureDnsMode.Strict;
@@ -263,8 +349,7 @@ public partial class SettingsWindow : Window
         _settings.CrashReportDestination = CrashReportDestinationCombo.SelectedItem is Choice<CrashReportDestination> destination
             ? destination.Value : CrashReportDestination.HttpsCollector;
         _settings.CrashReportEndpoint = CrashReportEndpointBox.Text.Trim();
-        _settings.MatrixHomeserver = MatrixHomeserverBox.Text.Trim().TrimEnd('/');
-        _settings.MatrixRoomId = MatrixRoomIdBox.Text.Trim();
+        _settings.GitHubRepository = GitHubRepositoryBox.Text.Trim();
         if (_settings.CrashReportMode != CrashReportMode.LocalOnly &&
             _settings.CrashReportDestination == CrashReportDestination.HttpsCollector &&
             !string.IsNullOrWhiteSpace(_settings.CrashReportEndpoint) &&
@@ -276,20 +361,20 @@ public partial class SettingsWindow : Window
             CrashReportEndpointBox.Focus();
             return;
         }
-        if (_settings.CrashReportDestination == CrashReportDestination.MatrixDirect &&
+        if (_settings.CrashReportDestination == CrashReportDestination.GitHubIssues &&
             _settings.CrashReportMode != CrashReportMode.LocalOnly &&
-            !TryValidateMatrixSettings(requireToken: true)) return;
+            !TryValidateGitHubSettings(requireToken: true)) return;
 
         try
         {
-            if (DeleteMatrixTokenCheck.IsChecked == true)
-                WindowsCredentialStore.DeleteMatrixAccessToken();
-            else if (!string.IsNullOrWhiteSpace(MatrixAccessTokenBox.Password))
-                WindowsCredentialStore.SaveMatrixAccessToken(MatrixAccessTokenBox.Password);
+            if (DeleteGitHubTokenCheck.IsChecked == true)
+                WindowsCredentialStore.DeleteGitHubAccessToken();
+            else if (!string.IsNullOrWhiteSpace(GitHubAccessTokenBox.Password))
+                WindowsCredentialStore.SaveGitHubAccessToken(GitHubAccessTokenBox.Password);
         }
         catch (Exception ex)
         {
-            GlassDialogWindow.Show(this, "Не удалось сохранить Matrix token в Windows Credential Manager:\n\n" + ex.Message,
+            GlassDialogWindow.Show(this, "Не удалось сохранить GitHub token в Windows Credential Manager:\n\n" + ex.Message,
                 "Nexus Guardian", MessageBoxButton.OK, MessageBoxImage.Error);
             return;
         }
@@ -300,26 +385,32 @@ public partial class SettingsWindow : Window
     private void TestVoice_Click(object sender, RoutedEventArgs e)
     {
         var previousMode = SettingsService.Current.VoiceAssistantMode;
+        var previousVoice = SettingsService.Current.NeuralVoiceProfile;
         SettingsService.Current.VoiceAssistantMode = VoiceAssistantMode.Assistant;
+        SettingsService.Current.NeuralVoiceProfile = NeuralVoiceCombo.SelectedItem is Choice<NeuralVoiceProfile> voice
+            ? voice.Value : NeuralVoiceProfile.Natasha;
         try { VoiceAssistantService.SpeakTestPhrase(); }
-        finally { SettingsService.Current.VoiceAssistantMode = previousMode; }
+        finally
+        {
+            SettingsService.Current.VoiceAssistantMode = previousMode;
+            SettingsService.Current.NeuralVoiceProfile = previousVoice;
+        }
     }
 
-    private async void TestMatrix_Click(object sender, RoutedEventArgs e)
+    private async void TestGitHub_Click(object sender, RoutedEventArgs e)
     {
-        if (!TryValidateMatrixSettings(requireToken: true)) return;
-        var token = string.IsNullOrWhiteSpace(MatrixAccessTokenBox.Password)
-            ? WindowsCredentialStore.ReadMatrixAccessToken()
-            : MatrixAccessTokenBox.Password.Trim();
+        if (!TryValidateGitHubSettings(requireToken: true)) return;
+        var token = string.IsNullOrWhiteSpace(GitHubAccessTokenBox.Password)
+            ? WindowsCredentialStore.ReadGitHubAccessToken()
+            : GitHubAccessTokenBox.Password.Trim();
         if (string.IsNullOrWhiteSpace(token)) return;
 
         var button = (System.Windows.Controls.Button)sender;
         button.IsEnabled = false;
         try
         {
-            var result = await MatrixCrashReportTransport.TestAsync(
-                MatrixHomeserverBox.Text.Trim(), MatrixRoomIdBox.Text.Trim(), token);
-            GlassDialogWindow.Show(this, result.Message, "Nexus Guardian · Matrix", MessageBoxButton.OK,
+            var result = await GitHubCrashReportTransport.TestAsync(GitHubRepositoryBox.Text.Trim(), token);
+            GlassDialogWindow.Show(this, result.Message, "Nexus Guardian · GitHub", MessageBoxButton.OK,
                 result.Success ? MessageBoxImage.Information : MessageBoxImage.Warning);
         }
         finally { button.IsEnabled = true; }
@@ -331,30 +422,24 @@ public partial class SettingsWindow : Window
         window.ShowDialog();
     }
 
-    private bool TryValidateMatrixSettings(bool requireToken)
+    private bool TryValidateGitHubSettings(bool requireToken)
     {
-        var homeserver = MatrixHomeserverBox.Text.Trim();
-        if (!Uri.TryCreate(homeserver, UriKind.Absolute, out var matrixUri) || matrixUri.Scheme != Uri.UriSchemeHttps)
+        var repository = GitHubRepositoryBox.Text.Trim();
+        if (!GitHubCrashReportTransport.IsValidRepository(repository))
         {
-            GlassDialogWindow.Show(this, "Matrix homeserver должен быть абсолютным HTTPS-адресом.",
+            GlassDialogWindow.Show(this,
+                "Репозиторий указывается в формате «владелец/имя», например monach-coder/NexusMonachBrowser.",
                 "Nexus Guardian", MessageBoxButton.OK, MessageBoxImage.Warning);
-            MatrixHomeserverBox.Focus();
+            GitHubRepositoryBox.Focus();
             return false;
         }
-        if (!MatrixRoomIdBox.Text.Trim().StartsWith("!", StringComparison.Ordinal) ||
-            !MatrixRoomIdBox.Text.Contains(':'))
+        if (requireToken && string.IsNullOrWhiteSpace(GitHubAccessTokenBox.Password) &&
+            !WindowsCredentialStore.HasGitHubAccessToken())
         {
-            GlassDialogWindow.Show(this, "Укажите внутренний Matrix Room ID вида !room:server, а не название комнаты.",
+            GlassDialogWindow.Show(this,
+                "Укажите access token: fine-grained PAT с правами Issues: Read & Write на выбранный репозиторий.",
                 "Nexus Guardian", MessageBoxButton.OK, MessageBoxImage.Warning);
-            MatrixRoomIdBox.Focus();
-            return false;
-        }
-        if (requireToken && string.IsNullOrWhiteSpace(MatrixAccessTokenBox.Password) &&
-            !WindowsCredentialStore.HasMatrixAccessToken())
-        {
-            GlassDialogWindow.Show(this, "Укажите access token отдельного Matrix-бота.",
-                "Nexus Guardian", MessageBoxButton.OK, MessageBoxImage.Warning);
-            MatrixAccessTokenBox.Focus();
+            GitHubAccessTokenBox.Focus();
             return false;
         }
         return true;

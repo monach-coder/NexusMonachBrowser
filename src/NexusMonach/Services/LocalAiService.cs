@@ -64,7 +64,10 @@ public static class LocalAiService
             var stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
             var stderr = process.StandardError.ReadToEndAsync(cancellationToken);
             try { await process.WaitForExitAsync(cancellationToken); }
-            catch (OperationCanceledException) { try { process.Kill(true); } catch { } throw; }
+            catch (OperationCanceledException) { try { process.Kill(true); } catch (Exception swallowed)
+            {
+                Services.SwallowLog.Log("local-ai", "DescribeImageForSearchAsync", swallowed);
+            } throw; }
             var output = await stdout;
             var error = await stderr;
             if (process.ExitCode != 0) throw new InvalidOperationException("Nexus Vision завершился с ошибкой: " + Compact(error, 700));
@@ -75,7 +78,10 @@ public static class LocalAiService
         finally
         {
             InferenceGate.Release();
-            try { Directory.Delete(work, true); } catch { }
+            try { Directory.Delete(work, true); } catch (Exception swallowed)
+            {
+                Services.SwallowLog.Log("local-ai", "DescribeImageForSearchAsync", swallowed);
+            }
         }
     }
 
@@ -156,7 +162,10 @@ public static class LocalAiService
                 try { await process.WaitForExitAsync(cancellationToken); }
                 catch (OperationCanceledException)
                 {
-                    try { process.Kill(entireProcessTree: true); } catch { }
+                    try { process.Kill(entireProcessTree: true); } catch (Exception swallowed)
+                    {
+                        Services.SwallowLog.Log("local-ai", "RunTextModelAsync", swallowed);
+                    }
                     throw;
                 }
                 var error = await errorTask;
@@ -170,7 +179,10 @@ public static class LocalAiService
             }
             finally
             {
-                try { Directory.Delete(work, recursive: true); } catch { }
+                try { Directory.Delete(work, recursive: true); } catch (Exception swallowed)
+                {
+                    Services.SwallowLog.Log("local-ai", "RunTextModelAsync", swallowed);
+                }
             }
         }
         finally

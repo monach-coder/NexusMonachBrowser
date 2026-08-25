@@ -1,0 +1,11 @@
+<Application x:Class="Nexus.Setup.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+        <SolidColorBrush x:Key="Bg" Color="#0d0d16" />
+        <SolidColorBrush x:Key="Fg" Color="#eef4f8" />
+        <SolidColorBrush x:Key="Muted" Color="#8a94b0" />
+        <SolidColorBrush x:Key="Accent" Color="#5b9dff" />
+    </Application.Resources>
+</Application>

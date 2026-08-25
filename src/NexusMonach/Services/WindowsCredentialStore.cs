@@ -5,27 +5,28 @@ using System.Text;
 namespace NexusMonach.Services;
 
 /// <summary>
-/// Stores the Matrix bot token outside settings.json. Generic credentials are
-/// protected by Windows and are available only in the current Windows account.
+/// Stores the GitHub access token outside settings.json. Generic credentials
+/// are protected by Windows and are available only in the current Windows
+/// account.
 /// </summary>
 public static class WindowsCredentialStore
 {
-    private const string MatrixTokenTarget = "NexusMonach/Guardian/MatrixAccessToken";
+    private const string GitHubTokenTarget = "NexusMonach/Guardian/GitHubAccessToken";
     private const uint CredTypeGeneric = 1;
     private const uint CredPersistLocalMachine = 2;
 
-    public static bool HasMatrixAccessToken() => !string.IsNullOrWhiteSpace(ReadMatrixAccessToken());
+    public static bool HasGitHubAccessToken() => !string.IsNullOrWhiteSpace(ReadGitHubAccessToken());
 
-    public static string? ReadMatrixAccessToken() => Read(MatrixTokenTarget);
+    public static string? ReadGitHubAccessToken() => Read(GitHubTokenTarget);
 
-    public static void SaveMatrixAccessToken(string token)
+    public static void SaveGitHubAccessToken(string token)
     {
         if (string.IsNullOrWhiteSpace(token))
-            throw new ArgumentException("Matrix access token is empty.", nameof(token));
-        Write(MatrixTokenTarget, token.Trim());
+            throw new ArgumentException("GitHub access token is empty.", nameof(token));
+        Write(GitHubTokenTarget, token.Trim());
     }
 
-    public static void DeleteMatrixAccessToken() => Delete(MatrixTokenTarget);
+    public static void DeleteGitHubAccessToken() => Delete(GitHubTokenTarget);
 
     private static void Write(string target, string secret)
     {
@@ -44,10 +45,10 @@ public static class WindowsCredentialStore
                 CredentialBlobSize = (uint)bytes.Length,
                 CredentialBlob = blob,
                 Persist = CredPersistLocalMachine,
-                UserName = "Nexus Guardian Matrix bot"
+                UserName = "Nexus Guardian crash reporter"
             };
             if (!CredWrite(ref credential, 0))
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Windows Credential Manager rejected the Matrix token.");
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "Windows Credential Manager rejected the GitHub token.");
         }
         finally
         {
@@ -78,7 +79,7 @@ public static class WindowsCredentialStore
         const int ErrorNotFound = 1168;
         var error = Marshal.GetLastWin32Error();
         if (error != ErrorNotFound)
-            throw new Win32Exception(error, "Windows Credential Manager could not remove the Matrix token.");
+            throw new Win32Exception(error, "Windows Credential Manager could not remove the GitHub token.");
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]

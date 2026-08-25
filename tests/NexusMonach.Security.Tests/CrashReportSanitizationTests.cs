@@ -33,4 +33,30 @@ public sealed class CrashReportSanitizationTests
 
         Assert.Equal(16_000, sanitized.Length);
     }
+
+    [Fact]
+    public void WindowsPathRedactionPreservesTheRestOfTheErrorMessage()
+    {
+        const string source =
+            "The process cannot access the file 'D:\\private\\settings.json.tmp' because it is being used.";
+
+        var sanitized = CrashReportService.SanitizeForReport(source);
+
+        Assert.Equal(
+            "The process cannot access the file '[path-redacted]' because it is being used.", sanitized);
+    }
+
+    [Fact]
+    public void FormattedExceptionIncludesInnerExceptionDiagnostics()
+    {
+        var exception = new InvalidOperationException("outer failure",
+            new IOException("inner failure"));
+
+        var formatted = CrashReportService.FormatExceptionForReport(exception);
+
+        Assert.Contains(nameof(InvalidOperationException), formatted, StringComparison.Ordinal);
+        Assert.Contains("outer failure", formatted, StringComparison.Ordinal);
+        Assert.Contains(nameof(IOException), formatted, StringComparison.Ordinal);
+        Assert.Contains("inner failure", formatted, StringComparison.Ordinal);
+    }
 }

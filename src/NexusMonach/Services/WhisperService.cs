@@ -7,7 +7,21 @@ using System.Text.Json;
 
 namespace NexusMonach.Services;
 
-public sealed record WhisperTranscript(string Text, string Language);
+public sealed record WhisperTranscript(string Text, string Language)
+{
+    /// <summary>Сегменты с таймкодами (только для verbose_json-ответов).</summary>
+    public IReadOnlyList<WhisperTimedSegment> Segments { get; init; } = [];
+}
+
+/// <summary>Реплика оригинала с точным положением на таймлайне аудио.</summary>
+public sealed record WhisperTimedSegment(double Start, double End, string Text,
+    double NoSpeechProb = 0, double AvgLogProb = 0);
+
+public enum WhisperLane
+{
+    Commands,
+    Dubbing
+}
 
 /// <summary>
 /// Полностью автономное распознавание речи. При наличии whisper-server модель
@@ -16,12 +30,24 @@ public sealed record WhisperTranscript(string Text, string Language);
 /// </summary>
 public static class WhisperService
 {
-    private static readonly SemaphoreSlim StartGate = new(1, 1);
-    private static readonly SemaphoreSlim InferenceGate = new(1, 1);
-    private static readonly HttpClient Client = LocalAiLoopbackTransport.CreateClient();
+    private static readonly HttpClient Client = CreateWhisperClient();
 
-    private static Process? _server;
-    private static Uri? _inferenceEndpoint;
+    private static HttpClient CreateWhisperClient()
+    {
+        // Каждая просьба — свежее соединение: после первой отменённой просьбы
+        // повторное использование pooled-соединения к whisper-server однажды
+        // зависало на десятки секунд при полностью здоровом сервере.
+        var client = LocalAiLoopbackTransport.CreateClient();
+        client.DefaultRequestHeaders.ConnectionClose = true;
+        return client;
+    }
+    private static readonly LaneState CommandsLane = new();
+    private static readonly LaneState DubbingLane = new();
+
+    internal static bool UsesIndependentRecognitionLanes =>
+        !ReferenceEquals(CommandsLane, DubbingLane) &&
+        !ReferenceEquals(CommandsLane.StartGate, DubbingLane.StartGate) &&
+        !ReferenceEquals(CommandsLane.InferenceGate, DubbingLane.InferenceGate);
 
     public static string Status { get; private set; } = "Проверка встроенного Whisper";
     public static string? LastError { get; private set; }
@@ -38,7 +64,7 @@ public static class WhisperService
                 {
                     await Task.Delay(TimeSpan.FromSeconds(2));
                     using var budget = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-                    await WarmUpAsync(budget.Token);
+                    await WarmUpAsync(WhisperLane.Commands, budget.Token);
                 }
                 catch { /* Пользователь увидит точную ошибку при запуске перевода. */ }
             });
@@ -61,11 +87,15 @@ public static class WhisperService
         return Task.CompletedTask;
     }
 
-    public static async Task WarmUpAsync(CancellationToken cancellationToken = default)
+    public static Task WarmUpAsync(CancellationToken cancellationToken = default) =>
+        WarmUpAsync(WhisperLane.Commands, cancellationToken);
+
+    public static async Task WarmUpAsync(WhisperLane lane,
+        CancellationToken cancellationToken = default)
     {
         await EnsureInstalledAsync(cancellationToken: cancellationToken);
         if (AiModelCatalog.WhisperServer is not null)
-            await EnsureServerStartedAsync(cancellationToken);
+            await EnsureServerStartedAsync(GetLane(lane), lane, cancellationToken);
     }
 
     public static async Task<string> TranscribeAsync(byte[] wav,
@@ -73,54 +103,72 @@ public static class WhisperService
         (await TranscribeDetailedAsync(wav, cancellationToken)).Text;
 
     public static async Task<WhisperTranscript> TranscribeDetailedAsync(byte[] wav,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        await TranscribeDetailedAsync(wav, WhisperLane.Commands, cancellationToken);
+
+    public static async Task<WhisperTranscript> TranscribeDetailedAsync(byte[] wav,
+        WhisperLane lane, CancellationToken cancellationToken = default)
     {
         if (wav.Length < 1_000) return new WhisperTranscript(string.Empty, string.Empty);
         await EnsureInstalledAsync(cancellationToken: cancellationToken);
+        var state = GetLane(lane);
 
         if (AiModelCatalog.WhisperServer is not null)
         {
             try
             {
-                await EnsureServerStartedAsync(cancellationToken);
-                return await RunServerInferenceAsync(wav, cancellationToken);
+                await EnsureServerStartedAsync(state, lane, cancellationToken);
+                return await RunServerInferenceAsync(state, wav, cancellationToken);
             }
-            catch (OperationCanceledException) { throw; }
-            catch
+            catch (OperationCanceledException)
+            {
+                // Бюджет истёк — сервер под подозрением: следующая просьба
+                // поднимет его заново, а не пойдёт по зависшему соединению.
+                StopServer(state);
+                throw;
+            }
+            catch (Exception ex)
             {
                 // Один аварийный сервер не должен убивать перевод. Старый CLI
                 // остаётся безопасным резервом, если он есть в комплекте.
-                StopServer();
+                // Причина падения сервера пишется в Crash Vault: тихий уход
+                // в фолбэк однажды стоил часа слепой отладки «нулевых реплик».
+                CrashReportService.RecordNonFatal("whisper",
+                    "server-inference-" + lane.ToString().ToLowerInvariant(), ex);
+                StopServer(state);
                 if (AiModelCatalog.WhisperCli is null) throw;
             }
         }
 
-        return new WhisperTranscript(await RunCliAsync(wav, translateToEnglish: false, cancellationToken), string.Empty);
+        return new WhisperTranscript(await RunCliAsync(state, wav, translateToEnglish: false, cancellationToken), string.Empty);
     }
 
     /// <summary>Совместимость со старым API. Для новых субтитров не используется.</summary>
     public static Task<string> TranscribeToEnglishAsync(byte[] wav,
         CancellationToken cancellationToken = default) =>
-        RunCliAsync(wav, translateToEnglish: true, cancellationToken);
+        RunCliAsync(CommandsLane, wav, translateToEnglish: true, cancellationToken);
 
-    private static async Task<WhisperTranscript> RunServerInferenceAsync(byte[] wav,
+    private static async Task<WhisperTranscript> RunServerInferenceAsync(LaneState state, byte[] wav,
         CancellationToken cancellationToken)
     {
-        await InferenceGate.WaitAsync(cancellationToken);
+        await state.InferenceGate.WaitAsync(cancellationToken);
         try
         {
-            var endpoint = _inferenceEndpoint
+            var endpoint = state.InferenceEndpoint
                            ?? throw new InvalidOperationException("Локальная сессия Whisper не запущена.");
             LocalAiLoopbackTransport.EnsureAllowedEndpoint(endpoint);
             using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            budget.CancelAfter(TimeSpan.FromSeconds(55));
+            budget.CancelAfter(TimeSpan.FromSeconds(30));
             using var content = new MultipartFormDataContent();
             var audio = new ByteArrayContent(wav);
             audio.Headers.ContentType = new("audio/wav");
             content.Add(audio, "file", "nexus-audio.wav");
             content.Add(new StringContent("0.0"), "temperature");
             content.Add(new StringContent("0.2"), "temperature_inc");
-            content.Add(new StringContent("json"), "response_format");
+            // verbose_json carries Whisper's detected language. Without it a
+            // short English phrase can be routed through the multilingual
+            // model and lose meaning before the final Russian translation.
+            content.Add(new StringContent("verbose_json"), "response_format");
             content.Add(new StringContent("auto"), "language");
             content.Add(new StringContent("false"), "translate");
 
@@ -131,10 +179,10 @@ public static class WhisperService
                                                     payload[..Math.Min(payload.Length, 500)]);
             return ParseResponse(payload);
         }
-        finally { InferenceGate.Release(); }
+        finally { state.InferenceGate.Release(); }
     }
 
-    private static WhisperTranscript ParseResponse(string payload)
+    internal static WhisperTranscript ParseResponse(string payload)
     {
         payload = payload.Trim();
         if (payload.Length == 0) return new WhisperTranscript(string.Empty, string.Empty);
@@ -142,14 +190,51 @@ public static class WhisperService
         {
             using var document = JsonDocument.Parse(payload);
             var text = FindString(document.RootElement, "text") ?? string.Empty;
-            var language = FindString(document.RootElement, "language") ?? string.Empty;
-            return new WhisperTranscript(text.Trim(), language.Trim());
+            var language = FindString(document.RootElement, "detected_language") ??
+                           FindString(document.RootElement, "language") ?? string.Empty;
+            var segments = new List<WhisperTimedSegment>();
+            if (document.RootElement.TryGetProperty("segments", out var segmentsElement) &&
+                segmentsElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var segment in segmentsElement.EnumerateArray())
+                {
+                    var segmentText = NormalizeTranscript(
+                        FindString(segment, "text") ?? string.Empty);
+                    if (segmentText.Length == 0) continue;
+                    if (!TryFindNumber(segment, "start", out var start) ||
+                        !TryFindNumber(segment, "end", out var end)) continue;
+                    if (end <= start) continue;
+                    // Вероятности — классические маркеры галлюцинаций на тишине.
+                    TryFindNumber(segment, "no_speech_prob", out var noSpeechProb);
+                    TryFindNumber(segment, "avg_logprob", out var avgLogProb);
+                    segments.Add(new WhisperTimedSegment(start, end, segmentText,
+                        noSpeechProb, avgLogProb));
+                }
+            }
+            return new WhisperTranscript(NormalizeTranscript(text), language.Trim())
+            {
+                Segments = segments
+            };
         }
         catch (JsonException)
         {
-            return new WhisperTranscript(payload.Trim('"', '\r', '\n', ' '), string.Empty);
+            return new WhisperTranscript(
+                NormalizeTranscript(payload.Trim('"', '\r', '\n', ' ')), string.Empty);
         }
     }
+
+    private static bool TryFindNumber(JsonElement parent, string name, out double value)
+    {
+        value = 0;
+        return parent.ValueKind == JsonValueKind.Object &&
+               parent.TryGetProperty(name, out var element) &&
+               element.ValueKind == JsonValueKind.Number &&
+               element.TryGetDouble(out value);
+    }
+
+    internal static string NormalizeTranscript(string? text) =>
+        System.Text.RegularExpressions.Regex.Replace(
+            text ?? string.Empty, @"\s+", " ").Trim();
 
     private static string? FindString(JsonElement element, string name)
     {
@@ -173,14 +258,15 @@ public static class WhisperService
         return null;
     }
 
-    private static async Task EnsureServerStartedAsync(CancellationToken cancellationToken)
+    private static async Task EnsureServerStartedAsync(LaneState state, WhisperLane lane,
+        CancellationToken cancellationToken)
     {
-        if (_server is { HasExited: false } && _inferenceEndpoint is not null) return;
-        await StartGate.WaitAsync(cancellationToken);
+        if (state.Server is { HasExited: false } && state.InferenceEndpoint is not null) return;
+        await state.StartGate.WaitAsync(cancellationToken);
         try
         {
-            if (_server is { HasExited: false } && _inferenceEndpoint is not null) return;
-            StopServer();
+            if (state.Server is { HasExited: false } && state.InferenceEndpoint is not null) return;
+            StopServer(state);
 
             var executable = AiModelCatalog.WhisperServer
                 ?? throw new InvalidOperationException("whisper-server.exe не найден.");
@@ -195,10 +281,18 @@ public static class WhisperService
                 RedirectStandardError = true,
                 WorkingDirectory = Path.GetDirectoryName(executable)!
             };
-            var threads = Math.Clamp(Environment.ProcessorCount / 2, 2, 8);
+            // Распознавание сидит в критическом пути закадрового перевода:
+            // каждая секунда на сегменте напрямую добавляется к отставанию,
+            // поэтому отдаём трем четвертям ядер, оставляя остальным задачам
+            // минимум.
+            var threads = Math.Clamp(Environment.ProcessorCount * 3 / 4, 3, 8);
             foreach (var argument in new[]
                      {
-                         "-m", AiModelCatalog.WhisperModel!, "--host", IPAddress.Loopback.ToString(),
+                         // whisper-server открывает модель через ANSI fopen: кириллица
+                         // в пути установки убивает процесс на загрузке модели, поэтому
+                         // модель заранее зеркалируется в ASCII-безопасный кэш.
+                         "-m", AsciiSafeModelCache.EnsureAsciiSafePath(AiModelCatalog.WhisperModel!),
+                         "--host", IPAddress.Loopback.ToString(),
                          "--port", port.ToString(), "--inference-path", inferencePath, "-l", "auto",
                          "-t", threads.ToString(), "-p", "1", "-sns"
                      })
@@ -206,12 +300,12 @@ public static class WhisperService
 
             var server = Process.Start(start)
                          ?? throw new InvalidOperationException("Не удалось запустить встроенный whisper-server.");
-            _server = server;
-            _inferenceEndpoint = new Uri($"http://127.0.0.1:{port}{inferencePath}");
-            LocalAiLoopbackTransport.EnsureAllowedEndpoint(_inferenceEndpoint);
+            state.Server = server;
+            state.InferenceEndpoint = new Uri($"http://127.0.0.1:{port}{inferencePath}");
+            LocalAiLoopbackTransport.EnsureAllowedEndpoint(state.InferenceEndpoint);
             _ = DrainAsync(server.StandardOutput);
             _ = DrainAsync(server.StandardError);
-            Status = "Whisper загружает модель один раз…";
+            Status = $"Whisper {lane} загружает модель один раз…";
 
             var ready = false;
             for (var attempt = 0; attempt < 120; attempt++)
@@ -227,17 +321,17 @@ public static class WhisperService
                 await Task.Delay(500, cancellationToken);
             }
             if (!ready) throw new TimeoutException("Whisper не успел загрузить локальную модель.");
-            Status = "Whisper готов · модель остаётся в памяти";
+            Status = $"Whisper {lane} готов · модель остаётся в памяти";
             LastError = null;
         }
         catch (Exception ex)
         {
             LastError = ex.Message;
             Status = "Whisper: " + ex.Message;
-            StopServer();
+            StopServer(state);
             throw;
         }
-        finally { StartGate.Release(); }
+        finally { state.StartGate.Release(); }
     }
 
     private static int ReserveLoopbackPort()
@@ -263,15 +357,18 @@ public static class WhisperService
 
     private static async Task DrainAsync(StreamReader reader)
     {
-        try { await reader.ReadToEndAsync(); } catch { }
+        try { await reader.ReadToEndAsync(); } catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("whisper", "DrainAsync", swallowed);
+        }
     }
 
-    private static async Task<string> RunCliAsync(byte[] wav, bool translateToEnglish,
+    private static async Task<string> RunCliAsync(LaneState state, byte[] wav, bool translateToEnglish,
         CancellationToken cancellationToken)
     {
         if (AiModelCatalog.WhisperCli is null)
             throw new InvalidOperationException(AiModelCatalog.MissingSpeechRuntimeMessage);
-        await InferenceGate.WaitAsync(cancellationToken);
+        await state.InferenceGate.WaitAsync(cancellationToken);
         var work = Path.Combine(Path.GetTempPath(), "NexusMonachWhisper", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(work);
         var input = Path.Combine(work, "audio.wav");
@@ -291,7 +388,10 @@ public static class WhisperService
             };
             var arguments = new List<string>
             {
-                "-m", AiModelCatalog.WhisperModel!, "-f", input, "-l", "auto",
+                // whisper-cli падает при загрузке модели по пути с не-ASCII
+                // символами — тот же класс ошибки, что у torch в TTS-воркере.
+                "-m", AsciiSafeModelCache.EnsureAsciiSafePath(AiModelCatalog.WhisperModel!),
+                "-f", input, "-l", "auto",
                 "-otxt", "-of", outputBase, "-nt"
             };
             if (translateToEnglish) arguments.Add("-tr");
@@ -303,7 +403,10 @@ public static class WhisperService
             try { await process.WaitForExitAsync(cancellationToken); }
             catch (OperationCanceledException)
             {
-                try { process.Kill(entireProcessTree: true); } catch { }
+                try { process.Kill(entireProcessTree: true); } catch (Exception swallowed)
+                {
+                    Services.SwallowLog.Log("whisper", "RunCliAsync", swallowed);
+                }
                 throw;
             }
             var log = (await stdout) + "\n" + (await stderr);
@@ -312,24 +415,48 @@ public static class WhisperService
             {
                 log = log.Trim();
                 throw new InvalidOperationException("Whisper завершился с ошибкой: " +
-                                                    log[..Math.Min(log.Length, 700)]);
+                                                    log[..Math.Min(log.Length, 2500)]);
             }
             return (await File.ReadAllTextAsync(output, cancellationToken)).Trim();
         }
         finally
         {
-            InferenceGate.Release();
-            try { Directory.Delete(work, recursive: true); } catch { }
+            state.InferenceGate.Release();
+            try { Directory.Delete(work, recursive: true); } catch (Exception swallowed)
+            {
+                Services.SwallowLog.Log("whisper", "RunCliAsync", swallowed);
+            }
         }
     }
 
-    public static void Shutdown() => StopServer();
-
-    private static void StopServer()
+    public static void Shutdown()
     {
-        try { if (_server is { HasExited: false }) _server.Kill(entireProcessTree: true); } catch { }
-        try { _server?.Dispose(); } catch { }
-        _server = null;
-        _inferenceEndpoint = null;
+        StopServer(CommandsLane);
+        StopServer(DubbingLane);
+    }
+
+    private static LaneState GetLane(WhisperLane lane) =>
+        lane == WhisperLane.Dubbing ? DubbingLane : CommandsLane;
+
+    private static void StopServer(LaneState state)
+    {
+        try { if (state.Server is { HasExited: false }) state.Server.Kill(entireProcessTree: true); } catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("whisper", "StopServer", swallowed);
+        }
+        try { state.Server?.Dispose(); } catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("whisper", "StopServer", swallowed);
+        }
+        state.Server = null;
+        state.InferenceEndpoint = null;
+    }
+
+    private sealed class LaneState
+    {
+        internal readonly SemaphoreSlim StartGate = new(1, 1);
+        internal readonly SemaphoreSlim InferenceGate = new(1, 1);
+        internal Process? Server;
+        internal Uri? InferenceEndpoint;
     }
 }

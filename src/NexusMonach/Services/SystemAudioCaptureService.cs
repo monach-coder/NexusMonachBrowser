@@ -4,6 +4,15 @@ using System.Threading.Channels;
 
 namespace NexusMonach.Services;
 
+internal interface IContinuousAudioCaptureSession : IAsyncDisposable
+{
+    bool IsProcessIsolated { get; }
+    IAsyncEnumerable<SystemAudioCaptureService.AudioSegment> ReadSegmentsAsync(
+        CancellationToken cancellationToken = default);
+    void SuspendForDubbing();
+    void Resume();
+}
+
 /// <summary>
 /// Резервный захват текущего системного звука для роликов, чей HTML5/DRM-плеер
 /// не предоставляет captureStream. Работает только во время явно запущенного
@@ -18,8 +27,10 @@ public static class SystemAudioCaptureService
     /// Один непрерывный WASAPI-сеанс. Пока Whisper и OPUS обрабатывают текущую
     /// реплику, следующие сэмплы продолжают попадать в ограниченный буфер.
     /// Старые необработанные сегменты вытесняются, поэтому память не растёт.
+    /// На endpoint-резерве видео удерживается во время Nexus Voice: так вход
+    /// можно приостановить без потери продолжающейся речи источника.
     /// </summary>
-    public sealed class ContinuousCaptureSession : IAsyncDisposable
+    public sealed class ContinuousCaptureSession : IContinuousAudioCaptureSession
     {
         private readonly WasapiLoopbackCapture _capture = new();
         private readonly Channel<AudioSegment> _segments;
@@ -33,6 +44,9 @@ public static class SystemAudioCaptureService
         private bool _disposed;
         private bool _suspended;
         private Exception? _recordingError;
+        private bool _reportedEmptyWindow;
+        private bool _reportedQuietWindow;
+        private bool _reportedAudioWindow;
 
         internal ContinuousCaptureSession(int segmentMilliseconds, int overlapMilliseconds)
         {
@@ -40,7 +54,8 @@ public static class SystemAudioCaptureService
             var bytesPerSecond = _capture.WaveFormat.AverageBytesPerSecond;
             _overlapBytes = Align(bytesPerSecond * Math.Clamp(overlapMilliseconds, 0, 1_500) / 1_000,
                 _capture.WaveFormat.BlockAlign);
-            _segments = Channel.CreateBounded<AudioSegment>(new BoundedChannelOptions(2)
+            _segments = Channel.CreateBounded<AudioSegment>(new BoundedChannelOptions(
+                VideoDubbingPolicy.MaxBufferedSegments)
             {
                 FullMode = BoundedChannelFullMode.DropOldest,
                 SingleReader = true,
@@ -52,23 +67,23 @@ public static class SystemAudioCaptureService
             _segmentLoop = Task.Run(SegmentLoopAsync);
         }
 
+        public bool IsProcessIsolated => false;
+
         public IAsyncEnumerable<AudioSegment> ReadSegmentsAsync(CancellationToken cancellationToken = default) =>
             _segments.Reader.ReadAllAsync(cancellationToken);
 
         /// <summary>
-        /// Останавливает накопление loopback-звука и очищает уже захваченный
-        /// хвост. Используется во время распознавания и озвучки, чтобы голос
-        /// Nexus не вернулся в Whisper как новая реплика.
+        /// На время закадрового голоса останавливает только поступление новых
+        /// loopback-сэмплов. Вызывающий код одновременно удерживает видео, поэтому
+        /// исходная реплика не продолжает идти и не теряется за голосом Nexus.
         /// </summary>
-        public void SuspendAndFlush()
+        public void SuspendForDubbing()
         {
             lock (_sync)
             {
                 if (_disposed) return;
                 _suspended = true;
-                _raw.SetLength(0);
             }
-            while (_segments.Reader.TryRead(out _)) { }
         }
 
         public void Resume()
@@ -76,7 +91,6 @@ public static class SystemAudioCaptureService
             lock (_sync)
             {
                 if (_disposed) return;
-                _raw.SetLength(0);
                 _suspended = false;
             }
         }
@@ -109,19 +123,48 @@ public static class SystemAudioCaptureService
                     byte[] snapshot;
                     lock (_sync)
                     {
+                        // Keep the partial phrase that arrived immediately before Nexus started
+                        // speaking. It is joined with the next original samples after resume,
+                        // instead of being silently discarded at a word boundary.
+                        if (_suspended) continue;
                         snapshot = _raw.ToArray();
                         var keep = Math.Min(_overlapBytes, snapshot.Length);
                         _raw.SetLength(0);
                         if (keep > 0) _raw.Write(snapshot, snapshot.Length - keep, keep);
                     }
-                    if (snapshot.Length < _capture.WaveFormat.AverageBytesPerSecond * 5 / 4) continue;
+                    if (snapshot.Length < _capture.WaveFormat.AverageBytesPerSecond * 5 / 4)
+                    {
+                        if (!_reportedEmptyWindow)
+                        {
+                            _reportedEmptyWindow = true;
+                            CrashReportService.AddBreadcrumb("video-translation",
+                                $"system-loopback-short-{snapshot.Length}");
+                        }
+                        continue;
+                    }
                     var converted = ConvertRawToWav(snapshot, _capture.WaveFormat);
                     // Очень тихие окна не отправляются в Whisper. Это уменьшает
                     // ложное распознавание и лишнюю нагрузку, но не отрезает тихую речь.
-                    if (converted.Rms < 0.0025 && converted.Peak < 0.018) continue;
+                    if (!VideoDubbingPolicy.IsAudible(converted.Rms, converted.Peak))
+                    {
+                        if (!_reportedQuietWindow)
+                        {
+                            _reportedQuietWindow = true;
+                            CrashReportService.AddBreadcrumb("video-translation",
+                                $"system-loopback-quiet-rms-{converted.Rms:F6}-peak-{converted.Peak:F6}");
+                        }
+                        continue;
+                    }
+                    if (!_reportedAudioWindow)
+                    {
+                        _reportedAudioWindow = true;
+                        CrashReportService.AddBreadcrumb("video-translation",
+                            $"system-loopback-audio-rms-{converted.Rms:F4}-peak-{converted.Peak:F4}");
+                    }
                     _segments.Writer.TryWrite(new AudioSegment(
                         Interlocked.Increment(ref _sequence), converted.Wav,
-                        converted.Rms, converted.Peak, DateTimeOffset.UtcNow));
+                        converted.Rms, converted.Peak,
+                        DateTimeOffset.UtcNow - TimeSpan.FromMilliseconds(_segmentMilliseconds)));
                 }
             }
             catch (OperationCanceledException) { }
@@ -153,6 +196,25 @@ public static class SystemAudioCaptureService
     public static ContinuousCaptureSession StartContinuousCapture(
         int segmentMilliseconds = 2_800, int overlapMilliseconds = 300) =>
         new(segmentMilliseconds, overlapMilliseconds);
+
+    internal static async Task<IContinuousAudioCaptureSession> StartPreferredContinuousCaptureAsync(
+        int targetProcessId, int segmentMilliseconds = 2_800, int overlapMilliseconds = 300,
+        CancellationToken cancellationToken = default)
+    {
+        if (VideoDubbingPolicy.SupportsProcessLoopback(Environment.OSVersion.Version, targetProcessId))
+            try
+            {
+                return await ProcessAudioCaptureService.StartAsync(targetProcessId,
+                    segmentMilliseconds, overlapMilliseconds, cancellationToken);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                CrashReportService.RecordNonFatal("video-translation", "process-loopback-fallback", ex);
+            }
+
+        return StartContinuousCapture(segmentMilliseconds, overlapMilliseconds);
+    }
 
     public static async Task<byte[]> CaptureWavAsync(int seconds, CancellationToken cancellationToken = default)
     {
@@ -202,7 +264,8 @@ public static class SystemAudioCaptureService
         return ConvertRawToWav(rawAudio.ToArray(), capture.WaveFormat).Wav;
     }
 
-    private static (byte[] Wav, double Rms, double Peak) ConvertRawToWav(byte[] rawAudio, WaveFormat waveFormat)
+    internal static (byte[] Wav, double Rms, double Peak) ConvertRawToWav(byte[] rawAudio,
+        WaveFormat waveFormat)
     {
         // WASAPI обычно отдаёт 48 кГц float/stereo, тогда как whisper.cpp принимает
         // подготовленный 16 кГц mono PCM WAV. Преобразование остаётся целиком в памяти.
@@ -217,25 +280,31 @@ public static class SystemAudioCaptureService
         if (samples.WaveFormat.SampleRate != 16_000)
             samples = new WdlResamplingSampleProvider(samples, 16_000);
 
-        using var wav = new MemoryStream();
+        var monoSamples = new List<float>(Math.Max(16_000,
+            rawAudio.Length / Math.Max(1, waveFormat.BlockAlign)));
         double squared = 0;
         double peak = 0;
         long sampleCount = 0;
-        using (var writer = new WaveFileWriter(wav, new WaveFormat(16_000, 16, 1)))
+        var buffer = new float[16_000];
+        int read;
+        while ((read = samples.Read(buffer, 0, buffer.Length)) > 0)
         {
-            var buffer = new float[16_000];
-            int read;
-            while ((read = samples.Read(buffer, 0, buffer.Length)) > 0)
-                for (var index = 0; index < read; index++)
-                {
-                    var sample = Math.Clamp(buffer[index], -1f, 1f);
-                    writer.WriteSample(sample);
-                    squared += sample * sample;
-                    peak = Math.Max(peak, Math.Abs(sample));
-                    sampleCount++;
-                }
+            for (var index = 0; index < read; index++)
+            {
+                var sample = Math.Clamp(buffer[index], -1f, 1f);
+                monoSamples.Add(sample);
+                squared += sample * sample;
+                peak = Math.Max(peak, Math.Abs(sample));
+                sampleCount++;
+            }
         }
-        return (wav.ToArray(), sampleCount == 0 ? 0 : Math.Sqrt(squared / sampleCount), peak);
+        var rms = sampleCount == 0 ? 0 : Math.Sqrt(squared / sampleCount);
+        var gain = VideoDubbingPolicy.SelectRecognitionGain(rms, peak);
+        using var wav = new MemoryStream();
+        using (var writer = new WaveFileWriter(wav, new WaveFormat(16_000, 16, 1)))
+            foreach (var sample in monoSamples)
+                writer.WriteSample((float)Math.Clamp(sample * gain, -0.98, 0.98));
+        return (wav.ToArray(), rms, peak);
     }
 
     /// <summary>

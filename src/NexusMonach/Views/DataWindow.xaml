@@ -11,7 +11,7 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
         <TextBlock x:Name="HeaderText" FontSize="24" FontWeight="SemiBold" Margin="0,0,0,16" />
-        <ListBox x:Name="ItemsList" Grid.Row="1" Background="#101923" BorderBrush="#2B4054"
+        <ListBox x:Name="ItemsList" Grid.Row="1" Background="{StaticResource FieldBrush}" BorderBrush="{StaticResource BorderBrush}"
                  Foreground="{StaticResource TextBrush}" MouseDoubleClick="ItemsList_MouseDoubleClick">
             <ListBox.ItemTemplate>
                 <DataTemplate>

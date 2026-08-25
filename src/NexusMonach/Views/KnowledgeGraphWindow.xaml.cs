@@ -94,8 +94,8 @@ public partial class KnowledgeGraphWindow : Window
             var center = new Point(points.Average(x => x.X), points.Average(x => x.Y));
             var label = new Border
             {
-                Background = new SolidColorBrush(Color.FromArgb(120, 12, 18, 26)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(90, 255, 255, 255)),
+                Background = (Brush)FindResource("PanelBrush"),
+                BorderBrush = (Brush)FindResource("BorderBrush"),
                 BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(9), Padding = new Thickness(9, 4, 9, 4),
                 Child = new TextBlock { Text = group.Key.ToUpperInvariant(), FontSize = 9.5, Foreground = (Brush)FindResource("MutedTextBrush") },
                 IsHitTestVisible = false
@@ -114,7 +114,7 @@ public partial class KnowledgeGraphWindow : Window
                 Content = new TextBlock { Text = Short(node.Title, 34), TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center },
                 Tag = node, Width = Math.Max(126, size * 2.55), Height = size,
                 Padding = new Thickness(7, 4, 7, 4), ToolTip = $"{node.Title}\n{node.Summary}\nДвойной щелчок — открыть",
-                Background = new SolidColorBrush(Color.FromArgb(220, (byte)(color.R / 4 + 11), (byte)(color.G / 4 + 14), (byte)(color.B / 4 + 18))),
+                Background = (Brush)FindResource("PanelBrush"),
                 BorderBrush = new SolidColorBrush(Color.FromArgb(220, color.R, color.G, color.B)),
                 Foreground = (Brush)FindResource("TextBrush"), FontSize = 10.5,
                 BorderThickness = new Thickness(node.IsPinned ? 2.5 : 1.2)

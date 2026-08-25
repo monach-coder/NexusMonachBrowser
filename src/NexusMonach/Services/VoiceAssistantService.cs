@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
 using System.Speech.Synthesis;
 using System.Text.RegularExpressions;
 using NexusMonach.Models;
@@ -23,11 +24,13 @@ public static partial class VoiceAssistantService
     private static readonly object Sync = new();
     private static Thread? _thread;
     private static SpeechSynthesizer? _activeSynthesizer;
+    private static object? _activeSapiVoice;
     private static volatile bool _isSpeaking;
     private static bool _shutdown;
 
     public static bool IsSpeaking => _isSpeaking;
     public static bool IsBusy => _isSpeaking || Queue.Count > 0;
+    public static string EngineStatus => NeuralVoiceService.Status;
 
     public static void Initialize()
     {
@@ -54,7 +57,7 @@ public static partial class VoiceAssistantService
         var safe = SanitizeForSpeech(text);
         if (safe.Length == 0) return false;
         Initialize();
-        var item = new VoiceQueueItem(safe, priority, false, null, null);
+        var item = new VoiceQueueItem(safe, priority, false, null, null, settings.NeuralVoiceProfile);
         if (Queue.TryAdd(item)) return true;
         if (priority != VoiceAnnouncementPriority.Critical) return false;
         DrainPendingQueue();
@@ -82,7 +85,8 @@ public static partial class VoiceAssistantService
 
         Initialize();
         var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!Queue.TryAdd(new VoiceQueueItem(safe, priority, false, completion, rateOverride))) return false;
+        if (!Queue.TryAdd(new VoiceQueueItem(safe, priority, false, completion, rateOverride,
+                settings.NeuralVoiceProfile))) return false;
         try
         {
             return await completion.Task.WaitAsync(cancellationToken);
@@ -95,15 +99,29 @@ public static partial class VoiceAssistantService
     }
 
     public static void SpeakTestPhrase() =>
-        Announce("Женский голос Nexus готов помогать в сети.", VoiceAnnouncementPriority.Critical);
+        Announce("Nexus Monach готов. Сегодня 02.08.2026. WebView2 работает. Чем я могу помочь?",
+            VoiceAnnouncementPriority.Critical);
 
     public static void StopSpeaking()
     {
         Initialize();
         DrainPendingQueue();
         lock (Sync)
+        {
             try { _activeSynthesizer?.SpeakAsyncCancelAll(); } catch { }
-        Queue.TryAdd(new VoiceQueueItem(string.Empty, VoiceAnnouncementPriority.Critical, true, null, null));
+            try
+            {
+                if (_activeSapiVoice is not null)
+                {
+                    dynamic sapi = _activeSapiVoice;
+                    sapi.Speak(string.Empty, 3); // async + purge queued speech
+                }
+            }
+            catch { }
+        }
+        NeuralVoiceService.Stop();
+        Queue.TryAdd(new VoiceQueueItem(string.Empty, VoiceAnnouncementPriority.Critical, true, null, null,
+            SettingsService.Current.NeuralVoiceProfile));
     }
 
     public static void Shutdown()
@@ -113,9 +131,11 @@ public static partial class VoiceAssistantService
             if (_shutdown) return;
             _shutdown = true;
             DrainPendingQueue();
-            Queue.TryAdd(new VoiceQueueItem(string.Empty, VoiceAnnouncementPriority.Critical, true, null, null));
+            Queue.TryAdd(new VoiceQueueItem(string.Empty, VoiceAnnouncementPriority.Critical, true, null, null,
+                SettingsService.Current.NeuralVoiceProfile));
             Queue.CompleteAdding();
         }
+        NeuralVoiceService.Shutdown();
     }
 
     internal static bool ShouldSpeak(VoiceAssistantMode mode, VoiceAnnouncementPriority priority,
@@ -133,23 +153,39 @@ public static partial class VoiceAssistantService
         text = SecretPattern().Replace(text, "$1 скрыто");
         text = ControlPattern().Replace(text, " ");
         text = SpacePattern().Replace(text, " ").Trim();
-        return text[..Math.Min(text.Length, 360)];
+        text = RussianSpeechTextNormalizer.Normalize(text);
+        if (text.Length <= 360) return text;
+        var boundary = text.LastIndexOf(' ', 359);
+        return text[..(boundary >= 240 ? boundary : 360)].TrimEnd();
     }
 
     private static void Run()
     {
+        SpeechSynthesizer? synthesizer = null;
         try
         {
-            using var synthesizer = new SpeechSynthesizer();
+            try
+            {
+                synthesizer = new SpeechSynthesizer();
+                SelectFemaleVoice(synthesizer);
+                synthesizer.SetOutputToDefaultAudioDevice();
+                synthesizer.Volume = 95;
+            }
+            catch (PlatformNotSupportedException ex)
+            {
+                // Self-contained Windows packages can legitimately have no
+                // System.Speech backend. Neural TTS is the primary engine and
+                // must remain usable without creating SAPI first.
+                try { synthesizer?.Dispose(); } catch { }
+                synthesizer = null;
+                CrashReportService.RecordNonFatal("voice", "sapi-unavailable", ex);
+            }
             lock (Sync) _activeSynthesizer = synthesizer;
-            SelectFemaleVoice(synthesizer);
-            synthesizer.SetOutputToDefaultAudioDevice();
-            synthesizer.Volume = 95;
             foreach (var item in Queue.GetConsumingEnumerable())
             {
                 if (item.Cancel)
                 {
-                    synthesizer.SpeakAsyncCancelAll();
+                    try { synthesizer?.SpeakAsyncCancelAll(); } catch { }
                     item.Completion?.TrySetResult(false);
                     continue;
                 }
@@ -160,9 +196,20 @@ public static partial class VoiceAssistantService
                 }
                 try
                 {
-                    synthesizer.Rate = Math.Clamp(
-                        item.RateOverride ?? SettingsService.Current.VoiceRate, -4, 4);
                     _isSpeaking = true;
+                    var rate = Math.Clamp(item.RateOverride ?? SettingsService.Current.VoiceRate, -4, 4);
+                    if (NeuralVoiceService.TrySpeak(item.Text, item.Profile, rate))
+                    {
+                        item.Completion?.TrySetResult(true);
+                        continue;
+                    }
+                    if (synthesizer is null)
+                    {
+                        SpeakWithNativeSapi(item.Text, rate);
+                        item.Completion?.TrySetResult(true);
+                        continue;
+                    }
+                    synthesizer.Rate = rate;
                     using var completed = new ManualResetEventSlim(false);
                     SpeakCompletedEventArgs? result = null;
                     EventHandler<SpeakCompletedEventArgs> handler = (_, args) =>
@@ -195,7 +242,44 @@ public static partial class VoiceAssistantService
         finally
         {
             lock (Sync) _activeSynthesizer = null;
+            try { synthesizer?.Dispose(); } catch { }
             _isSpeaking = false;
+        }
+    }
+
+    private static void SpeakWithNativeSapi(string text, int rate)
+    {
+        object? voiceObject = null;
+        VideoDubbingVoiceService.SuspendPlayback();
+        try
+        {
+            var sapiType = Type.GetTypeFromProgID("SAPI.SpVoice")
+                           ?? throw new PlatformNotSupportedException(
+                               "Windows SAPI.SpVoice не зарегистрирован.");
+            voiceObject = Activator.CreateInstance(sapiType)
+                          ?? throw new InvalidOperationException("Windows не создал SAPI.SpVoice.");
+            dynamic voice = voiceObject;
+            dynamic russianFemale = voice.GetVoices("Language=419;Gender=Female", string.Empty);
+            dynamic russian = voice.GetVoices("Language=419", string.Empty);
+            dynamic female = voice.GetVoices("Gender=Female", string.Empty);
+            dynamic all = voice.GetVoices(string.Empty, string.Empty);
+            if (russianFemale.Count > 0) voice.Voice = russianFemale.Item(0);
+            else if (russian.Count > 0) voice.Voice = russian.Item(0);
+            else if (female.Count > 0) voice.Voice = female.Item(0);
+            else if (all.Count > 0) voice.Voice = all.Item(0);
+            else throw new InvalidOperationException("Windows SAPI не вернул доступных голосов.");
+            voice.Rate = Math.Clamp(rate, -4, 4);
+            voice.Volume = 95;
+            lock (Sync) _activeSapiVoice = voiceObject;
+            voice.Speak(text, 0); // synchronous on the dedicated STA voice thread
+        }
+        finally
+        {
+            lock (Sync)
+                if (ReferenceEquals(_activeSapiVoice, voiceObject)) _activeSapiVoice = null;
+            if (voiceObject is not null && Marshal.IsComObject(voiceObject))
+                try { Marshal.FinalReleaseComObject(voiceObject); } catch { }
+            VideoDubbingVoiceService.ResumePlayback();
         }
     }
 
@@ -223,7 +307,7 @@ public static partial class VoiceAssistantService
     }
 
     private sealed record VoiceQueueItem(string Text, VoiceAnnouncementPriority Priority, bool Cancel,
-        TaskCompletionSource<bool>? Completion, int? RateOverride);
+        TaskCompletionSource<bool>? Completion, int? RateOverride, NeuralVoiceProfile Profile);
 
     [GeneratedRegex(@"(?i)\b(?:https?|wss?)://[^\s]+|\bwww\.[^\s]+")]
     private static partial Regex UrlPattern();

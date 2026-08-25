@@ -28,7 +28,7 @@ public static class BrowserEnvironment
 
         ExtensionsEnabledAtStartup = SettingsService.Current.EnableExtensions && !GuardianRuntime.IsSafeMode;
         var browserArguments = SecureNetworkConfigurationService.BuildBrowserArguments(SettingsService.Current);
-        if (GuardianRuntime.IsSafeMode)
+        if (GuardianRuntime.IsSafeMode || GuardianRuntime.DisableGpuOnly)
             browserArguments = (browserArguments + " --disable-gpu --disable-gpu-compositing").Trim();
         var options = new CoreWebView2EnvironmentOptions
         {
@@ -81,11 +81,8 @@ public static class BrowserEnvironment
 
     public static async Task ClearBrowsingDataAsync()
     {
-        foreach (var profile in Profiles.Values.Distinct().ToList())
-        {
-            try { await profile.ClearBrowsingDataAsync(); }
-            catch { /* Профиль мог быть уже закрыт вместе с последней вкладкой. */ }
-        }
+        await ClearProfilesAsync(CoreWebView2BrowsingDataKinds.AllProfile,
+            TimeSpan.FromSeconds(12));
     }
 
     public static async Task ClearEphemeralBrowsingDataAsync()
@@ -94,10 +91,20 @@ public static class BrowserEnvironment
             CoreWebView2BrowsingDataKinds.BrowsingHistory |
             CoreWebView2BrowsingDataKinds.DownloadHistory |
             CoreWebView2BrowsingDataKinds.DiskCache;
-        foreach (var profile in Profiles.Values.Distinct().ToList())
+        await ClearProfilesAsync(ephemeral, TimeSpan.FromSeconds(4));
+    }
+
+    private static async Task ClearProfilesAsync(CoreWebView2BrowsingDataKinds kinds,
+        TimeSpan timeout)
+    {
+        // Profiles are independent. A sequential timeout made three registered
+        // profiles hold the closing window for up to 36 seconds.
+        var operations = Profiles.Values.Distinct().Select(async profile =>
         {
-            try { await profile.ClearBrowsingDataAsync(ephemeral); }
-            catch { /* Профиль мог быть уже закрыт вместе с последней вкладкой. */ }
-        }
+            try { await profile.ClearBrowsingDataAsync(kinds).WaitAsync(timeout); }
+            catch (TimeoutException) { /* Cleanup is best effort and bounded. */ }
+            catch { /* The profile may already be closed with its final tab. */ }
+        });
+        await Task.WhenAll(operations);
     }
 }

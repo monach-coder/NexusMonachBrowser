@@ -9,7 +9,7 @@ public static class DownloadService
 
     public static void Add(DownloadItem item)
     {
-        System.Windows.Application.Current.Dispatcher.Invoke(() =>
+        Ui.Invoke(() =>
         {
             Items.Insert(0, item);
             while (Items.Count > 100)

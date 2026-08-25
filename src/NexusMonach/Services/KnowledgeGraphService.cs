@@ -379,7 +379,10 @@ public static class KnowledgeGraphService
             }
         }
         await JsonStore.WriteAsync(AppPaths.KnowledgeGraphFile, _data);
-        try { File.Delete(AppPaths.HistoryFile); } catch { }
+        try { File.Delete(AppPaths.HistoryFile); } catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("knowledge-graph", "ImportLegacyHistoryAsync", swallowed);
+        }
     }
 
     private static void NormalizeLoadedData()

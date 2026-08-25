@@ -11,6 +11,10 @@ public sealed class PageTranslationPolicyTests
         Assert.Contains("button", PageTranslationPolicy.InteractiveSelector, StringComparison.Ordinal);
         Assert.Contains("menuitem", PageTranslationPolicy.InteractiveSelector, StringComparison.Ordinal);
         Assert.Contains("tab", PageTranslationPolicy.InteractiveSelector, StringComparison.Ordinal);
+        Assert.Contains("combobox", PageTranslationPolicy.InteractiveSelector, StringComparison.Ordinal);
+        Assert.Contains("summary", PageTranslationPolicy.InteractiveSelector, StringComparison.Ordinal);
+        Assert.Contains("placeholder", PageTranslationPolicy.TranslatableAttributes);
+        Assert.Contains("aria-label", PageTranslationPolicy.TranslatableAttributes);
     }
 
     [Fact]
@@ -32,5 +36,6 @@ public sealed class PageTranslationPolicyTests
     public void InputValueBoundary_AllowsOnlyButtonLabels(string inputType, bool expected)
     {
         Assert.Equal(expected, PageTranslationPolicy.CanTranslateInputValue(inputType));
+        Assert.False(PageTranslationPolicy.CanReadUserValue(inputType));
     }
 }

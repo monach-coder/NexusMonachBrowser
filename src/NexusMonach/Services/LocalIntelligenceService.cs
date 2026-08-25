@@ -207,6 +207,135 @@ public static class LocalIntelligenceService
         return translated;
     }
 
+    /// <summary>
+    /// Video-only translation path. OPUS translates the current clause only. The
+    /// rolling dialogue window remains useful for overlap and duplicate control,
+    /// but Marian items are independent: retranslating every previous clause made
+    /// each live request several times slower without adding linguistic context.
+    /// </summary>
+    internal static async Task<string> TranslateVideoPhraseAsync(string text,
+        IReadOnlyList<VideoTranslationContextEntry> context,
+        CancellationToken cancellationToken = default, string? sourceLanguage = null)
+    {
+        text = WhisperService.NormalizeTranscript(text);
+        if (text.Length == 0) return string.Empty;
+        if (LooksRussian(text)) return text;
+
+        if (LocalTranslationDictionary.TryTranslate(text, out var remembered))
+        {
+            remembered = ValidateVideoTranslation(text, remembered);
+            if (remembered.Length > 0) return remembered;
+        }
+
+        var units = SplitVideoTranslationUnits(text);
+        var completed = new Dictionary<int, string>();
+        var pending = new List<TranslationSegment>();
+        for (var index = 0; index < units.Count; index++)
+        {
+            if (LocalTranslationDictionary.TryTranslate(units[index], out var known))
+            {
+                known = ValidateVideoTranslation(units[index], known);
+                if (known.Length > 0)
+                {
+                    completed[index] = known;
+                    continue;
+                }
+            }
+            pending.Add(new TranslationSegment
+            {
+                Id = $"video-{index}",
+                Text = units[index],
+                Language = sourceLanguage?.Trim() ?? string.Empty
+            });
+        }
+
+        if (pending.Count > 0)
+        {
+            var translatedItems = await TranslationService.TranslateSegmentsAsync(
+                pending, false, cancellationToken);
+            foreach (var item in translatedItems)
+            {
+                if (!int.TryParse(item.Id.AsSpan("video-".Length), out var index) ||
+                    index < 0 || index >= units.Count) continue;
+                var translatedUnit = ValidateVideoTranslation(units[index], item.Text);
+                if (translatedUnit.Length == 0) continue;
+                completed[index] = translatedUnit;
+                LocalTranslationDictionary.Remember(units[index], translatedUnit);
+            }
+        }
+
+        if (completed.Count != units.Count)
+            throw new InvalidOperationException(
+                "OPUS не вернул проверенный русский перевод законченной видеореплики.");
+        var translated = string.Join(' ', Enumerable.Range(0, units.Count)
+            .Select(index => completed[index])).Trim();
+        LocalTranslationDictionary.Remember(text, translated);
+        return translated;
+    }
+
+    internal static IReadOnlyList<string> SplitVideoTranslationUnits(string text)
+    {
+        text = WhisperService.NormalizeTranscript(text);
+        if (text.Length == 0) return [];
+        var sentences = Regex.Split(text, @"(?<=[.!?…])\s+")
+            .Where(value => !string.IsNullOrWhiteSpace(value)).ToArray();
+        var result = new List<string>();
+        foreach (var sentence in sentences)
+        {
+            var words = sentence.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length <= 18 && sentence.Length <= 130)
+            {
+                result.Add(sentence.Trim());
+                continue;
+            }
+            for (var index = 0; index < words.Length; index += 16)
+                result.Add(string.Join(' ', words.Skip(index).Take(16)));
+        }
+        return result;
+    }
+
+    internal static string ValidateVideoTranslation(string source, string value)
+    {
+        var translated = ValidateTranslation(value);
+        if (Regex.IsMatch(translated, @"\.{6,}") ||
+            Regex.IsMatch(translated, @"(?i)(?:\b[\p{L}]\b[\s,.;:!?]*){6,}"))
+            return string.Empty;
+        var runawayPause = Regex.Match(translated, @"\.{3,}");
+        if (runawayPause.Success && runawayPause.Index >= 4)
+            translated = translated[..runawayPause.Index].TrimEnd() + ".";
+        translated = Regex.Replace(translated, @"\.{4,}", "…");
+        translated = Regex.Replace(translated, @"(?:…\s*){2,}", "…");
+        translated = Regex.Replace(translated, @"\s+([,.;:!?])", "$1").Trim();
+        if (!IsUsableRussianTranslation(source, translated)) return string.Empty;
+
+        // Live speech must never contain a runaway Marian tail. Russian may be
+        // somewhat longer than English, but not hundreds of characters longer.
+        var maximumLength = Math.Max(72, source.Length * 3 + 24);
+        if (translated.Length > maximumLength) return string.Empty;
+
+        var letters = translated.Count(char.IsLetter);
+        var cyrillic = translated.Count(ch => ch is >= '\u0400' and <= '\u04FF');
+        if (letters >= 4 && cyrillic < letters * 0.55) return string.Empty;
+
+        var punctuation = translated.Count(char.IsPunctuation);
+        if (punctuation > 6 && punctuation > translated.Length * 0.20) return string.Empty;
+
+        var words = Regex.Matches(translated.ToLowerInvariant(), @"[\p{L}\p{N}]+")
+            .Select(match => match.Value).ToArray();
+        if (words.Length >= 6)
+        {
+            var mostFrequent = words.GroupBy(word => word, StringComparer.Ordinal)
+                .Max(group => group.Count());
+            if (mostFrequent >= Math.Max(5, words.Length / 3)) return string.Empty;
+
+            var bigrams = words.Zip(words.Skip(1), (left, right) => left + "\u001f" + right);
+            if (bigrams.GroupBy(value => value, StringComparer.Ordinal)
+                .Any(group => group.Count() >= 3)) return string.Empty;
+        }
+
+        return translated;
+    }
+
     public static async Task<string> TranslateEnglishToRussianAsync(string text,
         CancellationToken cancellationToken = default)
     {

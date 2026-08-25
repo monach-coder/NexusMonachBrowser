@@ -1,5 +1,6 @@
 param(
     [switch]$OfficialGuardianBuild,
+    [switch]$SkipArchive,
     [string]$GuardianReportEndpoint = $env:NEXUS_GUARDIAN_REPORT_ENDPOINT,
     [string]$GuardianReportIngestKey = $env:NEXUS_GUARDIAN_REPORT_INGEST_KEY,
     [ValidateSet('ask', 'automatic')]
@@ -62,6 +63,16 @@ if ($missingAi.Count -gt 0) {
     Write-Host "WARNING: source build does not contain the Full Offline AI payload:" -ForegroundColor Yellow
     $missingAi | ForEach-Object { Write-Host "  - $_" -ForegroundColor Yellow }
     Write-Host "The browser will build, but AI functions require the official Full Offline release." -ForegroundColor Yellow
+}
+
+# Портативный профиль пользователя (Data) живёт в папке сборки и не является
+# артефактом сборки: без переноса каждая пересборка сбрасывала настройки,
+# тему и диалог первого запуска.
+$preservedData = Join-Path $dist "NexusMonach-Data-Preserve"
+$hasPreservedData = Test-Path (Join-Path $publish "Data")
+if ($hasPreservedData) {
+    if (Test-Path $preservedData) { Remove-Item $preservedData -Recurse -Force }
+    Move-Item (Join-Path $publish "Data") $preservedData
 }
 
 if (Test-Path $publish) { Remove-Item $publish -Recurse -Force }
@@ -196,8 +207,24 @@ if (-not $OfficialGuardianBuild) {
     }
 }
 
-Compress-Archive -Path (Join-Path $publish "*") -DestinationPath $archive -CompressionLevel Optimal
+if (-not $SkipArchive) {
+    Compress-Archive -Path (Join-Path $publish "*") -DestinationPath $archive -CompressionLevel Optimal
+} else {
+    Write-Host "Skipping the portable archive (-SkipArchive)." -ForegroundColor Yellow
+}
 
-Write-Host "" 
+# Профиль возвращается после создания архива: пользовательские данные не
+# должны попадать в распространяемый zip. Условие — только наличие архива
+# с профилем: прерванная пересборка оставляет профиль снаружи, и повторный
+# прогон обязан вернуть его, а не потерять.
+if (Test-Path $preservedData) {
+    if (Test-Path (Join-Path $publish "Data")) {
+        Remove-Item (Join-Path $publish "Data") -Recurse -Force
+    }
+    Move-Item $preservedData (Join-Path $publish "Data")
+    Write-Host "User portable profile (Data) carried over the rebuild." -ForegroundColor Green
+}
+
+Write-Host ""
 Write-Host "Done:" -ForegroundColor Green
-Write-Host $archive
+if (-not $SkipArchive) { Write-Host $archive } else { Write-Host $publish }

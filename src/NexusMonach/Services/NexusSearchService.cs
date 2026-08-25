@@ -11,6 +11,8 @@ namespace NexusMonach.Services;
 public sealed record NexusSearchItem(string Title, string Url, string Snippet, string Answer, double Score);
 public sealed record NexusSearchReport(string Query, string DirectAnswer, IReadOnlyList<NexusSearchItem> Items,
     string Disclosure);
+public sealed record ShoppingSearchDiscovery(string CardsJson, int DiscoveryCount, int CardCount,
+    string SearchHost);
 
 /// <summary>
 /// Bounded research crawler used by the local Nexus results page. A configured
@@ -78,6 +80,67 @@ public static partial class NexusSearchService
 
         progress?.Report("Локальная модель сопоставляет факты и готовит выжимку…");
         return await LocalIntelligenceService.AnalyzeWebSearchAsync(query, enriched, cancellationToken);
+    }
+
+    /// <summary>
+    /// Uses the configured search provider as a discovery layer for shopping.
+    /// The provider never supplies the comparison: result pages are crawled,
+    /// normalised and later ranked locally by the same shopping pipeline as a
+    /// site catalogue. When a host is supplied, external results are discarded.
+    /// </summary>
+    public static async Task<ShoppingSearchDiscovery> SearchShoppingAsync(string query, string? requiredHost,
+        IProgress<string>? progress = null, CancellationToken cancellationToken = default)
+    {
+        requiredHost = NormalizeRequiredHost(requiredHost);
+        var discoveryQuery = requiredHost is null ? query : $"site:{requiredHost} {query}";
+        var report = await SearchAsync(discoveryQuery, progress, cancellationToken);
+        var cards = BuildShoppingCardsFromSearchReport(report, requiredHost);
+        using var document = JsonDocument.Parse(cards);
+        return new ShoppingSearchDiscovery(cards, report.Items.Count, document.RootElement.GetArrayLength(),
+            requiredHost ?? "web");
+    }
+
+    internal static string BuildShoppingCardsFromSearchReport(NexusSearchReport report, string? requiredHost)
+    {
+        requiredHost = NormalizeRequiredHost(requiredHost);
+        var cards = report.Items
+            .Where(item => IsSafePublicUrl(item.Url, out var uri) &&
+                           (requiredHost is null || IsSameSite(uri.Host, requiredHost)))
+            .DistinctBy(item => item.Url, StringComparer.OrdinalIgnoreCase)
+            .Select(item =>
+            {
+                var evidence = Regex.Replace($"{item.Snippet} {item.Answer}", @"\s+", " ").Trim();
+                return new
+                {
+                    name = string.IsNullOrWhiteSpace(item.Title) ? new Uri(item.Url).Host : item.Title.Trim(),
+                    price = ExtractVisiblePrice(evidence),
+                    rating = string.Empty,
+                    buyers = string.Empty,
+                    url = item.Url,
+                    imageUrl = string.Empty,
+                    text = evidence[..Math.Min(evidence.Length, 1800)],
+                    source = "search-engine"
+                };
+            })
+            .ToArray();
+        return JsonSerializer.Serialize(cards);
+    }
+
+    private static string? NormalizeRequiredHost(string? host)
+    {
+        host = host?.Trim().Trim('.');
+        if (string.IsNullOrWhiteSpace(host)) return null;
+        if (Uri.CheckHostName(host) is UriHostNameType.Unknown)
+            throw new ArgumentException("Ограничение поиска содержит некорректный домен.", nameof(host));
+        return host.ToLowerInvariant();
+    }
+
+    private static string ExtractVisiblePrice(string text)
+    {
+        var match = Regex.Match(text,
+            @"(?<![\p{L}\p{N}])(?:от\s+)?\d[\d\s\u00a0.,]{0,14}\s?(?:₽|руб(?:\.|лей)?|р\.|\$|€|£|USD|EUR|RUB)(?!\p{L})",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return match.Success ? Regex.Replace(match.Value, @"\s+", " ").Trim() : string.Empty;
     }
 
     public static async Task<NexusSearchReport> AnalyzeSelectedSiteAsync(string query, string title, string url,
@@ -258,6 +321,13 @@ public static partial class NexusSearchService
                 !media.Contains("html", StringComparison.OrdinalIgnoreCase)) return candidate;
             var html = await ReadBoundedHtmlAsync(response, cancellationToken);
             candidate.Snippet = ExtractReadableText(html, 12_000);
+            return candidate;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // A per-request HttpClient/connect timeout must not cancel the
+            // complete comparison. The provider title is still a valid,
+            // explicitly disclosed discovery candidate.
             return candidate;
         }
         catch (OperationCanceledException) { throw; }

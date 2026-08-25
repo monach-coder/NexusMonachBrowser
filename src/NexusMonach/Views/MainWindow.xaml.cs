@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Net.Http;
@@ -34,6 +35,7 @@ public partial class MainWindow : Window
     private TopologyDetailsWindow? _topologyDetailsWindow;
     private readonly DispatcherTimer _memoryTimer;
     private readonly DispatcherTimer _networkPerformanceTimer;
+    private DispatcherTimer? _downloadsCloseTimer;
     private readonly Dictionary<string, (long Received, long Sent)> _networkCounters = new(StringComparer.Ordinal);
     private DateTime _networkSampleUtc = DateTime.UtcNow;
     private double _downloadBytesPerSecond;
@@ -46,14 +48,23 @@ public partial class MainWindow : Window
     private int[] _localUdpPorts = [];
     private LocalPortInfo[] _localPortDetails = [];
     private bool _localPortsAvailable;
-    private readonly Dictionary<BrowserTab, string> _lastKnowledgeUrl = [];
-    private readonly Dictionary<BrowserTab, CancellationTokenSource> _searchOperations = [];
-    private readonly Dictionary<BrowserTab, string> _pendingSearchFollowUp = [];
-    private readonly Dictionary<BrowserTab, SiteResearchContext> _siteResearchContexts = [];
-    private readonly Dictionary<BrowserTab, CancellationTokenSource> _siteResearchOperations = [];
+    // Одна точка правды о per-вкладочном исследовании вместо пяти
+    // параллельных словарей, которые было легко рассинхронизировать.
+    private readonly Dictionary<BrowserTab, TabResearchState> _tabResearch = [];
+
+    private TabResearchState ResearchState(BrowserTab tab)
+    {
+        if (!_tabResearch.TryGetValue(tab, out var state))
+        {
+            state = new TabResearchState();
+            _tabResearch[tab] = state;
+        }
+        return state;
+    }
     private readonly SemaphoreSlim _voiceListenGate = new(1, 1);
     private CancellationTokenSource? _voiceListenCancellation;
     private CancellationTokenSource? _handsFreeCancellation;
+    private Services.Tor.NetworkWatchdog? _networkWatchdog;
     private static readonly JsonSerializerOptions WebJson = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -62,12 +73,29 @@ public partial class MainWindow : Window
 
     public ObservableCollection<BrowserTab> Tabs { get; } = [];
     private BrowserTab? ActiveTab => TabsList.SelectedItem as BrowserTab;
-    private sealed record SiteResearchContext(string Query, string Host);
+    private sealed record PendingSiteResearch(string Query, string RunId, string Trigger);
+    private sealed record SiteResearchContext(string Query, string Host, string RunId, string Trigger);
+
+    /// <summary>
+    /// Per-вкладочное состояние исследований: граф знаний, поиск Nexus,
+    /// ожидание выбора результата и анализ выбранного сайта — всё вместе,
+    /// с общим жизненным циклом «от активности до закрытия вкладки».
+    /// </summary>
+    private sealed class TabResearchState
+    {
+        public string? LastKnowledgeUrl { get; set; }
+        public CancellationTokenSource? NexusSearch { get; set; }
+        public PendingSiteResearch? PendingFollowUp { get; set; }
+        public SiteResearchContext? ResearchContext { get; set; }
+        public CancellationTokenSource? SiteResearch { get; set; }
+    }
 
     public MainWindow(bool isPrivate)
     {
         _isPrivate = isPrivate;
         InitializeComponent();
+        SourceInitialized += (_, _) =>
+            WindowAppearanceService.Apply(this, SettingsService.Current.ThemeMode);
         CrashReportService.Initialize();
         DataContext = this;
         PrivateBadge.Visibility = isPrivate ? Visibility.Visible : Visibility.Collapsed;
@@ -90,6 +118,118 @@ public partial class MainWindow : Window
             Dispatcher.BeginInvoke(new Action(() =>
                 throw new InvalidOperationException("Intentional Nexus Guardian crash-pipeline test.")),
                 DispatcherPriority.ApplicationIdle);
+        }
+        DownloadsList.ItemsSource = DownloadService.Items;
+        DownloadService.Items.CollectionChanged += Downloads_CollectionChanged;
+        Closed += (_, _) => DownloadService.Items.CollectionChanged -= Downloads_CollectionChanged;
+        RefreshDownloadsIndicator();
+    }
+
+    private void Downloads_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.OldItems is not null)
+            foreach (DownloadItem item in e.OldItems)
+                item.PropertyChanged -= Download_PropertyChanged;
+        if (e.NewItems is not null)
+            foreach (DownloadItem item in e.NewItems)
+                item.PropertyChanged += Download_PropertyChanged;
+        RefreshDownloadsIndicator();
+    }
+
+    private void Download_PropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(DownloadItem.Status) or nameof(DownloadItem.BytesReceived)
+            or nameof(DownloadItem.TotalBytes) or nameof(DownloadItem.ScanState))
+            RefreshDownloadsIndicator();
+    }
+
+    private void RefreshDownloadsIndicator()
+    {
+        var items = DownloadService.Items;
+        // Индикатор загрузок виден всегда; при активных загрузках показывает счётчик.
+        DownloadsIndicator.Opacity = items.Count > 0 ? 1.0 : 0.6;
+        if (items.Count == 0)
+        {
+            DownloadsPopup.IsOpen = false;
+            return;
+        }
+
+        var active = items.Where(x => x.Status.Equals("Загрузка", StringComparison.Ordinal)).ToArray();
+        if (active.Length == 0)
+        {
+            DownloadsIndicatorGlyph.Text = "\uE73E";
+            DownloadsIndicatorText.Text = "Готово";
+            return;
+        }
+
+        DownloadsIndicatorGlyph.Text = "\uE896";
+        var received = active.Sum(x => x.BytesReceived);
+        var total = active.Sum(x => x.TotalBytes);
+        var percent = total <= 0 ? 0 : Math.Clamp(received * 100d / total, 0, 100);
+        DownloadsIndicatorText.Text = $"{percent:0}%";
+    }
+
+    private void DownloadsIndicator_MouseEnter(object sender, MouseEventArgs e)
+    {
+        _downloadsCloseTimer?.Stop();
+        // Right-align the flyout with the indicator, which sits near the
+        // window edge, so the panel never runs off the right side.
+        DownloadsPopup.HorizontalOffset = DownloadsIndicator.ActualWidth -
+            (DownloadsFlyoutRoot.Width + DownloadsFlyoutRoot.Margin.Left + DownloadsFlyoutRoot.Margin.Right);
+        DownloadsPopup.VerticalOffset = 2;
+        DownloadsPopup.IsOpen = true;
+    }
+
+    private void DownloadsIndicator_MouseLeave(object sender, MouseEventArgs e) =>
+        ScheduleDownloadsFlyoutClose();
+
+    private void DownloadsFlyoutRoot_MouseEnter(object sender, MouseEventArgs e) =>
+        _downloadsCloseTimer?.Stop();
+
+    private void DownloadsFlyoutRoot_MouseLeave(object sender, MouseEventArgs e) =>
+        ScheduleDownloadsFlyoutClose();
+
+    private void ScheduleDownloadsFlyoutClose()
+    {
+        _downloadsCloseTimer?.Stop();
+        _downloadsCloseTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(320) };
+        _downloadsCloseTimer.Tick += (_, _) =>
+        {
+            _downloadsCloseTimer?.Stop();
+            DownloadsPopup.IsOpen = false;
+        };
+        _downloadsCloseTimer.Start();
+    }
+
+    private void DownloadsOpenFile_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is not DownloadItem item) return;
+        if (!item.Status.Equals("Завершено", StringComparison.OrdinalIgnoreCase) ||
+            !File.Exists(item.FilePath)) return;
+        try
+        {
+            Process.Start(new ProcessStartInfo(item.FilePath) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("downloads", "open-from-flyout", ex);
+        }
+    }
+
+    private void DownloadsShowFolder_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is not DownloadItem item) return;
+        if (!File.Exists(item.FilePath)) return;
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{item.FilePath}\"")
+            {
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("downloads", "show-folder", ex);
         }
     }
 
@@ -139,12 +279,13 @@ public partial class MainWindow : Window
             SecureRestartSessionService.Delete();
         if (!_isPrivate)
             HandleCoreUpdateSnapshot(WebView2RuntimeMonitor.Check());
-        VoiceButton.IsEnabled = !_isPrivate;
-        HandsFreeMenuItem.IsChecked = !_isPrivate && SettingsService.Current.VoiceHandsFreeEnabled;
-        StartHandsFreeIfEnabled();
+        // Голосовое управление браузером убрано полностью: команд больше нет.
+        // Осталась только озвучка перевода и уведомлений Дозора (TTS).
+        SettingsService.Current.VoiceHandsFreeEnabled = false;
     }
 
-    private BrowserTab AddTab(string url, bool navigateOnInitialize = true, bool insertAfterActive = false)
+    // internal: окна-центры (Guardian и др.) открывают вкладки браузера.
+    internal BrowserTab AddTab(string url, bool navigateOnInitialize = true, bool insertAfterActive = false)
     {
         var tab = new BrowserTab(url, _isPrivate, navigateOnInitialize);
         tab.StateChanged += (_, _) => Dispatcher.Invoke(SyncUi);
@@ -154,22 +295,24 @@ public partial class MainWindow : Window
             if (!_isPrivate)
             {
                 var current = tab.CurrentUrl;
-                _lastKnowledgeUrl.TryGetValue(tab, out var previous);
-                _lastKnowledgeUrl[tab] = current;
+                var knowledge = ResearchState(tab);
+                var previous = knowledge.LastKnowledgeUrl;
+                knowledge.LastKnowledgeUrl = current;
                 _ = IndexKnowledgeAsync(tab, current, previous);
             }
-            if (_pendingSearchFollowUp.TryGetValue(tab, out var searchQuery) &&
+            if (_tabResearch.TryGetValue(tab, out var state) && state.PendingFollowUp is { } pending &&
                 !UrlService.IsInternal(tab.CurrentUrl) && !UrlService.IsSearchProviderUrl(tab.CurrentUrl))
             {
-                _pendingSearchFollowUp.Remove(tab);
-                _siteResearchContexts[tab] = new SiteResearchContext(searchQuery, tab.CurrentHost);
-                ScheduleSelectedSiteResearch(tab, searchQuery);
+                state.PendingFollowUp = null;
+                var context = new SiteResearchContext(pending.Query, tab.CurrentHost, pending.RunId, pending.Trigger);
+                state.ResearchContext = context;
+                ScheduleSelectedSiteResearch(tab, context);
             }
-            else if (_siteResearchContexts.TryGetValue(tab, out var context))
+            else if (_tabResearch.TryGetValue(tab, out var state2) && state2.ResearchContext is { } context)
             {
                 if (IsSameSite(context.Host, tab.CurrentHost) &&
                     !UrlService.IsInternal(tab.CurrentUrl) && !UrlService.IsSearchProviderUrl(tab.CurrentUrl))
-                    ScheduleSelectedSiteResearch(tab, context.Query);
+                    ScheduleSelectedSiteResearch(tab, context);
                 else
                     StopSelectedSiteResearch(tab, forgetContext: true);
             }
@@ -182,12 +325,18 @@ public partial class MainWindow : Window
             else
                 NavigateActive(e.Value);
         };
-        tab.NexusSearchRequested += async (_, e) => await RunNexusSearchAsync(tab, e.Value);
+        tab.NexusSearchRequested += async (_, e) =>
+        {
+            BeginPendingSiteResearch(tab, e.Value, "nexus-search", "search-provider");
+            await RunNexusSearchAsync(tab, e.Value);
+        };
         tab.SearchResultRequested += async (_, e) =>
         {
             if (!NexusSearchService.IsAllowedResultUrl(e.Url) || !Uri.TryCreate(e.Url, UriKind.Absolute, out var target)) return;
             if (!_isPrivate) await NexusSearchService.RecordChoiceAsync(e.Query, target.AbsoluteUri);
-            _pendingSearchFollowUp[tab] = e.Query;
+            if (!(_tabResearch.TryGetValue(tab, out var state) && state.PendingFollowUp is { } pending &&
+                  pending.Query.Equals(e.Query, StringComparison.OrdinalIgnoreCase)))
+                BeginPendingSiteResearch(tab, e.Query, "nexus-search", "search-provider");
             tab.Navigate(target.AbsoluteUri);
         };
         tab.SettingsRequested += (_, _) => Dispatcher.Invoke(ShowSettings);
@@ -234,6 +383,28 @@ public partial class MainWindow : Window
             }
             finally { TabLoadingOverlay.Visibility = Visibility.Collapsed; }
         }
+        // «Режим След»: на каждую вкладку накладывается порт-страж —
+        // WebRTC блокируется, DNS идёт через Tor, mDNS/SSDP отключены.
+        // Сетевой Дозор запускается один раз и ловит сканеров.
+        if (SettingsService.Current.TrailModeEnabled)
+        {
+            if (_networkWatchdog is null)
+            {
+                _networkWatchdog = new Services.Tor.NetworkWatchdog();
+                _networkWatchdog.ThreatDetected += OnWatchdogThreat;
+                _networkWatchdog.Start();
+            }
+            try
+            {
+                var (ok, message) = Services.Tor.TrailMode.ProtectTab(tab);
+                if (ok)
+                    System.Diagnostics.Debug.WriteLine("[Trail] Порт-страж применён к вкладке");
+            }
+            catch (Exception swallowed)
+            {
+                Services.SwallowLog.Log("main-window", "EnsureTabReadyAsync", swallowed);
+            }
+        }
         SyncUi();
         LocalAiDock.UpdateTab(tab);
     }
@@ -253,7 +424,7 @@ public partial class MainWindow : Window
         if (UrlService.IsSearchQuery(input))
         {
             var query = input.Trim();
-            _pendingSearchFollowUp[tab] = query;
+            BeginPendingSiteResearch(tab, query, "omnibox", "search-provider");
             tab.Navigate(UrlService.Resolve(query));
         }
         else
@@ -261,35 +432,64 @@ public partial class MainWindow : Window
         return Task.CompletedTask;
     }
 
-    private void ScheduleSelectedSiteResearch(BrowserTab tab, string query)
+    private void BeginPendingSiteResearch(BrowserTab tab, string query, string trigger, string surface)
+    {
+        var state = ResearchState(tab);
+        if (state.PendingFollowUp is { } previous)
+        {
+            SledopytDiagnosticsService.Record("site-research", "cancelled", "partial",
+                code: "superseded-query", runId: previous.RunId, trigger: previous.Trigger,
+                surface: "search-provider");
+            state.PendingFollowUp = null;
+        }
+        var runId = SledopytDiagnosticsService.Begin("site-research", trigger, surface);
+        state.PendingFollowUp = new PendingSiteResearch(query.Trim(), runId, trigger);
+        SledopytDiagnosticsService.Record("site-research", "preflight", "success", code: "waiting-result",
+            runId: runId, trigger: trigger, surface: surface);
+    }
+
+    private void ScheduleSelectedSiteResearch(BrowserTab tab, SiteResearchContext context)
     {
         StopSelectedSiteResearch(tab, forgetContext: false);
         var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(90));
-        _siteResearchOperations[tab] = cancellation;
-        _ = AnalyzeSelectedSearchResultAsync(tab, query, tab.CurrentUrl, cancellation);
+        ResearchState(tab).SiteResearch = cancellation;
+        _ = AnalyzeSelectedSearchResultAsync(tab, context, tab.CurrentUrl, cancellation);
     }
 
     private void StopSelectedSiteResearch(BrowserTab tab, bool forgetContext)
     {
-        if (_siteResearchOperations.Remove(tab, out var operation))
+        if (_tabResearch.TryGetValue(tab, out var state))
         {
-            operation.Cancel();
+            if (state.SiteResearch is { } operation)
+            {
+                state.SiteResearch = null;
+                operation.Cancel();
+            }
+            if (forgetContext)
+                state.ResearchContext = null;
         }
-        if (forgetContext) _siteResearchContexts.Remove(tab);
     }
 
-    private async Task AnalyzeSelectedSearchResultAsync(BrowserTab tab, string query, string sourceUrl,
+    private async Task AnalyzeSelectedSearchResultAsync(BrowserTab tab, SiteResearchContext context, string sourceUrl,
         CancellationTokenSource cancellation)
     {
+        var query = context.Query;
         var stopwatch = Stopwatch.StartNew();
         var candidateCount = 0;
-        SledopytDiagnosticsService.Record("site-research", "started", "success");
+        SledopytDiagnosticsService.Record("site-research", "started", "success", runId: context.RunId,
+            trigger: context.Trigger, surface: "site");
         CrashReportService.AddBreadcrumb("sledopyt", "site-research-started");
         try
         {
             await Task.Delay(TimeSpan.FromSeconds(2), cancellation.Token);
             if (!sourceUrl.Equals(tab.CurrentUrl, StringComparison.OrdinalIgnoreCase) ||
-                UrlService.IsInternal(tab.CurrentUrl) || UrlService.IsSearchProviderUrl(tab.CurrentUrl)) return;
+                UrlService.IsInternal(tab.CurrentUrl) || UrlService.IsSearchProviderUrl(tab.CurrentUrl))
+            {
+                SledopytDiagnosticsService.Record("site-research", "cancelled", "partial",
+                    stopwatch.ElapsedMilliseconds, code: "page-changed-before-start", runId: context.RunId,
+                    trigger: context.Trigger, surface: "site");
+                return;
+            }
             var sourceTitle = tab.Title;
             Dispatcher.Invoke(() =>
             {
@@ -298,18 +498,20 @@ public partial class MainWindow : Window
             });
             var pageText = await tab.GetReadablePageTextAsync();
             SledopytDiagnosticsService.Record("site-research", "page-read", "success",
-                stopwatch.ElapsedMilliseconds);
+                stopwatch.ElapsedMilliseconds, runId: context.RunId, trigger: context.Trigger, surface: "site");
             var links = await tab.GetResearchLinksAsync(query, 8);
             candidateCount = links.Count + 1;
             SledopytDiagnosticsService.Record("site-research", "links-read", "success",
-                stopwatch.ElapsedMilliseconds, candidateCount);
+                stopwatch.ElapsedMilliseconds, candidateCount, runId: context.RunId,
+                trigger: context.Trigger, surface: "site");
             var progress = new Progress<string>(message => LocalAiDock.UpdateBackgroundResearchProgress(tab, message));
             var report = await NexusSearchService.AnalyzeSelectedSiteAsync(
                 query, sourceTitle, sourceUrl, pageText, links, progress, cancellation.Token);
             if (!_isPrivate)
                 await KnowledgeGraphService.RecordResearchAsync(report, cancellation.Token, "исследование выбранного сайта");
             SledopytDiagnosticsService.Record("site-research", "completed", "success",
-                stopwatch.ElapsedMilliseconds, candidateCount, report.Items.Count);
+                stopwatch.ElapsedMilliseconds, candidateCount, report.Items.Count, runId: context.RunId,
+                trigger: context.Trigger, surface: "site");
             CrashReportService.AddBreadcrumb("sledopyt", "site-research-completed");
             Dispatcher.Invoke(() =>
             {
@@ -322,8 +524,10 @@ public partial class MainWindow : Window
         catch (OperationCanceledException)
         {
             SledopytDiagnosticsService.Record("site-research", "cancelled", "partial",
-                stopwatch.ElapsedMilliseconds, candidateCount, code: "navigation-or-timeout");
-            if (!_siteResearchOperations.TryGetValue(tab, out var active) || !ReferenceEquals(active, cancellation))
+                stopwatch.ElapsedMilliseconds, candidateCount, code: "navigation-or-timeout",
+                runId: context.RunId, trigger: context.Trigger, surface: "site");
+            if (!_tabResearch.TryGetValue(tab, out var activeState) ||
+                !ReferenceEquals(activeState.SiteResearch, cancellation))
                 return;
             Dispatcher.Invoke(() =>
             {
@@ -333,7 +537,8 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             SledopytDiagnosticsService.Record("site-research", "failed", "failed",
-                stopwatch.ElapsedMilliseconds, candidateCount, code: ClassifySledopytFailure(ex));
+                stopwatch.ElapsedMilliseconds, candidateCount, code: ClassifySledopytFailure(ex),
+                runId: context.RunId, trigger: context.Trigger, surface: "site");
             CrashReportService.AddBreadcrumb("sledopyt", "site-research-failed");
             Dispatcher.Invoke(() =>
             {
@@ -342,8 +547,9 @@ public partial class MainWindow : Window
         }
         finally
         {
-            if (_siteResearchOperations.TryGetValue(tab, out var active) && ReferenceEquals(active, cancellation))
-                _siteResearchOperations.Remove(tab);
+            if (_tabResearch.TryGetValue(tab, out var activeState) &&
+                ReferenceEquals(activeState.SiteResearch, cancellation))
+                activeState.SiteResearch = null;
             cancellation.Dispose();
         }
     }
@@ -366,16 +572,18 @@ public partial class MainWindow : Window
     {
         query = query.Trim();
         if (query.Length < 2) return;
-        if (_searchOperations.Remove(tab, out var previous))
+        var searchState = ResearchState(tab);
+        if (searchState.NexusSearch is { } previous)
         {
             previous.Cancel();
             previous.Dispose();
+            searchState.NexusSearch = null;
         }
         // The first offline model start can take tens of seconds on a 16 GB PC.
         // Individual AI stages have their own shorter budgets and deterministic
         // fallbacks; this outer limit only protects the whole research session.
         var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(150));
-        _searchOperations[tab] = cancellation;
+        searchState.NexusSearch = cancellation;
         try
         {
             var internalUrl = "https://nexus.local/search.html?q=" + Uri.EscapeDataString(query);
@@ -408,8 +616,9 @@ public partial class MainWindow : Window
         }
         finally
         {
-            if (_searchOperations.TryGetValue(tab, out var current) && ReferenceEquals(current, cancellation))
-                _searchOperations.Remove(tab);
+            if (_tabResearch.TryGetValue(tab, out var finalState) &&
+                ReferenceEquals(finalState.NexusSearch, cancellation))
+                finalState.NexusSearch = null;
             cancellation.Dispose();
         }
     }
@@ -580,7 +789,7 @@ public partial class MainWindow : Window
         var snapshot = tab.GetNetworkSnapshot();
         ShowTopologyDetails("Интернет-соединения",
             $"За текущую загрузку наблюдалось {snapshot.RequestCount} HTTP(S)-запросов к {snapshot.ContactedHosts.Count} узлам.",
-            $"Текущий URL:\n{tab.CurrentUrl}\n\n" +
+            $"Текущий URL без секретных параметров:\n{UrlService.SanitizeForDisplay(tab.CurrentUrl)}\n\n" +
             $"Шифрование основного адреса: {(tab.IsSecureConnection ? "HTTPS / TLS" : "нет HTTPS")}\n" +
             $"Наблюдаемые порты: {FormatList(snapshot.ObservedPorts)}\n\n" +
             $"Все узлы:\n{FormatList(snapshot.ContactedHosts)}");
@@ -593,13 +802,34 @@ public partial class MainWindow : Window
         var snapshot = tab.GetNetworkSnapshot();
         var lowPorts = snapshot.ObservedPorts.Where(x => x <= 1000).ToArray();
         ShowTopologyDetails("Текущий сайт: " + (string.IsNullOrWhiteSpace(tab.CurrentHost) ? tab.Title : tab.CurrentHost),
-            $"Сайт обращался к {snapshot.ThirdPartyHosts.Count} сторонним узлам; заблокировано трекеров: {snapshot.BlockedTrackerHosts.Count}.",
-            $"Адрес:\n{tab.CurrentUrl}\n\n" +
+            $"Сайт обращался к {snapshot.ThirdPartyHosts.Count} сторонним узлам; заблокировано трекеров: {snapshot.BlockedTrackerHosts.Count}." +
+            (snapshot.Truncated ? " Список ограничен безопасным пределом." : string.Empty),
+            $"Адрес без секретных параметров:\n{UrlService.SanitizeForDisplay(tab.CurrentUrl)}\n\n" +
             $"Реально использованные порты до 1000:\n{FormatList(lowPorts)}\n\n" +
-            $"Сторонние получатели запросов:\n{FormatList(snapshot.ThirdPartyHosts)}\n\n" +
+            $"Кто получил сторонние запросы:\n{FormatRecipients(snapshot.Recipients.Where(x => x.IsThirdParty))}\n\n" +
+            $"Узлы самого сайта:\n{FormatRecipients(snapshot.Recipients.Where(x => !x.IsThirdParty))}\n\n" +
             $"Заблокированные трекеры:\n{FormatList(snapshot.BlockedTrackerHosts)}\n\n" +
+            "Показываются только имена узлов, счётчики, типы ресурсов и факт наличия заголовков Cookie/Referer/Origin. " +
+            "Их значения, URL-параметры и содержимое запросов не сохраняются.\n\n" +
             "Важно: сторонний узел может быть CDN, шрифтом, API или трекером; сам факт соединения не доказывает слежку.\n" +
             "Активное сканирование портов чужого сервера не выполняется.");
+    }
+
+    private static string FormatRecipients(IEnumerable<NetworkRecipientSnapshot> recipients)
+    {
+        var lines = recipients.Select(x =>
+        {
+            var labels = new List<string> { $"запросов {x.RequestCount}" };
+            if (x.IsKnownTracker) labels.Add("известный трекер");
+            if (x.WasBlocked) labels.Add("заблокирован");
+            if (x.SentCookies) labels.Add("Cookie: да");
+            if (x.SentReferrer) labels.Add("Referer: да");
+            if (x.SentOrigin) labels.Add("Origin: да");
+            if (x.ResourceKinds.Count > 0)
+                labels.Add("типы: " + string.Join(", ", x.ResourceKinds.Take(6)));
+            return $"{x.Host}\n  {string.Join(" · ", labels)}";
+        }).ToArray();
+        return lines.Length == 0 ? "—" : string.Join("\n", lines);
     }
 
     private static string FormatList<T>(IEnumerable<T> values)
@@ -647,10 +877,13 @@ public partial class MainWindow : Window
         if (index < 0) return;
         if (ReferenceEquals(BrowserHost.Content, tab.View))
             BrowserHost.Content = null;
-        _lastKnowledgeUrl.Remove(tab);
-        _pendingSearchFollowUp.Remove(tab);
-        StopSelectedSiteResearch(tab, forgetContext: true);
-        if (_searchOperations.Remove(tab, out var search)) { search.Cancel(); search.Dispose(); }
+        // Единая точка очистки: гасим обе операции и выкидываем состояние вкладки.
+        if (_tabResearch.Remove(tab, out var research))
+        {
+            research.NexusSearch?.Cancel();
+            research.NexusSearch?.Dispose();
+            research.SiteResearch?.Cancel();
+        }
         Tabs.Remove(tab);
         tab.Dispose();
 
@@ -779,63 +1012,52 @@ public partial class MainWindow : Window
         menu.IsOpen = true;
     }
 
-    private async void TranslateVideoAudio_Click(object sender, RoutedEventArgs e)
+    private async void PrecomputeDubbing_Click(object sender, RoutedEventArgs e)
     {
         var tab = ActiveTab;
         if (tab?.Core is null) return;
-        await RunWithHandsFreePausedAsync(() => LocalAiDock.TranslateVideoAudioAsync(tab));
+        await RunWithHandsFreePausedAsync(() => LocalAiDock.PrecomputeVideoDubbingAsync(tab));
+    }
+
+    /// <summary>
+    /// Синхронный перевод видео: приоритет — предперевод по отдельной
+    /// аудиодорожке с точными таймкодами; если сайт дорожку не отдаёт,
+    /// сессия сама откатывается на живой закадровый перевод.
+    /// </summary>
+    private async void LiveDubbing_Click(object sender, RoutedEventArgs e)
+    {
+        var tab = ActiveTab;
+        if (tab?.Core is null) return;
+        await RunWithHandsFreePausedAsync(() => LocalAiDock.TranslateVideoDubbedAsync(tab));
     }
 
     private async void ShoppingAgentTop_Click(object sender, RoutedEventArgs e)
     {
         var tab = ActiveTab;
         if (tab?.Core is null) return;
-        if (tab.CurrentUrl.Equals(UrlService.NewTabUrl, StringComparison.OrdinalIgnoreCase))
-        {
-            await tab.Core.ExecuteScriptAsync("window.nexusFocusSearch?.()");
-            return;
-        }
         SshTerminalDock.Visibility = Visibility.Collapsed;
         await LocalAiDock.PrepareShoppingAgentAsync(tab);
     }
 
+    // ═════════════════════════════════════════════════════════
+    // Голосовое УПРАВЛЕНИЕ браузером убрано полностью.
+    // Озвучка (TTS) для перевода, загрузок и уведомлений — остаётся.
+    // ═════════════════════════════════════════════════════════
+
     private async void VoiceButton_Click(object sender, RoutedEventArgs e) =>
-        await StartPushToTalkAsync();
+        await Task.CompletedTask;
 
     private async void VoiceListenMenu_Click(object sender, RoutedEventArgs e) =>
-        await StartPushToTalkAsync();
+        await Task.CompletedTask;
 
     private void VoiceStopMenu_Click(object sender, RoutedEventArgs e)
     {
-        _voiceListenCancellation?.Cancel();
         VoiceAssistantService.StopSpeaking();
-        SetVoiceStatus("Голос остановлен", visible: true);
-        _ = HideVoiceStatusLaterAsync();
+        VideoDubbingVoiceService.Stop();
     }
 
-    private async void HandsFreeMenuItem_Click(object sender, RoutedEventArgs e)
-    {
-        if (_isPrivate)
-        {
-            HandsFreeMenuItem.IsChecked = false;
-            return;
-        }
-        var settings = SettingsService.Current.Clone();
-        settings.VoiceHandsFreeEnabled = HandsFreeMenuItem.IsChecked == true;
-        if (settings.VoiceHandsFreeEnabled && settings.VoiceAssistantMode == VoiceAssistantMode.Off)
-            settings.VoiceAssistantMode = VoiceAssistantMode.Assistant;
-        await SettingsService.SaveAsync(settings);
-        if (settings.VoiceHandsFreeEnabled)
-        {
-            StartHandsFreeIfEnabled();
-            VoiceAssistantService.Announce("Режим свободные руки включён. Обращайтесь ко мне: Нексус.");
-        }
-        else
-        {
-            StopHandsFree();
-            VoiceAssistantService.Announce("Режим свободные руки выключен.");
-        }
-    }
+    private async void HandsFreeMenuItem_Click(object sender, RoutedEventArgs e) =>
+        await Task.CompletedTask;
 
     private async Task StartPushToTalkAsync()
     {
@@ -861,7 +1083,10 @@ public partial class MainWindow : Window
         {
             await ListenAndExecuteVoiceCommandAsync(requireWakeWord: false, TimeSpan.FromSeconds(6.5), cancellation.Token);
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException swallowed)
+        {
+            Services.SwallowLog.Log("main-window", "StartPushToTalkAsync", swallowed);
+        }
         catch (Exception ex)
         {
             CrashReportService.RecordNonFatal("voice", "push-to-talk", ex);
@@ -878,20 +1103,13 @@ public partial class MainWindow : Window
 
     private void StartHandsFreeIfEnabled()
     {
-        if (_isPrivate || !SettingsService.Current.VoiceHandsFreeEnabled ||
-            SettingsService.Current.VoiceAssistantMode == VoiceAssistantMode.Off ||
-            _handsFreeCancellation is { IsCancellationRequested: false }) return;
-        var cancellation = new CancellationTokenSource();
-        _handsFreeCancellation = cancellation;
-        HandsFreeMenuItem.IsChecked = true;
-        _ = RunHandsFreeLoopAsync(cancellation);
+        // Голосовое управление полностью отключено — цикл не запускается.
     }
 
     private void StopHandsFree()
     {
         var cancellation = Interlocked.Exchange(ref _handsFreeCancellation, null);
         cancellation?.Cancel();
-        HandsFreeMenuItem.IsChecked = false;
         if (_voiceListenCancellation is null) VoiceStatusBadge.Visibility = Visibility.Collapsed;
     }
 
@@ -917,7 +1135,10 @@ public partial class MainWindow : Window
                 await Task.Delay(300, session.Token);
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException swallowed)
+        {
+            Services.SwallowLog.Log("main-window", "RunHandsFreeLoopAsync", swallowed);
+        }
         catch (Exception ex)
         {
             CrashReportService.RecordNonFatal("voice", "hands-free", ex);
@@ -934,6 +1155,7 @@ public partial class MainWindow : Window
         CancellationToken cancellationToken)
     {
         await _voiceListenGate.WaitAsync(cancellationToken);
+        VideoDubbingVoiceService.SuspendPlayback();
         try
         {
             SetVoiceStatus(requireWakeWord ? "Жду «Нексус»…" : "Слушаю команду…", visible: true);
@@ -950,7 +1172,11 @@ public partial class MainWindow : Window
             SetVoiceStatus("Команда: " + command.Kind, visible: true);
             await ExecuteVoiceCommandAsync(command);
         }
-        finally { _voiceListenGate.Release(); }
+        finally
+        {
+            VideoDubbingVoiceService.ResumePlayback();
+            _voiceListenGate.Release();
+        }
     }
 
     private async Task ExecuteVoiceCommandAsync(VoiceCommand command)
@@ -959,6 +1185,7 @@ public partial class MainWindow : Window
         switch (command.Kind)
         {
             case VoiceCommandKind.StopVoice:
+                VideoDubbingVoiceService.Stop();
                 VoiceAssistantService.StopSpeaking();
                 break;
             case VoiceCommandKind.DisableHandsFree:
@@ -985,7 +1212,7 @@ public partial class MainWindow : Window
             }
             case VoiceCommandKind.TranslateVideo when activeTab?.Core is not null:
             {
-                await RunWithHandsFreePausedAsync(() => LocalAiDock.TranslateVideoAudioAsync(activeTab));
+                await RunWithHandsFreePausedAsync(() => LocalAiDock.TranslateVideoDubbedAsync(activeTab));
                 break;
             }
             case VoiceCommandKind.OpenSledopyt when activeTab?.Core is not null:
@@ -1039,12 +1266,8 @@ public partial class MainWindow : Window
     private void SshTerminal_CloseRequested(object? sender, EventArgs e) =>
         SshTerminalDock.Visibility = Visibility.Collapsed;
 
-    private void ShowDeveloperTools_Click(object sender, RoutedEventArgs e)
-    {
-        if (ActiveTab?.Core is null) return;
-        SshTerminalDock.Visibility = Visibility.Collapsed;
-        ActiveTab.Core.OpenDevToolsWindow();
-    }
+    private void ShowDeveloperTools_Click(object sender, RoutedEventArgs e) =>
+        ActiveTab?.Core?.OpenDevToolsWindow();
 
     private async void ShowPrivacyMonitor_Click(object sender, RoutedEventArgs e)
     {
@@ -1053,6 +1276,86 @@ public partial class MainWindow : Window
     }
 
     private void ShowSettings_Click(object sender, RoutedEventArgs e) => ShowSettings();
+
+    private void ShowNetworkWatchdog_Click(object sender, RoutedEventArgs e)
+    {
+        // Если Дозор не запущен — запускаем для просмотра.
+        if (_networkWatchdog is null)
+        {
+            _networkWatchdog = new Services.Tor.NetworkWatchdog();
+            _networkWatchdog.ThreatDetected += OnWatchdogThreat;
+            _networkWatchdog.Start();
+        }
+        new NetworkWatchdogWindow(_networkWatchdog) { Owner = this }.Show();
+    }
+
+    /// <summary>
+    /// Озвучивает угрозу голосом и показывает всплывающее уведомление.
+    /// Подписывается на ThreatDetected при старте Дозора.
+    /// </summary>
+    private void OnWatchdogThreat(Services.Tor.ThreatEvent threat)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            // Голосовое уведомление — что произошло и что сделано.
+            var spokenText = threat.Type switch
+            {
+                Services.Tor.ThreatType.PortScan =>
+                    $"Внимание! Обнаружено сканирование портов от {threat.Source}. " +
+                    "Источник заблокирован.",
+                Services.Tor.ThreatType.HoneypotTriggered =>
+                    $"Тревога! Сканер подключился к ловушке на порту. " +
+                    $"Атакующий IP: {threat.Source}. Заблокирован и обманут.",
+                Services.Tor.ThreatType.ArpSpoofing =>
+                    "Критическая угроза! Обнаружен ARP-спуфинг. " +
+                    "Шлюз подменён — возможен перехват трафика. Проверьте сеть!",
+                Services.Tor.ThreatType.DnsLeak =>
+                    $"Предупреждение! Обнаружена утечка DNS на {threat.Source}. " +
+                    "Запрос шёл мимо Tor. Заблокировано.",
+                Services.Tor.ThreatType.SuspiciousConnection =>
+                    $"Обнаружено подозрительное подключение к {threat.Source}.",
+                _ => "Обнаружена сетевая угроза."
+            };
+            VoiceAssistantService.Announce(spokenText,
+                VoiceAnnouncementPriority.Critical);
+
+            // Всплывающая карточка в углу — видно даже если звук выключен.
+            var notification = new Window
+            {
+                Title = "Сетевой Дозор",
+                Width = 380,
+                SizeToContent = SizeToContent.Height,
+                WindowStyle = WindowStyle.ToolWindow,
+                ResizeMode = ResizeMode.NoResize,
+                WindowStartupLocation = WindowStartupLocation.Manual,
+                Topmost = true,
+                ShowInTaskbar = false,
+                Background = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(0x1A, 0x1A, 0x2E)),
+                Foreground = System.Windows.Media.Brushes.White,
+                Content = new TextBlock
+                {
+                    Text = spokenText,
+                    TextWrapping = TextWrapping.Wrap,
+                    Padding = new Thickness(16),
+                    FontSize = 13,
+                    FontWeight = FontWeights.Medium
+                }
+            };
+            // Позиция: правый нижний угол над часами.
+            var workArea = SystemParameters.WorkArea;
+            notification.Left = workArea.Right - notification.Width - 16;
+            notification.Top = workArea.Bottom - 140;
+            notification.Show();
+            // Автозакрытие через 8 секунд.
+            var timer = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(8)
+            };
+            timer.Tick += (_, _) => { timer.Stop(); notification.Close(); };
+            timer.Start();
+        });
+    }
 
     private void ShowGuardianCenter_Click(object sender, RoutedEventArgs e)
     {
@@ -1065,7 +1368,8 @@ public partial class MainWindow : Window
         var window = new SettingsWindow(SettingsService.Current.Clone()) { Owner = this };
         if (window.ShowDialog() != true || window.ResultSettings is null) return;
         var extensionsChanged = SettingsService.Current.EnableExtensions != window.ResultSettings.EnableExtensions;
-        var themeChanged = SettingsService.Current.Theme != window.ResultSettings.Theme;
+        var themeChanged = SettingsService.Current.Theme != window.ResultSettings.Theme ||
+                           SettingsService.Current.ThemeMode != window.ResultSettings.ThemeMode;
         var proxyChanged = SettingsService.Current.EnableCustomProxy != window.ResultSettings.EnableCustomProxy ||
                            SettingsService.Current.PreventWebRtcIpLeak != window.ResultSettings.PreventWebRtcIpLeak ||
                            SettingsService.Current.ProxyKind != window.ResultSettings.ProxyKind ||
@@ -1075,6 +1379,11 @@ public partial class MainWindow : Window
         var secureNetworkChanged = SettingsService.Current.SecureDnsMode != window.ResultSettings.SecureDnsMode ||
                                    SettingsService.Current.SecureDnsProvider != window.ResultSettings.SecureDnsProvider;
         await SettingsService.SaveAsync(window.ResultSettings);
+        if (themeChanged)
+        {
+            ThemeService.Apply(SettingsService.Current.Theme, SettingsService.Current.ThemeMode);
+            WindowAppearanceService.Apply(this, SettingsService.Current.ThemeMode);
+        }
         foreach (var tab in Tabs.Where(x => x.IsInitialized))
             await tab.ApplySettingsAsync();
         UpdatePrivacyLabel();
@@ -1082,19 +1391,15 @@ public partial class MainWindow : Window
         if (!_isPrivate)
             await PrivacyDock.SetEnabledAsync(SettingsService.Current.ShowPrivacyMonitor);
         ExtensionsMenuItem.IsEnabled = !_isPrivate && BrowserEnvironment.ExtensionsEnabledAtStartup;
-        if (!_isPrivate)
-        {
-            HandsFreeMenuItem.IsChecked = SettingsService.Current.VoiceHandsFreeEnabled;
-            if (SettingsService.Current.VoiceHandsFreeEnabled) StartHandsFreeIfEnabled();
-            else StopHandsFree();
-        }
-        if (extensionsChanged || proxyChanged || secureNetworkChanged || themeChanged)
+        // Голосовое управление отключено: не запускаем hands-free ни при каких настройках.
+        if (!_isPrivate && SettingsService.Current.VoiceHandsFreeEnabled)
+            StopHandsFree();
+        if (extensionsChanged || proxyChanged || secureNetworkChanged)
         {
             var reasons = new List<string>();
             if (extensionsChanged) reasons.Add("поддержка расширений");
             if (proxyChanged) reasons.Add("сетевой прокси");
             if (secureNetworkChanged) reasons.Add("защищённый DNS");
-            if (themeChanged) reasons.Add("цветовая тема");
             var reason = "Изменены: " + string.Join(", ", reasons) + ".";
             GlassDialogWindow.Show(this,
                 reason + " Изменения вступят в силу после полного перезапуска Nexus Monach.",
@@ -1110,14 +1415,16 @@ public partial class MainWindow : Window
         else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.W && ActiveTab is not null) { CloseTab(ActiveTab); e.Handled = true; }
         else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.L) { AddressBox.Focus(); AddressBox.SelectAll(); e.Handled = true; }
         else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.N) { NewPrivateWindow_Click(sender, e); e.Handled = true; }
+        else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.B) { ShowBookmarks_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.K) { ShowSmartCapsules_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.G) { ShowKnowledgeGraph_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.D) { Bookmark_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == ModifierKeys.Control && e.Key == Key.J) { ShowDownloads_Click(sender, e); e.Handled = true; }
         else if (Keyboard.Modifiers == ModifierKeys.Alt && e.Key == Key.Left) { ActiveTab?.GoBack(); e.Handled = true; }
         else if (Keyboard.Modifiers == ModifierKeys.Alt && e.Key == Key.Right) { ActiveTab?.GoForward(); e.Handled = true; }
-        else if (e.Key == Key.F12 ||
-                 (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.I))
+        else if (e.Key == Key.F12)
+        { ShowDeveloperTools_Click(sender, e); e.Handled = true; }
+        else if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift) && e.Key == Key.I)
         { ShowDeveloperTools_Click(sender, e); e.Handled = true; }
         else if (e.Key == Key.F5) { ActiveTab?.ReloadOrStop(); e.Handled = true; }
     }
@@ -1159,23 +1466,21 @@ public partial class MainWindow : Window
 
     private void HandleCoreUpdateSnapshot(WebView2RuntimeSnapshot snapshot)
     {
-        if (_isPrivate || _closing || snapshot.State != WebView2RuntimeState.RestartRequired ||
-            _coreUpdatePromptShown || !IsLoaded) return;
+        if (_isPrivate || _closing || _coreUpdatePromptShown || !IsLoaded) return;
+        var localSnapshot = WebView2RuntimeMonitor.Check();
+        if (!WebView2RuntimeMonitor.ShouldOfferRestart(snapshot, localSnapshot)) return;
+
+        // Evergreen WebView2 keeps the environment already used by this window.
+        // Remember that the newer runtime is ready, but never interrupt browsing:
+        // Windows will activate it on the next natural application start.
         _coreUpdatePromptShown = true;
-        var answer = GlassDialogWindow.Show(this,
-            "Microsoft Edge Update уже загрузила и установила новое ядро WebView2. " +
-            "Оно начнёт работать после перезапуска Nexus Monach.\n\n" +
-            $"Активная версия: {snapshot.ActiveVersion}\n" +
-            $"Готовая версия: {snapshot.InstalledVersion}\n\n" +
-            "Перезапустить сейчас? Обычные вкладки и разрешённые непарольные поля будут " +
-            "локально зашифрованы средствами Windows и восстановлены после запуска. " +
-            "Пароли, OTP, платёжные поля и приватные окна не сохраняются.",
-            "Nexus Guardian · обновление ядра готово", MessageBoxButton.YesNo, MessageBoxImage.Information);
-        if (answer == MessageBoxResult.Yes) RequestSecureRestart();
     }
 
     private void Window_StateChanged(object sender, EventArgs e)
     {
+        MainSurface.CornerRadius = WindowState == WindowState.Maximized
+            ? new CornerRadius(0)
+            : new CornerRadius(12);
         MaximizeButton.Content = WindowState == WindowState.Maximized ? "\uE923" : "\uE922";
         MaximizeButton.ToolTip = WindowState == WindowState.Maximized ? "Восстановить" : "Развернуть";
         if (WindowState == WindowState.Maximized)
@@ -1281,6 +1586,9 @@ public partial class MainWindow : Window
     private async void Window_Closing(object? sender, CancelEventArgs e)
     {
         if (_closeReady) return;
+        CrashReportService.AddBreadcrumb("shutdown", _restartRequested
+            ? "window-closing-restart"
+            : "window-closing");
         e.Cancel = true;
         if (_closing) return;
         _closing = true;
@@ -1297,7 +1605,11 @@ public partial class MainWindow : Window
         _voiceListenCancellation?.Cancel();
         StopHandsFree();
         SshTerminalDock.Disconnect();
-        foreach (var search in _searchOperations.Values) search.Cancel();
+        foreach (var research in _tabResearch.Values)
+        {
+            research.NexusSearch?.Cancel();
+            research.SiteResearch?.Cancel();
+        }
 
         if (!_isPrivate && _restartRequested)
         {
@@ -1373,6 +1685,7 @@ public partial class MainWindow : Window
             if (Path.GetFileNameWithoutExtension(executable).Equals("dotnet", StringComparison.OrdinalIgnoreCase) && commandLine.Length > 0)
                 info.ArgumentList.Add(commandLine[0]);
             foreach (var argument in commandLine.Skip(1)) info.ArgumentList.Add(argument);
+            info.ArgumentList.Add("--wait-for-previous-instance");
             Process.Start(info);
         }
         catch { /* Если Windows запретила перезапуск, текущее окно всё равно корректно закроется. */ }

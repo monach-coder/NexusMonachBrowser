@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -17,6 +18,13 @@ internal static class IntegrityVerifier
     internal const string SignatureName = "integrity-manifest.sig";
     internal const string PublicKeyName = "integrity-public-key.pem";
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+
+    /// <summary>
+    /// Silent updates are permitted only when Guardian carries the official
+    /// trust anchor inside its own signed executable. A key placed next to a
+    /// development build must never be able to authorize the update channel.
+    /// </summary>
+    internal static bool UsesEmbeddedTrust => HasEmbeddedPublicKey();
 
     public static IntegrityResult Verify(string root, bool full)
     {
@@ -81,6 +89,7 @@ internal static class IntegrityVerifier
         var criticalProblems = new List<string>();
         var otherProblems = new List<string>();
         var expectedPaths = manifest.Files.Select(x => x.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var hashPending = new List<(IntegrityFile Entry, string FullPath)>();
         foreach (var entry in manifest.Files)
         {
             var relative = entry.Path.Replace('/', Path.DirectorySeparatorChar);
@@ -93,6 +102,9 @@ internal static class IntegrityVerifier
 
             if (!File.Exists(fullPath))
             {
+                // Файл сетевой поставки ещё не докачан — не нарушение.
+                if (entry.Pending)
+                    continue;
                 (entry.Critical ? criticalProblems : otherProblems).Add("Отсутствует: " + entry.Path);
                 continue;
             }
@@ -105,12 +117,27 @@ internal static class IntegrityVerifier
             }
 
             if (entry.Critical || full)
-            {
-                var actual = ComputeSha256(fullPath);
-                if (!actual.Equals(entry.Sha256, StringComparison.OrdinalIgnoreCase))
-                    (entry.Critical ? criticalProblems : otherProblems).Add("Не совпадает SHA-256: " + entry.Path);
-            }
+                hashPending.Add((entry, fullPath));
         }
+
+        // Почти гигабайт критических файлов — это минуты на холодном диске.
+        // Хеши независимы, поэтому считаются параллельно; порядок проблем
+        // в отчёте не имеет значения.
+        var hashFailures = new ConcurrentBag<(bool Critical, string Message)>();
+        Parallel.ForEach(
+            hashPending,
+            new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount, 2, 6)
+            },
+            item =>
+            {
+                var actual = ComputeSha256(item.FullPath);
+                if (!actual.Equals(item.Entry.Sha256, StringComparison.OrdinalIgnoreCase))
+                    hashFailures.Add((item.Entry.Critical, "Не совпадает SHA-256: " + item.Entry.Path));
+            });
+        foreach (var failure in hashFailures)
+            (failure.Critical ? criticalProblems : otherProblems).Add(failure.Message);
 
         foreach (var path in Directory.EnumerateFiles(normalizedRoot, "*", SearchOption.AllDirectories))
         {
@@ -128,7 +155,7 @@ internal static class IntegrityVerifier
         return new IntegrityResult { State = IntegrityState.Verified };
     }
 
-    public static void CreateManifest(string root, string? privateKeyPath)
+    public static void CreateManifest(string root, string? privateKeyPath, bool markAiPending = false)
     {
         var normalizedRoot = Path.GetFullPath(root);
         var version = FileVersionInfo.GetVersionInfo(Path.Combine(normalizedRoot, "NexusMonach.Browser.exe")).ProductVersion ?? "unknown";
@@ -138,7 +165,7 @@ internal static class IntegrityVerifier
             CreatedUtc = DateTimeOffset.UtcNow,
             Files = Directory.EnumerateFiles(normalizedRoot, "*", SearchOption.AllDirectories)
                 .Where(path => !ShouldExclude(normalizedRoot, path))
-                .Select(path => CreateEntry(normalizedRoot, path))
+                .Select(path => CreateEntry(normalizedRoot, path, markAiPending))
                 .OrderBy(x => x.Path, StringComparer.Ordinal)
                 .ToList()
         };
@@ -167,7 +194,7 @@ internal static class IntegrityVerifier
         File.WriteAllText(Path.Combine(directory, PublicKeyName), ecdsa.ExportSubjectPublicKeyInfoPem(), new UTF8Encoding(false));
     }
 
-    private static IntegrityFile CreateEntry(string root, string path)
+    private static IntegrityFile CreateEntry(string root, string path, bool markAiPending = false)
     {
         var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
         var info = new FileInfo(path);
@@ -179,7 +206,11 @@ internal static class IntegrityVerifier
             Length = info.Length,
             Sha256 = ComputeSha256(path),
             Critical = critical,
-            Large = info.Length >= 64L * 1024 * 1024 || largeModelBlob
+            Large = info.Length >= 64L * 1024 * 1024 || largeModelBlob,
+            // Вариант манифеста для лёгкой установки: AI помечается как
+            // «приедет по сети» — допустимо отсутствовать до доставки.
+            Pending = markAiPending &&
+                      relative.StartsWith("AI/", StringComparison.OrdinalIgnoreCase)
         };
     }
 
@@ -188,9 +219,25 @@ internal static class IntegrityVerifier
         var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
         return relative.Equals(ManifestName, StringComparison.OrdinalIgnoreCase) ||
                relative.Equals(SignatureName, StringComparison.OrdinalIgnoreCase) ||
+               // Манифест сетевой поставки живёт рядом, но не является частью
+               // локальной целостности: он описывает СКАЧИВАЕМОЕ, а не стоящее.
+               relative.Equals("release-manifest.json", StringComparison.OrdinalIgnoreCase) ||
+               relative.Equals("release-manifest.json.sig", StringComparison.OrdinalIgnoreCase) ||
+               // Деинсталлятор кладёт сам установщик; это инфраструктура,
+               // а не компонент браузера.
+               relative.Equals("NexusMonach-Setup.exe", StringComparison.OrdinalIgnoreCase) ||
                relative.StartsWith("Data/", StringComparison.OrdinalIgnoreCase) ||
+               // Служебное состояние внешних инструментов разработки не входит в
+               // поставку и не влияет на поведение браузера — каталог .mimosa
+               // исключается на любом уровне вложенности: инструмент может
+               // оставить его и внутри AI/, и в других подпапках.
+               HasSegment(relative, ".mimosa") ||
                relative.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase);
     }
+
+    private static bool HasSegment(string relativePath, string segment) =>
+        relativePath.Split('/').Any(
+            part => part.Equals(segment, StringComparison.OrdinalIgnoreCase));
 
     private static bool IsCriticalPath(string relative)
     {

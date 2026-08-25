@@ -22,11 +22,16 @@ internal static class PageTranslationPolicy
         "input:not([type=\"hidden\"]),textarea,select,button,a[href]," +
         "[role=\"navigation\"] a,[role=\"button\"],[role=\"link\"]," +
         "[role=\"menuitem\"],[role=\"tab\"],[role=\"checkbox\"],[role=\"radio\"]," +
-        "[aria-haspopup=\"menu\"]";
+        "[role=\"switch\"],[role=\"combobox\"],[role=\"textbox\"]," +
+        "[role=\"option\"],summary,[aria-haspopup=\"menu\"]";
 
     public static readonly string[] TranslatableInputValueTypes = ["submit", "button", "reset"];
+    public static readonly string[] TranslatableAttributes =
+        ["placeholder", "aria-label", "aria-description", "title"];
 
     public static bool CanTranslateInputValue(string? inputType) =>
         TranslatableInputValueTypes.Contains(inputType ?? string.Empty,
             StringComparer.OrdinalIgnoreCase);
+
+    public static bool CanReadUserValue(string? inputType) => false;
 }

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using NexusMonach.Services;
 
 namespace NexusMonach.Models;
 
@@ -13,7 +14,7 @@ public sealed class DownloadItem : INotifyPropertyChanged
     private string _sha256 = string.Empty;
     private string _signatureInfo = "Не проверена";
     private bool _signatureTrusted;
-    private bool _requiresOpenConfirmation;
+    private DownloadScanState _scanState = DownloadScanState.None;
 
     public string FileName { get; init; } = string.Empty;
     public string FilePath { get; init; } = string.Empty;
@@ -73,13 +74,23 @@ public sealed class DownloadItem : INotifyPropertyChanged
         set { _signatureTrusted = value; OnPropertyChanged(); }
     }
 
-    public bool RequiresOpenConfirmation
+    public DownloadScanState ScanState
     {
-        get => _requiresOpenConfirmation;
-        set { _requiresOpenConfirmation = value; OnPropertyChanged(); }
+        get => _scanState;
+        set
+        {
+            _scanState = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ScanStateText));
+            OnPropertyChanged(nameof(SecuritySummary));
+        }
     }
 
-    public string SecuritySummary => $"Риск: {RiskLevel} · {SecurityDetails} · {SignatureInfo}";
+    public string ScanStateText => AntivirusScanService.ScanStatusText(ScanState);
+
+    public string SecuritySummary =>
+        $"Риск: {RiskLevel} · {SecurityDetails} · {SignatureInfo}" +
+        (ScanState == DownloadScanState.None ? string.Empty : " · " + ScanStateText);
 
     public event PropertyChangedEventHandler? PropertyChanged;
 

@@ -196,11 +196,15 @@ restart and leaves the current window open.
 ## Local Sledopyt diagnostics
 
 Guardian Center can display a bounded local journal for the Nexus Sledopyt crawl
-engine. It records only operation/stage identifiers, outcome, duration and
-candidate/result counters. Search queries, URLs, domains, page text, DOM, form
-values and exception messages are deliberately not accepted. The journal is not
-part of network crash-report delivery and remains under the local application
-data directory.
+engine. Each attempt has a random local run identifier and records only the
+operation/stage, trigger surface, outcome, safe reason code, duration and
+candidate/result counters. The readable report explains when shopping and
+background site research start, groups their stages by attempt and distinguishes
+preflight blocks, cancellation, failure and completion. It can be copied or
+exported as versioned JSON from Guardian Center. Search queries, URLs, domains,
+page text, DOM, form values and exception messages are deliberately not accepted.
+The journal is not part of network crash-report delivery and remains under the
+local application data directory.
 
 ## Command line
 

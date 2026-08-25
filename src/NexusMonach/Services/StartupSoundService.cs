@@ -1,6 +1,7 @@
 using System.Media;
 using System.Runtime.InteropServices;
 using System.Speech.Synthesis;
+using NexusMonach.Models;
 
 namespace NexusMonach.Services;
 
@@ -85,6 +86,11 @@ public static class StartupSoundService
 
     private static void SpeakBrandName()
     {
+        if (NeuralVoiceService.TrySpeak("Нексус Монах", NeuralVoiceProfile.Natasha, 0))
+        {
+            WriteDiagnostic("Speaking with local Silero Kseniya voice.");
+            return;
+        }
         try
         {
             SpeakWithWindowsSynthesizer();

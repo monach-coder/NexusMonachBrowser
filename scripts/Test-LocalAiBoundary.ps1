@@ -42,6 +42,28 @@ Require-Text $whisper 'RandomNumberGenerator.GetBytes(24)' 'Whisper route must u
 Require-Text $whisper '"--inference-path", inferencePath' 'Whisper must receive the random inference route.'
 Reject-Text $whisper '"--inference-path", "/inference"' 'Whisper must not expose the fixed inference route.'
 
+$voiceWorker = Read-Source 'src/NexusMonach/AI/adapters/voice_worker.py'
+Require-Text $voiceWorker 'Model(model_path=args.model)' 'Vosk TTS must load only the bundled model path.'
+Reject-Text $voiceWorker 'Model(model_name=args.model)' 'Vosk TTS must not invoke upstream model discovery/download.'
+Reject-Text $voiceWorker 'http://' 'Vosk TTS worker must not contain a runtime download URL.'
+Reject-Text $voiceWorker 'https://' 'Vosk TTS worker must not contain a runtime download URL.'
+
+$piperWorker = Read-Source 'src/NexusMonach/AI/adapters/piper_voice_worker.py'
+Require-Text $piperWorker 'PiperVoice.load(model_path, config_path=config_path, use_cuda=False)' 'Piper TTS must load only the explicit local model and config paths.'
+Reject-Text $piperWorker 'download_voices' 'Piper TTS worker must not invoke voice discovery or downloads.'
+Reject-Text $piperWorker 'http://' 'Piper TTS worker must not contain a runtime download URL.'
+Reject-Text $piperWorker 'https://' 'Piper TTS worker must not contain a runtime download URL.'
+
+$sileroWorker = Read-Source 'src/NexusMonach/AI/adapters/silero_voice_worker.py'
+Require-Text $sileroWorker 'PackageImporter(str(model_path)).load_pickle' 'Silero TTS must load only the explicit local model package.'
+Require-Text $sileroWorker 'SPEAKER = "kseniya"' 'Silero TTS test build must pin the selected Kseniya voice.'
+Reject-Text $sileroWorker 'http://' 'Silero TTS worker must not contain a runtime download URL.'
+Reject-Text $sileroWorker 'https://' 'Silero TTS worker must not contain a runtime download URL.'
+
+$voiceService = Read-Source 'src/NexusMonach/Services/NeuralVoiceService.cs'
+Require-Text $voiceService 'SynthesisTimeout' 'Local TTS synthesis must have a bounded timeout.'
+Require-Text $voiceService 'StopWorker(state);' 'Local TTS cancellation must terminate a stuck worker.'
+
 $tab = Read-Source 'src/NexusMonach/Models/BrowserTab.cs'
 Require-Text $tab 'source.Scheme != Uri.UriSchemeHttps' 'Internal WebView messages must require HTTPS.'
 Require-Text $tab '!source.IsDefaultPort' 'Internal WebView messages must reject a non-default port.'

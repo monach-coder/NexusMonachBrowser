@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Windows;
@@ -25,11 +26,25 @@ public sealed record TabNetworkSnapshot(
     IReadOnlyList<string> ContactedHosts,
     IReadOnlyList<string> ThirdPartyHosts,
     IReadOnlyList<string> BlockedTrackerHosts,
+    IReadOnlyList<NetworkRecipientSnapshot> Recipients,
     IReadOnlyList<int> ObservedPorts,
-    int RequestCount);
+    int RequestCount,
+    bool Truncated);
 
-public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
+public sealed record NetworkRecipientSnapshot(
+    string Host,
+    int RequestCount,
+    bool IsThirdParty,
+    bool IsKnownTracker,
+    bool WasBlocked,
+    bool SentCookies,
+    bool SentReferrer,
+    bool SentOrigin,
+    IReadOnlyList<string> ResourceKinds);
+
+public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
 {
+    private const int MaxObservedNetworkHosts = 512;
     private readonly bool _isPrivate;
     private readonly bool _navigateOnInitialize;
     private readonly TaskCompletionSource<bool> _firstNavigation =
@@ -48,8 +63,11 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     private readonly HashSet<string> _contactedHosts = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _thirdPartyHosts = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _blockedTrackerHosts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, NetworkRecipientAccumulator> _networkRecipients =
+        new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<int> _observedPorts = [];
     private int _requestCount;
+    private bool _networkSnapshotTruncated;
     private string _networkTopHost = string.Empty;
     private string _agentDomToken = string.Empty;
     private SecureRestartTabState? _pendingRestartState;
@@ -74,6 +92,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
     public string InitialUrl { get; }
     public WebView2 View { get; }
     public CoreWebView2? Core => View.CoreWebView2;
+    public int WebViewProcessId => Core is { } core ? checked((int)core.BrowserProcessId) : 0;
     public bool IsInitialized => Core is not null;
     public bool IsPrivate => _isPrivate;
     public DateTime LastActivatedUtc { get; private set; } = DateTime.UtcNow;
@@ -180,7 +199,30 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         Core.Settings.IsGeneralAutofillEnabled = !_isPrivate && settings.EnableGeneralAutofill;
         BrowserEnvironment.ApplyPrivacyLevel(Core.Profile,
             _isPrivate ? PrivacyLevel.Strict : settings.PrivacyLevel);
-        await Task.CompletedTask;
+        await ConfigureStartPageAsync();
+    }
+
+    private async Task ConfigureStartPageAsync()
+    {
+        if (Core is null || !CurrentUrl.Equals(UrlService.NewTabUrl, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var settings = SettingsService.Current;
+        var configuration = JsonSerializer.Serialize(new
+        {
+            showSetup = !settings.InitialProtectionSetupShown,
+            theme = settings.Theme.ToString(),
+            mode = settings.ThemeMode.ToString()
+        });
+        try
+        {
+            await Core.ExecuteScriptAsync($"window.nexusConfigureStartPage?.({configuration});");
+        }
+        catch (InvalidOperationException swallowed)
+        {
+            Services.SwallowLog.Log("browser-tab", "ConfigureStartPageAsync", swallowed);
+            // The tab may have navigated away while the theme was being applied.
+        }
     }
 
     public void MarkActive()
@@ -209,155 +251,11 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         if (Core is null || _isSuspended || IsLoading || Core.IsDocumentPlayingAudio)
             return;
         try { _isSuspended = await Core.TrySuspendAsync(); }
-        catch { _isSuspended = false; }
-    }
-
-    public async Task<bool> ClearCurrentSiteDataAsync()
-    {
-        if (Core is null || !Uri.TryCreate(CurrentUrl, UriKind.Absolute, out var uri) ||
-            uri.Scheme is not ("http" or "https") || UrlService.IsInternal(CurrentUrl))
-            return false;
-
-        try
+        catch (Exception swallowed)
         {
-            var origin = uri.GetLeftPart(UriPartial.Authority);
-            var cookies = await Core.CookieManager.GetCookiesAsync(origin);
-            foreach (var cookie in cookies)
-                Core.CookieManager.DeleteCookie(cookie);
-
-            await Core.ExecuteScriptAsync("""
-                (async () => {
-                  try { localStorage.clear(); } catch (_) {}
-                  try { sessionStorage.clear(); } catch (_) {}
-                  try {
-                    const keys = await caches.keys();
-                    await Promise.all(keys.map(key => caches.delete(key)));
-                  } catch (_) {}
-                  try {
-                    if (indexedDB.databases) {
-                      const databases = await indexedDB.databases();
-                      for (const database of databases) {
-                        if (database.name) indexedDB.deleteDatabase(database.name);
-                      }
-                    }
-                  } catch (_) {}
-                  return true;
-                })();
-                """);
-            Core.Reload();
-            return true;
+            Services.SwallowLog.Log("browser-tab", "TrySuspendAsync", swallowed);
+            _isSuspended = false;
         }
-        catch
-        {
-            return false;
-        }
-    }
-
-    public void SetPendingRestartState(SecureRestartTabState state) => _pendingRestartState = state;
-
-    public async Task<SecureRestartTabState> CaptureSecureRestartStateAsync()
-    {
-        var fallback = SecureRestartSessionService.UrlOnly(CurrentUrl);
-        if (_isPrivate || Core is null || UrlService.IsInternal(CurrentUrl)) return fallback;
-        try
-        {
-            var json = await Core.ExecuteScriptAsync("""
-                (() => {
-                  const result={url:location.href,scrollX:scrollX||0,scrollY:scrollY||0,fields:[]};
-                  const pageKey=(location.hostname+location.pathname).toLowerCase();
-                  if(/(?:^|[.\/_-])(login|signin|sign-in|oauth|authorize|auth|checkout|payment|billing|bank)(?:[.\/_-]|$)/.test(pageKey))return result;
-                  const sensitiveKey=/pass|pwd|secret|token|auth|otp|one.?time|verification|2fa|mfa|card|credit|debit|cvv|cvc|iban|account|login|username|e.?mail/i;
-                  const sensitiveAutocomplete=/password|username|email|one-time-code|cc-|transaction|webauthn/i;
-                  const pathFor=element=>{
-                    if(element.id)return '#'+CSS.escape(element.id);
-                    const parts=[];let node=element;
-                    while(node&&node.nodeType===1&&node!==document.documentElement&&parts.length<7){
-                      let part=node.tagName.toLowerCase();
-                      const siblings=node.parentElement?[...node.parentElement.children].filter(x=>x.tagName===node.tagName):[];
-                      if(siblings.length>1)part+=':nth-of-type('+(siblings.indexOf(node)+1)+')';
-                      parts.unshift(part);node=node.parentElement;
-                    }
-                    return parts.join('>');
-                  };
-                  const nodes=[...document.querySelectorAll('input,textarea,select,[contenteditable="true"]')];
-                  let total=0;
-                  for(const element of nodes){
-                    if(result.fields.length>=80||total>=65536)break;
-                    const type=(element.type||'').toLowerCase();
-                    const autocomplete=(element.autocomplete||'').toLowerCase();
-                    const key=[element.name,element.id,element.placeholder,element.getAttribute('aria-label')].filter(Boolean).join(' ');
-                    if(['password','hidden','file','email','tel'].includes(type)||sensitiveAutocomplete.test(autocomplete)||sensitiveKey.test(key))continue;
-                    const selector=pathFor(element);if(!selector||selector.length>500)continue;
-                    let kind='text',value='',checked=null;
-                    if(type==='checkbox'||type==='radio'){kind='checkbox';checked=Boolean(element.checked)}
-                    else if(element.tagName==='SELECT'){kind='select';value=String(element.value||'')}
-                    else if(element.isContentEditable){kind='editable';value=String(element.innerText||'')}
-                    else value=String(element.value||'');
-                    if(value.length>4000)value=value.slice(0,4000);total+=value.length;
-                    if(!value&&checked===null)continue;
-                    result.fields.push({selector,kind,value,checked});
-                  }
-                  return result;
-                })();
-                """);
-            return JsonSerializer.Deserialize<SecureRestartTabState>(json,
-                       new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? fallback;
-        }
-        catch
-        {
-            return fallback;
-        }
-    }
-
-    private async Task TryRestoreSecureRestartStateAsync()
-    {
-        if (_restartStateRestoreRunning || _pendingRestartState is null || Core is null || _isPrivate) return;
-        _restartStateRestoreRunning = true;
-        try
-        {
-            await Task.Delay(350);
-            var state = _pendingRestartState;
-            var script = $$"""
-                (()=>{
-                  const state={{JsonSerializer.Serialize(state)}};
-                  let expected;try{expected=new URL(state.Url)}catch{return -1}
-                  if(location.origin!==expected.origin||location.pathname!==expected.pathname)return -1;
-                  const pageKey=(location.hostname+location.pathname).toLowerCase();
-                  if(/(?:^|[.\/_-])(login|signin|sign-in|oauth|authorize|auth|checkout|payment|billing|bank)(?:[.\/_-]|$)/.test(pageKey))return 0;
-                  const sensitiveKey=/pass|pwd|secret|token|auth|otp|one.?time|verification|2fa|mfa|card|credit|debit|cvv|cvc|iban|account|login|username|e.?mail/i;
-                  const sensitiveAutocomplete=/password|username|email|one-time-code|cc-|transaction|webauthn/i;
-                  let restored=0;
-                  for(const field of state.Fields||[]){
-                    let element;try{element=document.querySelector(field.Selector)}catch{continue}if(!element)continue;
-                    const type=(element.type||'').toLowerCase(),autocomplete=(element.autocomplete||'').toLowerCase();
-                    const key=[element.name,element.id,element.placeholder,element.getAttribute('aria-label')].filter(Boolean).join(' ');
-                    if(['password','hidden','file','email','tel'].includes(type)||sensitiveAutocomplete.test(autocomplete)||sensitiveKey.test(key))continue;
-                    if(field.Kind==='checkbox'&&(type==='checkbox'||type==='radio')){
-                      const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'checked')?.set;
-                      if(setter)setter.call(element,Boolean(field.Checked));else element.checked=Boolean(field.Checked);
-                    }else if(field.Kind==='select'&&element.tagName==='SELECT')element.value=field.Value||'';
-                    else if(field.Kind==='editable'&&element.isContentEditable)element.textContent=field.Value||'';
-                    else if(['INPUT','TEXTAREA'].includes(element.tagName)){
-                      const prototype=element.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;
-                      const setter=Object.getOwnPropertyDescriptor(prototype,'value')?.set;
-                      if(setter)setter.call(element,field.Value||'');else element.value=field.Value||'';
-                    }else continue;
-                    element.dispatchEvent(new Event('input',{bubbles:true}));
-                    element.dispatchEvent(new Event('change',{bubbles:true}));restored++;
-                  }
-                  scrollTo({left:state.ScrollX||0,top:state.ScrollY||0,behavior:'instant'});return restored;
-                })();
-                """;
-            var result = await Core.ExecuteScriptAsync(script);
-            if (int.TryParse(result, out var restored) && restored >= 0)
-            {
-                await Task.Delay(700);
-                if (Core is not null) await Core.ExecuteScriptAsync(script);
-                _pendingRestartState = null;
-            }
-        }
-        catch { /* Неподдерживаемая страница открывается без восстановления полей. */ }
-        finally { _restartStateRestoreRunning = false; }
     }
 
     public TabNetworkSnapshot GetNetworkSnapshot()
@@ -368,774 +266,17 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 _contactedHosts.OrderBy(x => x).ToArray(),
                 _thirdPartyHosts.OrderBy(x => x).ToArray(),
                 _blockedTrackerHosts.OrderBy(x => x).ToArray(),
+                _networkRecipients.Values
+                    .OrderByDescending(x => x.IsThirdParty)
+                    .ThenByDescending(x => x.IsKnownTracker)
+                    .ThenBy(x => x.Host, StringComparer.OrdinalIgnoreCase)
+                    .Select(x => x.Snapshot())
+                    .ToArray(),
                 _observedPorts.OrderBy(x => x).ToArray(),
-                _requestCount);
+                _requestCount,
+                _networkSnapshotTruncated);
         }
     }
-
-    public async Task<string> GetReadablePageTextAsync()
-    {
-        if (Core is null || UrlService.IsInternal(CurrentUrl))
-            return string.Empty;
-
-        var json = await Core.ExecuteScriptAsync("""
-            (() => {
-              const clone = document.body ? document.body.cloneNode(true) : null;
-              if (!clone) return '';
-              clone.querySelectorAll('script, style, noscript, svg, canvas, iframe').forEach(node => node.remove());
-              const text = (clone.innerText || clone.textContent || '')
-                .replace(/\n{3,}/g, '\n\n')
-                .replace(/[ \t]{2,}/g, ' ')
-                .trim();
-              return text.slice(0, 30000);
-            })();
-            """);
-        try { return JsonSerializer.Deserialize<string>(json) ?? string.Empty; }
-        catch { return string.Empty; }
-    }
-
-    public async Task<IReadOnlyList<string>> GetResearchLinksAsync(string query, int maximum = 12)
-    {
-        if (Core is null || UrlService.IsInternal(CurrentUrl)) return [];
-        maximum = Math.Clamp(maximum, 1, 30);
-        var queryJson = JsonSerializer.Serialize(query ?? string.Empty);
-        var json = await Core.ExecuteScriptAsync($$"""
-            (() => {
-              const query = {{queryJson}}.toLocaleLowerCase();
-              const maximum = {{maximum}};
-              const terms = query.split(/[^\p{L}\p{N}]+/u).filter(x => x.length > 2).slice(0, 12);
-              const blocked = /(login|signin|sign-in|account|profile|cart|basket|checkout|payment|pay|order|logout|register|auth)/i;
-              const current = new URL(location.href);
-              const visible = element => {
-                const style = getComputedStyle(element);
-                const rect = element.getBoundingClientRect();
-                return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
-              };
-              const unique = new Map();
-              for (const anchor of document.querySelectorAll('a[href]')) {
-                if (!visible(anchor)) continue;
-                let url;
-                try { url = new URL(anchor.href, location.href); } catch (_) { continue; }
-                if (!/^https?:$/.test(url.protocol) || url.origin !== current.origin) continue;
-                url.hash = '';
-                if (url.href === current.href || blocked.test(url.pathname + url.search)) continue;
-                const text = ((anchor.innerText || anchor.getAttribute('aria-label') || anchor.title || '') + ' ' +
-                  (anchor.closest('article,main,section,li')?.innerText || '')).replace(/\s+/g, ' ').trim().slice(0, 900);
-                if (text.length < 8) continue;
-                let score = anchor.closest('article,main') ? 3 : 0;
-                for (const term of terms) if (text.toLocaleLowerCase().includes(term)) score += 4;
-                if (/article|story|news|guide|docs|help|wiki|blog|review|research|report/i.test(url.pathname)) score += 2;
-                const existing = unique.get(url.href);
-                if (!existing || existing.score < score) unique.set(url.href, { url: url.href, score });
-              }
-              return [...unique.values()]
-                .sort((a, b) => b.score - a.score || a.url.localeCompare(b.url))
-                .slice(0, maximum)
-                .map(x => x.url);
-            })();
-            """);
-        try { return JsonSerializer.Deserialize<List<string>>(json) ?? []; }
-        catch { return []; }
-    }
-
-    public async Task<IReadOnlyList<TranslationSegment>> CaptureTranslationSegmentsAsync()
-    {
-        if (Core is null || UrlService.IsInternal(CurrentUrl)) return [];
-        var script = """
-            (() => {
-              const previous=window.__nexusPageTranslation;
-              if(previous?.originals) for(const entry of previous.originals.values())
-                if(entry.node?.isConnected) entry.node.nodeValue=entry.original;
-              const state={nodes:new Map(),originals:new Map()};window.__nexusPageTranslation=state;
-              const visible=e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>120&&r.height>80};
-              const candidates=[...document.querySelectorAll(__MAIN_CONTENT_SELECTOR__)]
-                .filter(visible).map(e=>{const text=(e.innerText||'').trim(),links=[...e.querySelectorAll('a')].reduce((n,a)=>n+(a.innerText||'').length,0);return {e,score:text.length-links*.45}})
-                .filter(x=>x.score>120).sort((a,b)=>b.score-a.score);
-              const root=candidates[0]?.e||document.querySelector('main,[role="main"]')||document.body;if(!root)return [];
-              const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
-              const nodes=[]; let node,total=0;
-              while((node=walker.nextNode()) && nodes.length<100 && total<5500){
-                const parent=node.parentElement, raw=node.nodeValue||'', text=raw.trim();
-                if(!parent||text.length<2||parent.closest(__ARTICLE_EXCLUSION_SELECTOR__)) continue;
-                const style=getComputedStyle(parent); if(style.display==='none'||style.visibility==='hidden'||style.opacity==='0'||parent.getClientRects().length===0) continue;
-                nodes.push({node,raw,text}); total+=text.length;
-              }
-              return nodes.map((item,index)=>{
-                const id='n'+(index+1);state.nodes.set(id,item.node);state.originals.set(id,{node:item.node,original:item.raw,text:item.text});
-                const language=(item.node.parentElement?.closest('[lang]')?.getAttribute('lang')||document.documentElement.lang||'').trim();
-                return {Id:id,Text:item.text,Language:language};
-              });
-            })();
-            """
-            .Replace("__MAIN_CONTENT_SELECTOR__",
-                JsonSerializer.Serialize(PageTranslationPolicy.MainContentSelector), StringComparison.Ordinal)
-            .Replace("__ARTICLE_EXCLUSION_SELECTOR__",
-                JsonSerializer.Serialize(PageTranslationPolicy.ArticleExclusionSelector), StringComparison.Ordinal);
-        var json = await Core.ExecuteScriptAsync(script);
-        try { return JsonSerializer.Deserialize<List<TranslationSegment>>(json) ?? []; }
-        catch { return []; }
-    }
-
-    public async Task<IReadOnlyList<TranslationSegment>> CaptureInteractiveTranslationSegmentsAsync()
-    {
-        if (Core is null || UrlService.IsInternal(CurrentUrl)) return [];
-        var script = """
-            (()=>{
-              const previous=window.__nexusInteractiveTranslation;
-              if(previous?.entries)for(const entry of previous.entries.values())try{
-                if(entry.kind==='text'&&entry.node?.isConnected)entry.node.nodeValue=entry.original;
-                else if(entry.element?.isConnected)entry.element.setAttribute(entry.attribute,entry.original);
-              }catch{}
-              const state={entries:new Map()};window.__nexusInteractiveTranslation=state;
-              const result=[],seen=new Set();let total=0,index=0;
-              const visible=e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0};
-              const language=e=>(e?.closest?.('[lang]')?.getAttribute('lang')||document.documentElement.lang||'').trim();
-              const add=(key,text,entry,e)=>{text=(text||'').replace(/\s+/g,' ').trim();if(!text||text.length<1||text.length>500||seen.has(key)||result.length>=90||total+text.length>4200)return;seen.add(key);const id='f'+(++index);state.entries.set(id,entry);result.push({Id:id,Text:text,Language:language(e)});total+=text.length};
-              const addAttribute=(e,attribute)=>{const value=e.getAttribute(attribute)||'';if(value.trim())add('a:'+attribute+':'+index+':'+value,value,{kind:'attribute',element:e,attribute,original:value},e)};
-              const addText=(root,force=false)=>{if(!root||(!force&&!visible(root)))return;const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let node;while((node=walker.nextNode())){const raw=node.nodeValue||'',text=raw.trim(),parent=node.parentElement;if(!parent||!text||parent.closest('script,style,noscript,input,textarea,[contenteditable="true"]'))continue;add('t:'+index+':'+text,text,{kind:'text',node,original:raw},parent)}};
-              const translatableInputTypes=__TRANSLATABLE_INPUT_TYPES__;
-              const controls=[...document.querySelectorAll(__INTERACTIVE_SELECTOR__)].filter(visible).slice(0,100);
-              for(const control of controls){
-                for(const attribute of ['placeholder','aria-label','title'])addAttribute(control,attribute);
-                const type=(control.getAttribute('type')||'').toLowerCase();
-                if(control.tagName==='INPUT'&&translatableInputTypes.includes(type))addAttribute(control,'value');
-                if(control.tagName==='BUTTON'||control.tagName==='A'||['button','menuitem','tab'].includes(control.getAttribute('role')||''))addText(control);
-                for(const label of control.labels||[])addText(label);
-                const parentLabel=control.closest('label');if(parentLabel)addText(parentLabel);
-                const id=control.id;if(id)for(const label of document.querySelectorAll('label[for="'+CSS.escape(id)+'"]'))addText(label);
-                if(control.tagName==='SELECT')for(const option of [...control.options].slice(0,30))addText(option,true);
-              }
-              for(const item of document.querySelectorAll('form legend,[role="form"] legend,form [role="alert"],form [aria-live],form small,form .error,form [class*="hint" i],[role="form"] [role="alert"]'))addText(item);
-              return result;
-            })()
-            """
-            .Replace("__INTERACTIVE_SELECTOR__",
-                JsonSerializer.Serialize(PageTranslationPolicy.InteractiveSelector), StringComparison.Ordinal)
-            .Replace("__TRANSLATABLE_INPUT_TYPES__",
-                JsonSerializer.Serialize(PageTranslationPolicy.TranslatableInputValueTypes),
-                StringComparison.Ordinal);
-        var json = await Core.ExecuteScriptAsync(script);
-        try { return JsonSerializer.Deserialize<List<TranslationSegment>>(json) ?? []; }
-        catch { return []; }
-    }
-
-    public async Task<int> ApplyInteractiveTranslationSegmentsAsync(
-        IReadOnlyList<TranslationSegment> translated, int completedBefore, int total)
-    {
-        if (Core is null || translated.Count == 0) return 0;
-        var script = """
-            (()=>{const items=__ITEMS__;const state=window.__nexusInteractiveTranslation;if(!state)return 0;let applied=0;
-              for(const item of items){const entry=state.entries.get(item.Id);if(!entry)continue;
-                try{if(entry.kind==='text'&&entry.node?.isConnected){const lead=entry.original.match(/^\s*/)?.[0]||'',tail=entry.original.match(/\s*$/)?.[0]||'';entry.node.nodeValue=lead+item.Text+tail;applied++}
-                else if(entry.element?.isConnected){entry.element.setAttribute(entry.attribute,item.Text);applied++}}catch{}
-              }
-              const status=document.getElementById('nexus-translation-status');if(status)status.textContent='Озвучивание статьи · переведено элементов интерфейса: '+(__COMPLETED__+applied)+' / '+__TOTAL__;return applied})()
-            """
-            .Replace("__ITEMS__", JsonSerializer.Serialize(translated), StringComparison.Ordinal)
-            .Replace("__COMPLETED__", JsonSerializer.Serialize(completedBefore), StringComparison.Ordinal)
-            .Replace("__TOTAL__", JsonSerializer.Serialize(total), StringComparison.Ordinal);
-        var json = await Core.ExecuteScriptAsync(script);
-        return int.TryParse(json, out var applied) ? applied : 0;
-    }
-
-    public async Task BeginInPageTranslationAsync(int total)
-    {
-        if (Core is null) return;
-        await Core.ExecuteScriptAsync($$"""
-            (() => {
-              document.getElementById('nexus-translation-toolbar')?.remove();
-              const box=document.createElement('div'); box.id='nexus-translation-toolbar';
-              box.dataset.nexusTranslationUi='true';
-              box.style.cssText='position:fixed;right:22px;top:22px;z-index:2147483647;display:flex;align-items:center;gap:10px;max-width:440px;padding:11px 13px;border:1px solid #80ffffff;border-radius:14px;background:#b3101010;color:#fff;box-shadow:0 12px 36px #0008;font:600 13px Segoe UI,Arial,sans-serif;backdrop-filter:blur(12px);';
-              const status=document.createElement('span'); status.id='nexus-translation-status'; status.textContent='Озвучивание страницы · 0 / '+{{total}};
-              const restore=document.createElement('button'); restore.textContent='Вернуть интерфейс';
-              restore.style.cssText='border:1px solid #66ffffff;border-radius:8px;background:#26ffffff;color:#fff;padding:6px 9px;cursor:pointer;';
-              restore.onclick=()=>{const state=window.__nexusInteractiveTranslation;if(state?.entries)for(const entry of state.entries.values())try{if(entry.kind==='text'&&entry.node?.isConnected)entry.node.nodeValue=entry.original;else if(entry.element?.isConnected)entry.element.setAttribute(entry.attribute,entry.original)}catch{}window.__nexusInteractiveTranslation=null;box.remove();};
-              const close=document.createElement('button'); close.textContent='×'; close.title='Скрыть панель, оставив перевод';
-              close.style.cssText='border:0;background:transparent;color:#fff;font-size:18px;cursor:pointer;padding:2px 5px;'; close.onclick=()=>box.remove();
-              box.append(status,restore,close); document.documentElement.append(box);
-            })();
-            """);
-    }
-
-    public async Task UpdateSpokenPageTranslationStatusAsync(int completed, int total, int translatedControls)
-    {
-        if (Core is null) return;
-        await Core.ExecuteScriptAsync($$"""
-            (()=>{const status=document.getElementById('nexus-translation-status');if(status)status.textContent={{JsonSerializer.Serialize($"Озвучено фрагментов статьи: {completed} / {total} · интерфейс: {translatedControls}")}}})()
-            """);
-    }
-
-    public async Task CompleteSpokenPageTranslationAsync(int spoken, int total, int translatedControls,
-        string? error = null)
-    {
-        if (Core is null) return;
-        var message = error is null
-            ? $"Статья озвучена: {spoken} из {total} · интерфейс: {translatedControls}"
-            : "Озвучивание остановлено: " + error;
-        var script = """
-            (()=>{const status=document.getElementById('nexus-translation-status');if(status){status.textContent=__MESSAGE__;status.style.color=__COLOR__;}})()
-            """
-            .Replace("__MESSAGE__", JsonSerializer.Serialize(message), StringComparison.Ordinal)
-            .Replace("__COLOR__", JsonSerializer.Serialize(error is null ? "#7ff5e7" : "#ffcb6b"), StringComparison.Ordinal);
-        await Core.ExecuteScriptAsync(script);
-    }
-
-    public async Task<int> ApplyTranslationSegmentsAsync(IReadOnlyList<TranslationSegment> translated, int completedBefore, int total)
-    {
-        if (Core is null || translated.Count == 0) return 0;
-        var json = await Core.ExecuteScriptAsync($$"""
-            (() => {
-              const items={{JsonSerializer.Serialize(translated)}};
-              const state=window.__nexusPageTranslation;if(!state)return 0;
-              let applied=0;
-              for(const item of items){
-                let node=state.nodes.get(item.Id);const entry=state.originals.get(item.Id);if(!entry)continue;
-                // React/Vue pages may replace text nodes while the local model is
-                // working. Rebind to the current visible node with the same source
-                // text instead of reporting a translation that was never shown.
-                if(!node?.isConnected){
-                  const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let candidate;
-                  while((candidate=walker.nextNode())) { const parent=candidate.parentElement;if(!parent||parent.closest('[data-nexus-translation-ui],script,style,noscript,textarea,code,pre'))continue;if((candidate.nodeValue||'').trim()===entry.text){node=candidate;state.nodes.set(item.Id,node);entry.node=node;break;} }
-                }
-                if(!node?.isConnected)continue;
-                const original=entry.original||node.nodeValue||'';
-                const lead=original.match(/^\s*/)?.[0]||'', tail=original.match(/\s*$/)?.[0]||'';
-                node.nodeValue=lead+item.Text+tail;applied++;
-              }
-              const status=document.getElementById('nexus-translation-status'); if(status) status.textContent='Перевод: '+({{completedBefore}}+applied)+' / '+{{total}};
-              return applied;
-            })();
-            """);
-        return int.TryParse(json, out var applied) ? applied : 0;
-    }
-
-    public async Task CompleteInPageTranslationAsync(int translated, int total, string? error = null)
-    {
-        if (Core is null) return;
-        await Core.ExecuteScriptAsync($$"""
-            (() => { const status=document.getElementById('nexus-translation-status'); if(status){
-              status.textContent={{JsonSerializer.Serialize(error is null ? $"Переведено элементов: {translated} из {total}" : "Перевод остановлен: " + error)}};
-              status.style.color={{JsonSerializer.Serialize(error is null ? "#7ff5e7" : "#ffcb6b")}};
-              }
-            })();
-            """);
-    }
-
-    public async Task<AudioCaptureResult> CaptureActiveVideoAudioAsync(int seconds,
-        CancellationToken cancellationToken = default)
-    {
-        if (Core is null || UrlService.IsInternal(CurrentUrl))
-            return new AudioCaptureResult { Error = "Открой страницу с видео." };
-        var script = """
-            (async () => {
-              try {
-                const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0)
-                  .sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
-                const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];
-                if(!video) return {Success:false,Error:'Активное HTML5-видео не найдено.',WavBase64:''};
-                const capture=video.captureStream||video.mozCaptureStream;
-                if(!capture) return {Success:false,Error:'Этот проигрыватель не разрешает захват звукового потока.',WavBase64:''};
-                const stream=capture.call(video),tracks=stream.getAudioTracks();
-                if(!tracks.length) return {Success:false,Error:'В видеопотоке нет доступной аудиодорожки или она защищена DRM.',WavBase64:''};
-                const context=new AudioContext(),source=context.createMediaStreamSource(stream);
-                const processor=context.createScriptProcessor(4096,1,1),silent=context.createGain();silent.gain.value=0;
-                const chunks=[];processor.onaudioprocess=e=>chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-                source.connect(processor);processor.connect(silent);silent.connect(context.destination);await context.resume();
-                await new Promise(resolve=>setTimeout(resolve,__MILLISECONDS__));
-                processor.disconnect();source.disconnect();silent.disconnect();tracks.forEach(t=>t.stop());await context.close();
-                const length=chunks.reduce((n,x)=>n+x.length,0),input=new Float32Array(length);let offset=0;
-                for(const chunk of chunks){input.set(chunk,offset);offset+=chunk.length}
-                if(!input.length) return {Success:false,Error:'Браузер не получил аудиосэмплы.',WavBase64:''};
-                let energy=0;for(let i=0;i<input.length;i+=32)energy+=input[i]*input[i];
-                if(Math.sqrt(energy/Math.max(1,input.length/32))<0.0001)return {Success:true,Error:'silence',WavBase64:''};
-                const outRate=16000,ratio=context.sampleRate/outRate,outLength=Math.floor(input.length/ratio),pcm=new Int16Array(outLength);
-                for(let i=0;i<outLength;i++){const start=Math.floor(i*ratio),end=Math.min(input.length,Math.floor((i+1)*ratio));let sum=0;for(let j=start;j<end;j++)sum+=input[j];const value=Math.max(-1,Math.min(1,sum/Math.max(1,end-start)));pcm[i]=value<0?value*32768:value*32767}
-                const bytes=new Uint8Array(44+pcm.length*2),view=new DataView(bytes.buffer),write=(p,s)=>{for(let i=0;i<s.length;i++)view.setUint8(p+i,s.charCodeAt(i))};
-                write(0,'RIFF');view.setUint32(4,36+pcm.length*2,true);write(8,'WAVE');write(12,'fmt ');view.setUint32(16,16,true);view.setUint16(20,1,true);view.setUint16(22,1,true);view.setUint32(24,outRate,true);view.setUint32(28,outRate*2,true);view.setUint16(32,2,true);view.setUint16(34,16,true);write(36,'data');view.setUint32(40,pcm.length*2,true);for(let i=0;i<pcm.length;i++)view.setInt16(44+i*2,pcm[i],true);
-                let binary='';for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));
-                return {Success:true,Error:'',WavBase64:btoa(binary)};
-              } catch(error) { return {Success:false,Error:error?.message||String(error),WavBase64:''}; }
-            })();
-            """.Replace("__MILLISECONDS__", Math.Clamp(seconds, 3, 15).ToString() + "000", StringComparison.Ordinal);
-        var json = await Core.ExecuteScriptAsync(script).WaitAsync(cancellationToken);
-        try { return JsonSerializer.Deserialize<AudioCaptureResult>(json) ?? new AudioCaptureResult { Error = "Пустой результат захвата." }; }
-        catch { return new AudioCaptureResult { Error = "Не удалось прочитать аудиопоток страницы." }; }
-    }
-
-    public async Task BeginLiveAudioTranslationAsync()
-    {
-        if (Core is null) return;
-        await Core.ExecuteScriptAsync("""
-            (()=>{window.__nexusStopAudioTranslation=false;
-              let overlay=document.getElementById('nexus-live-voice-status');
-              if(!overlay){overlay=document.createElement('div');overlay.id='nexus-live-voice-status';overlay.dataset.nexusTranslationUi='true';overlay.style.cssText='position:fixed;z-index:2147483647;padding:6px 10px;border:1px solid #55d8cc;border-radius:8px;background:#d0101820;color:#eafffc;font:600 12px Segoe UI,sans-serif;pointer-events:none;box-sizing:border-box';document.documentElement.append(overlay)}
-              let stop=document.getElementById('nexus-live-translation-stop');
-              if(!stop){stop=document.createElement('button');stop.id='nexus-live-translation-stop';stop.dataset.nexusTranslationUi='true';stop.textContent='Стоп';stop.style.cssText='position:fixed;z-index:2147483647;border:1px solid #66ffffff;border-radius:7px;background:#d0000000;color:#fff;padding:4px 8px;cursor:pointer;font:600 12px Segoe UI,sans-serif';stop.onclick=()=>{window.__nexusStopAudioTranslation=true;overlay.textContent='Остановка…'};document.documentElement.append(stop)}
-              const place=()=>{const v=[...document.querySelectorAll('video')].filter(x=>x.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight))[0];if(!v)return;const r=v.getBoundingClientRect();overlay.style.right=Math.max(8,innerWidth-r.right+8)+'px';overlay.style.top=Math.max(8,r.top+8)+'px';stop.style.right=Math.max(8,innerWidth-r.right+8)+'px';stop.style.top=Math.max(8,r.top+44)+'px'};
-              if(window.__nexusPlaceLiveTranslation){removeEventListener('resize',window.__nexusPlaceLiveTranslation);removeEventListener('scroll',window.__nexusPlaceLiveTranslation)}
-              window.__nexusPlaceLiveTranslation=place;place();addEventListener('resize',place,{passive:true});addEventListener('scroll',place,{passive:true});overlay.textContent='Nexus Voice · подготовка…';})();
-            """);
-    }
-
-    public async Task UpdateLiveAudioTranslationStatusAsync(string text)
-    {
-        if (Core is null) return;
-        await Core.ExecuteScriptAsync("(()=>{const e=document.getElementById('nexus-live-voice-status');if(e)e.textContent=" +
-                                      JsonSerializer.Serialize(text) + "})()");
-    }
-
-    public async Task<bool> ShouldStopLiveAudioTranslationAsync()
-    {
-        if (Core is null) return true;
-        var json = await Core.ExecuteScriptAsync("Boolean(window.__nexusStopAudioTranslation)");
-        return bool.TryParse(json, out var stopped) && stopped;
-    }
-
-    public async Task PrepareVideoForSpokenTranslationAsync(bool pausePlayback)
-    {
-        if (Core is null) return;
-        await Core.ExecuteScriptAsync("""
-            ((pausePlayback)=>{
-            (()=>{const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];if(!video)return false;
-              if(!window.__nexusSpokenVideoState)window.__nexusSpokenVideoState={video,wasPaused:video.paused,pausedByNexus:pausePlayback};
-              if(pausePlayback)video.pause();return true;})()})(__PAUSE__)
-            """.Replace("__PAUSE__", pausePlayback ? "true" : "false", StringComparison.Ordinal));
-    }
-
-    public async Task EnableVideoDubbingMixAsync()
-    {
-        if (Core is null) return;
-        await Core.ExecuteScriptAsync("""
-            (()=>{const videos=[...document.querySelectorAll('video')].filter(v=>v.getClientRects().length>0).sort((a,b)=>(b.clientWidth*b.clientHeight)-(a.clientWidth*a.clientHeight));
-              const video=videos.find(v=>!v.paused&&!v.ended)||videos[0];if(!video)return false;
-              if(!window.__nexusDubbingVideoState)window.__nexusDubbingVideoState={video,muted:video.muted,volume:video.volume};
-              if(!video.muted)video.volume=Math.min(video.volume,.22);return true;})()
-            """);
-    }
-
-    public async Task ResumeVideoAfterSpokenTranslationAsync()
-    {
-        if (Core is null) return;
-        await Core.ExecuteScriptAsync("""
-            (()=>{const state=window.__nexusSpokenVideoState;if(!state)return false;window.__nexusSpokenVideoState=null;
-              const video=state.video;if(!video?.isConnected)return false;
-              if(state.pausedByNexus&&!state.wasPaused)try{const pending=video.play();if(pending?.catch)pending.catch(()=>{})}catch{}return true;})()
-            """);
-    }
-
-    public async Task EndLiveAudioTranslationAsync(string status)
-    {
-        if (Core is null) return;
-        await Core.ExecuteScriptAsync("""
-            ((status)=>{window.__nexusStopAudioTranslation=true;
-              const state=window.__nexusSpokenVideoState;window.__nexusSpokenVideoState=null;if(state?.pausedByNexus&&state?.video?.isConnected&&!state.wasPaused)try{const pending=state.video.play();if(pending?.catch)pending.catch(()=>{})}catch{}
-              const dubbing=window.__nexusDubbingVideoState;window.__nexusDubbingVideoState=null;if(dubbing?.video?.isConnected){dubbing.video.muted=dubbing.muted;dubbing.video.volume=dubbing.volume}
-              const overlay=document.getElementById('nexus-live-voice-status');if(overlay){overlay.textContent=status;setTimeout(()=>overlay.remove(),1800)}
-              document.getElementById('nexus-live-translation-stop')?.remove();
-              if(window.__nexusPlaceLiveTranslation){removeEventListener('resize',window.__nexusPlaceLiveTranslation);removeEventListener('scroll',window.__nexusPlaceLiveTranslation)}
-              window.__nexusPlaceLiveTranslation=null})(__STATUS__)
-            """.Replace("__STATUS__", JsonSerializer.Serialize(status), StringComparison.Ordinal));
-    }
-
-    public async Task<string> GetAgentDomSnapshotAsync()
-    {
-        if (Core is null || UrlService.IsInternal(CurrentUrl)) return "[]";
-        _agentDomToken = Guid.NewGuid().ToString("N");
-        return await Core.ExecuteScriptAsync($$"""
-            (() => {
-              const visible = e => { const r=e.getBoundingClientRect(), s=getComputedStyle(e); return r.width>1 && r.height>1 && s.visibility!=='hidden' && s.display!=='none'; };
-              const elements=[...document.querySelectorAll('a,button,input,select,textarea,[role="button"],[tabindex]')].filter(visible).slice(0,120);
-              return elements.map((e,i)=>{
-                const id='n'+(i+1); e.dataset.nexusAgentId=id; e.dataset.nexusAgentToken={{JsonSerializer.Serialize(_agentDomToken)}};
-                let href=''; if(e.tagName==='A'&&e.href){ try { const u=new URL(e.href); href=u.origin+u.pathname; } catch {} }
-                return { id, tag:e.tagName.toLowerCase(), type:(e.type||''), text:(e.innerText||e.getAttribute('aria-label')||e.placeholder||'').trim().slice(0,180),
-                  placeholder:(e.placeholder||'').slice(0,100), href:href.slice(0,300) };
-              });
-            })();
-            """);
-    }
-
-    public async Task<IReadOnlyList<string>> ExecuteAgentPlanAsync(AgentPlan plan)
-    {
-        if (Core is null) throw new InvalidOperationException("Страница не готова.");
-        var results = new List<string>();
-        string[] forbidden = ["купить", "оплат", "заказать", "отправить", "удалить", "пароль", "purchase", "pay", "submit", "delete", "password", "login"];
-        foreach (var step in plan.Steps)
-        {
-            if (!System.Text.RegularExpressions.Regex.IsMatch(step.ElementId ?? string.Empty, @"^n\d+$"))
-            {
-                results.Add("Пропущено: неверный elementId.");
-                continue;
-            }
-            var combined = (step.Description + " " + step.Value).ToLowerInvariant();
-            if (forbidden.Any(word => combined.Contains(word, StringComparison.Ordinal)))
-            {
-                results.Add("Заблокировано опасное действие: " + step.Description);
-                continue;
-            }
-            var script = $$"""
-                (() => {
-                  const e=document.querySelector('[data-nexus-agent-token={{JsonSerializer.Serialize(_agentDomToken)}}][data-nexus-agent-id="{{step.ElementId}}"]');
-                  if(!e) return 'элемент не найден';
-                  const action={{JsonSerializer.Serialize(step.Action)}};
-                  if(action==='highlight'){ e.style.outline='3px solid #36d7c4'; e.scrollIntoView({behavior:'smooth',block:'center'}); return 'подсвечено'; }
-                  if(action==='scroll'){ e.scrollIntoView({behavior:'smooth',block:'center'}); return 'прокручено'; }
-                  if(action==='fill'){
-                    if(!['INPUT','TEXTAREA','SELECT'].includes(e.tagName)) return 'не поле ввода';
-                    const type=(e.type||'').toLowerCase(), ac=(e.autocomplete||'').toLowerCase();
-                    if(['password','file','hidden'].includes(type)||/password|cc-|card|one-time-code/.test(ac)) return 'чувствительное поле заблокировано';
-                    e.value={{JsonSerializer.Serialize((step.Value ?? string.Empty)[..Math.Min(step.Value?.Length ?? 0, 500)])}};
-                    e.dispatchEvent(new Event('input',{bubbles:true})); e.dispatchEvent(new Event('change',{bubbles:true})); return 'заполнено';
-                  }
-                  if(action==='click'){
-                    if(!['A','BUTTON'].includes(e.tagName)||(e.type||'').toLowerCase()==='submit') return 'клик заблокирован';
-                    const label=(e.innerText||e.getAttribute('aria-label')||'').toLowerCase();
-                    if(/купить|оплат|заказать|отправить|удалить|purchase|pay|submit|delete|login/.test(label)) return 'опасный клик заблокирован';
-                    e.click(); return 'нажато';
-                  }
-                  return 'неизвестное действие';
-                })();
-                """;
-            var json = await Core.ExecuteScriptAsync(script);
-            string result;
-            try { result = JsonSerializer.Deserialize<string>(json) ?? json; }
-            catch { result = json; }
-            results.Add(step.Description + ": " + result);
-            await Task.Delay(250);
-        }
-        return results;
-    }
-
-    public async Task<bool> SearchCurrentSiteForAgentAsync(string query, CancellationToken cancellationToken = default)
-    {
-        if (Core is null || UrlService.IsInternal(CurrentUrl) || string.IsNullOrWhiteSpace(query)) return false;
-        // Prefer the site's own GET search architecture. It is deterministic,
-        // keeps the current authentication/cookies in WebView2 and avoids ranking
-        // unrelated cards when a JavaScript key event was ignored.
-        var searchUrlScript = """
-            (()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>80&&r.height>15&&s.display!=='none'&&s.visibility!=='hidden'};
-              const inputs=[...document.querySelectorAll('form input[name],input[type="search"][name]')].filter(visible).map(e=>{const hint=((e.type||'')+' '+(e.name||'')+' '+(e.id||'')+' '+(e.placeholder||'')+' '+(e.getAttribute('aria-label')||'')).toLowerCase();return {e,score:(e.type==='search'?8:0)+(/search|query|поиск|найти|товар|text|q/.test(hint)?6:0)}}).sort((a,b)=>b.score-a.score);
-              const input=inputs[0]?.e;if(!input||inputs[0].score<5)return '';
-              const form=input.closest('form');if(form&&String(form.method||'get').toLowerCase()==='post')return '';
-              try{const target=new URL(form?.action||location.href,location.href);if(target.origin!==location.origin)return '';target.searchParams.set(input.name,__NEXUS_QUERY__);return target.href}catch{return ''}})();
-            """.Replace("__NEXUS_QUERY__", JsonSerializer.Serialize(query[..Math.Min(query.Length, 300)]), StringComparison.Ordinal);
-        var searchUrlJson = await Core.ExecuteScriptAsync(searchUrlScript);
-        try
-        {
-            var searchUrl = JsonSerializer.Deserialize<string>(searchUrlJson);
-            if (!string.IsNullOrWhiteSpace(searchUrl) && !searchUrl.Equals(CurrentUrl, StringComparison.OrdinalIgnoreCase) &&
-                await NavigateAndWaitAsync(searchUrl, TimeSpan.FromSeconds(20)))
-                return true;
-        }
-        catch (JsonException) { }
-        var beforeUrl = CurrentUrl;
-        var beforeFingerprint = await GetShoppingCatalogFingerprintAsync();
-        var searchScript = $$"""
-            (() => {
-              const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>80&&r.height>15&&s.display!=='none'&&s.visibility!=='hidden';};
-              const inputs=[...document.querySelectorAll('input')].filter(visible).map(e=>{
-                const hint=((e.type||'')+' '+(e.name||'')+' '+(e.id||'')+' '+(e.placeholder||'')+' '+(e.getAttribute('aria-label')||'')).toLowerCase();
-                let score=(e.type==='search'?8:0)+(/search|поиск|найти|товар/.test(hint)?6:0)-(e.type==='password'?100:0);
-                return {e,score};
-              }).sort((a,b)=>b.score-a.score);
-              const input=inputs[0]; if(!input||input.score<4) return false;
-              const e=input.e, value={{JsonSerializer.Serialize(query[..Math.Min(query.Length, 300)])}};
-              const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')?.set;
-              if(setter) setter.call(e,value); else e.value=value;
-              e.dispatchEvent(new Event('input',{bubbles:true})); e.dispatchEvent(new Event('change',{bubbles:true})); e.focus();
-              const form=e.closest('form');
-              if(form){ if(form.requestSubmit) form.requestSubmit(); else form.submit(); }
-              else { e.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true}));
-                     e.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',code:'Enter',bubbles:true})); }
-              return true;
-            })();
-            """;
-        var json = await Core.ExecuteScriptAsync(searchScript);
-        if (!bool.TryParse(json, out var initialFound) || !initialFound)
-        {
-            // Many stores initially expose only a magnifier button. Opening that
-            // control is a reversible UI action; the agent still never purchases,
-            // signs in or submits anything except the explicit search query.
-            var openedJson = await Core.ExecuteScriptAsync("""
-                (()=>{const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>8&&r.height>8&&s.display!=='none'&&s.visibility!=='hidden'};
-                  const controls=[...document.querySelectorAll('button,[role="button"],a')].filter(visible);
-                  const search=controls.find(e=>/^(search|поиск|найти|искать)$/i.test(((e.innerText||'')+' '+(e.getAttribute('aria-label')||'')+' '+(e.title||'')).trim()));
-                  if(!search)return false;search.click();return true;})()
-                """);
-            if (bool.TryParse(openedJson, out var opened) && opened)
-            {
-                await Task.Delay(650, cancellationToken);
-                json = await Core.ExecuteScriptAsync(searchScript);
-            }
-        }
-        if (!bool.TryParse(json, out var found) || !found) return false;
-        for (var attempt = 0; attempt < 24; attempt++)
-        {
-            await Task.Delay(500, cancellationToken);
-            if (!CurrentUrl.Equals(beforeUrl, StringComparison.OrdinalIgnoreCase)) return true;
-            try
-            {
-                var current = await GetShoppingCatalogFingerprintAsync();
-                if (!string.IsNullOrWhiteSpace(current) && !current.Equals(beforeFingerprint, StringComparison.Ordinal))
-                    return true;
-            }
-            catch (Exception) { }
-        }
-        // A submitted form is not proof that a catalogue was updated. Returning
-        // true here made the agent rank unrelated cards from the landing page.
-        return false;
-    }
-
-    private async Task<string> GetShoppingCatalogFingerprintAsync()
-    {
-        if (Core is null) return string.Empty;
-        var json = await Core.ExecuteScriptAsync("""
-            (()=>{const selectors='[itemtype*="Product"],[data-product-id],[data-nm-id],[data-sku],article,li[class*="product" i],[class*="product-card" i],[role="listitem"]';
-              const nodes=[...document.querySelectorAll(selectors)].slice(0,120);const sample=nodes.slice(0,12).map(e=>(e.innerText||'').replace(/\s+/g,' ').slice(0,120)).join('|');
-              return location.href+'#'+nodes.length+'#'+document.documentElement.scrollHeight+'#'+sample;})()
-            """);
-        try { return JsonSerializer.Deserialize<string>(json) ?? string.Empty; }
-        catch (JsonException) { return string.Empty; }
-    }
-
-    public async Task<string> ExtractShoppingCardsAsync()
-    {
-        if (Core is null || UrlService.IsInternal(CurrentUrl)) return "[]";
-        return await Core.ExecuteScriptAsync("""
-            (() => {
-              const result=[], seen=new Set();
-              const visible=e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>70&&r.height>25&&s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';};
-              const clean=value=>(value||'').replace(/\s+/g,' ').trim();
-              const currency=/(?:\d[\d\s.,]{0,14})\s*(?:₽|руб\.?|RUB|\$|€|£|¥|₸|₴)|(?:₽|руб\.?|RUB|\$|€|£|¥|₸|₴)\s*\d[\d\s.,]{0,14}/i;
-              const ratingPattern=/(?:рейтинг|rating|оценка)?\s*[0-5][.,]\d\s*(?:из\s*5)?/i;
-              const buyersPattern=/\d[\d\s.,]*\s*(?:купили|купило|покупок|заказов|отзыв(?:а|ов)?|оцен(?:ка|ок)|sold|reviews?|ratings?)/i;
-              const sameSite=(a,b)=>a===b||a.endsWith('.'+b)||b.endsWith('.'+a);
-              const safeUrl=value=>{try{const u=new URL(value,location.href);if(!/^https?:$/.test(u.protocol)||!sameSite(u.hostname,location.hostname))return '';u.hash='';return u.origin+u.pathname+u.search;}catch{return ''}};
-              const safeImage=value=>{try{const u=new URL(value,location.href);if(!/^https?:$/.test(u.protocol))return '';return u.href.slice(0,1600)}catch{return ''}};
-              const bestImage=(image,host)=>{
-                if(image){
-                  const srcset=image.currentSrc||image.getAttribute('srcset')||image.getAttribute('data-srcset')||'';
-                  const selected=srcset.includes(',')?srcset.split(',').at(-1).trim().split(/\s+/)[0]:srcset.trim().split(/\s+/)[0];
-                  const direct=selected||image.src||image.getAttribute('data-src')||image.getAttribute('data-original')||image.getAttribute('data-lazy-src');
-                  if(direct)return direct;
-                }
-                const picture=host?.querySelector('picture source[srcset],picture source[data-srcset]');
-                const pictureSet=picture?.getAttribute('srcset')||picture?.getAttribute('data-srcset')||'';
-                if(pictureSet)return pictureSet.split(',').at(-1).trim().split(/\s+/)[0];
-                const styled=[host,...(host?[...host.querySelectorAll('*')].slice(0,24):[])].find(x=>x&&/url\(/i.test(getComputedStyle(x).backgroundImage||''));
-                const match=styled&&getComputedStyle(styled).backgroundImage.match(/url\(["']?([^"')]+)["']?\)/i);
-                return match?.[1]||'';
-              };
-              const add=(name,text,url,price='',rating='',buyers='',source='DOM',imageUrl='')=>{
-                name=clean(name).slice(0,220);text=clean(text).slice(0,1200);url=safeUrl(url);imageUrl=safeImage(imageUrl);
-                if(name.length<3)return;const key=(url||name).toLowerCase();if(seen.has(key))return;
-                price=clean(price)||(text.match(currency)||[])[0]||'';
-                rating=clean(rating)||(text.match(ratingPattern)||[])[0]||'';
-                buyers=clean(buyers)||(text.match(buyersPattern)||[])[0]||'';
-                if(!price&&!rating&&!buyers&&!/product|товар|catalog|item|offer/i.test((url||'')+' '+source))return;
-                seen.add(key);result.push({name,price,rating,buyers,url,imageUrl,text,source});
-              };
-
-              // Структурированные данные надёжнее CSS-классов и работают на многих магазинах.
-              for(const script of document.querySelectorAll('script[type="application/ld+json"]')){
-                try{
-                  const root=JSON.parse(script.textContent||'null'), queue=Array.isArray(root)?[...root]:[root];
-                  while(queue.length){const item=queue.shift();if(!item||typeof item!=='object')continue;
-                    if(Array.isArray(item)){queue.push(...item);continue} if(item['@graph'])queue.push(item['@graph']);
-                    const type=Array.isArray(item['@type'])?item['@type'].join(' '):String(item['@type']||'');
-                    if(/Product/i.test(type)){
-                      const offer=Array.isArray(item.offers)?item.offers[0]:(item.offers||{}), aggregate=item.aggregateRating||{};
-                      const price=offer.price?String(offer.price)+' '+String(offer.priceCurrency||''):'';
-                      const rating=aggregate.ratingValue?String(aggregate.ratingValue):'';
-                      const buyers=aggregate.reviewCount||aggregate.ratingCount?String(aggregate.reviewCount||aggregate.ratingCount)+' отзывов':'';
-                      const image=Array.isArray(item.image)?item.image[0]:(item.image?.url||item.image||'');
-                      add(item.name||item.headline,item.description||item.name,item.url||offer.url||location.href,price,rating,buyers,'JSON-LD Product',image);
-                    }
-                    if(/ItemList/i.test(type)&&Array.isArray(item.itemListElement))queue.push(...item.itemListElement.map(x=>x.item||x));
-                  }
-                }catch{}
-              }
-
-              const selectors='[itemtype*="Product"],[itemscope][itemprop="itemListElement"],[data-product-id],[data-nm-id],[data-sku],[data-product],[data-testid*="product" i],article,li[class*="product" i],div[class*="product-card" i],div[class*="productcard" i],div[class*="catalog" i] [class*="card" i],[role="listitem"]';
-              const nodes=[...new Set(document.querySelectorAll(selectors))].filter(visible);
-              for(const e of nodes){
-                const text=clean(e.innerText); if(text.length<12||text.length>1800) continue;
-                const heading=e.querySelector('h1,h2,h3,h4,[itemprop="name"],[class*="name" i],[class*="title" i]');
-                const link=e.matches('a')?e:e.querySelector('a[href]');
-                const name=heading?.innerText||link?.getAttribute('aria-label')||link?.title||text.slice(0,180);
-                const image=e.querySelector('img');
-                const imageSource=bestImage(image,e);
-                add(name,text,link?.href||e.getAttribute('itemid')||'','','','','product DOM',imageSource); if(result.length>=80) break;
-              }
-
-              // Универсальный резерв: ссылка с изображением и ценой в ближайшей карточке.
-              if(result.length<8){
-                for(const link of [...document.querySelectorAll('a[href]')].filter(visible)){
-                  if(!link.querySelector('img')&&!link.closest('[class*="product" i],[class*="card" i],[class*="item" i]'))continue;
-                  const host=link.closest('article,li,[role="listitem"],[class*="result" i],[class*="item" i],[class*="product" i],[class*="card" i]')||link.parentElement;
-                  const text=clean(host?.innerText||link.innerText);if(text.length<8||text.length>1800||!currency.test(text))continue;
-                  const image=link.querySelector('img')||host?.querySelector('img');
-                  const name=link.innerText||link.getAttribute('aria-label')||image?.alt||link.title||text.slice(0,180);
-                  const imageSource=bestImage(image,host);
-                  add(name,text,link.href,'','','','image + price',imageSource);if(result.length>=80)break;
-                }
-              }
-              return result.slice(0,80);
-            })();
-            """);
-    }
-
-    public async Task<byte[]?> CaptureShoppingProductImageAsync(string productUrl)
-    {
-        if (Core is null || !Uri.TryCreate(productUrl, UriKind.Absolute, out _)) return null;
-        var script = """
-            (() => {
-              try {
-                const target=new URL(__TARGET__);
-                const normalize=value=>{try{const u=new URL(value,location.href);return u.origin+u.pathname.replace(/\/$/,'')}catch{return ''}};
-                const wanted=normalize(target.href);
-                const anchor=[...document.querySelectorAll('a[href]')].find(a=>normalize(a.href)===wanted);
-                const host=anchor?.closest('article,li,[role="listitem"],[class*="product" i],[class*="card" i],[class*="item" i]')||anchor;
-                const image=host?.querySelector('img')||anchor?.querySelector('img');
-                if(!image||!image.complete||image.naturalWidth<2||image.naturalHeight<2)return '';
-                const scale=Math.min(1,320/image.naturalWidth,200/image.naturalHeight);
-                const canvas=document.createElement('canvas');
-                canvas.width=Math.max(1,Math.round(image.naturalWidth*scale));
-                canvas.height=Math.max(1,Math.round(image.naturalHeight*scale));
-                canvas.getContext('2d',{alpha:false}).drawImage(image,0,0,canvas.width,canvas.height);
-                return canvas.toDataURL('image/jpeg',.78);
-              } catch { return ''; }
-            })();
-            """.Replace("__TARGET__", JsonSerializer.Serialize(productUrl), StringComparison.Ordinal);
-        var json = await Core.ExecuteScriptAsync(script);
-        string? dataUrl;
-        try { dataUrl = JsonSerializer.Deserialize<string>(json); }
-        catch (JsonException) { return null; }
-        if (string.IsNullOrWhiteSpace(dataUrl) || !dataUrl.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
-            return null;
-        var separator = dataUrl.IndexOf(',');
-        if (separator < 0 || dataUrl.Length - separator > 1_500_000) return null;
-        try { return Convert.FromBase64String(dataUrl[(separator + 1)..]); }
-        catch (FormatException) { return null; }
-    }
-
-    public async Task<string?> GetNextShoppingPageUrlAsync()
-    {
-        if (Core is null || UrlService.IsInternal(CurrentUrl)) return null;
-        var json = await Core.ExecuteScriptAsync("""
-            (()=>{const direct=document.querySelector('link[rel="next"],a[rel="next"],a[aria-label*="next" i],a[aria-label*="след" i]');if(direct?.href)return direct.href;
-              const links=[...document.querySelectorAll('a[href],button')];
-              const next=links.find(e=>{const t=((e.innerText||'')+' '+(e.getAttribute('aria-label')||'')+' '+(e.title||'')).trim().toLowerCase();return /^(next|следующ|далее|впер[её]д|›|»|下一页|次へ)/i.test(t)&&!e.disabled});
-              if(next?.href)return next.href;
-              const current=[...document.querySelectorAll('[aria-current="page"],.active,.current')].find(e=>/^\d+$/.test((e.textContent||'').trim()));
-              if(current){const wanted=Number((current.textContent||'').trim())+1;const numbered=[...document.querySelectorAll('a[href]')].find(a=>Number((a.textContent||'').trim())===wanted);if(numbered)return numbered.href}
-              const url=new URL(location.href);for(const key of ['page','p','pg'])if(url.searchParams.has(key)){const number=Number(url.searchParams.get(key));if(Number.isFinite(number)){url.searchParams.set(key,String(number+1));return url.href}}
-              return null;})();
-            """);
-        string? value;
-        try { value = JsonSerializer.Deserialize<string>(json); }
-        catch { return null; }
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var next) ||
-            !Uri.TryCreate(CurrentUrl, UriKind.Absolute, out var current) ||
-            !IsSameSite(next.Host, current.Host) ||
-            next.Scheme is not ("http" or "https")) return null;
-        return next.GetLeftPart(UriPartial.Path) + next.Query;
-    }
-
-    public async Task<bool> NavigateAndWaitAsync(string url, TimeSpan timeout)
-    {
-        if (Core is null || !Uri.TryCreate(url, UriKind.Absolute, out var target) ||
-            !Uri.TryCreate(CurrentUrl, UriKind.Absolute, out var current) ||
-            !IsSameSite(target.Host, current.Host)) return false;
-        var source = new TaskCompletionSource<CoreWebView2NavigationCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
-        void Handler(object? _, CoreWebView2NavigationCompletedEventArgs e) => source.TrySetResult(e);
-        Core.NavigationCompleted += Handler;
-        try { Core.Navigate(url); return (await source.Task.WaitAsync(timeout)).IsSuccess; }
-        catch (TimeoutException) { return false; }
-        finally { Core.NavigationCompleted -= Handler; }
-    }
-
-    public async Task<bool> NavigateInternalAndWaitAsync(string url, TimeSpan timeout)
-    {
-        if (Core is null || !UrlService.IsInternal(url)) return false;
-        var source = new TaskCompletionSource<CoreWebView2NavigationCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
-        void Handler(object? _, CoreWebView2NavigationCompletedEventArgs e) => source.TrySetResult(e);
-        Core.NavigationCompleted += Handler;
-        try { Core.Navigate(url); return (await source.Task.WaitAsync(timeout)).IsSuccess; }
-        catch (TimeoutException) { return false; }
-        finally { Core.NavigationCompleted -= Handler; }
-    }
-
-    public async Task<bool> TryClickNextShoppingPageAsync()
-    {
-        if (Core is null) return false;
-        var before = await GetShoppingCatalogFingerprintAsync();
-        var json = await Core.ExecuteScriptAsync("""
-            (()=>{const candidates=[...document.querySelectorAll('button,[role="button"]')];let next=candidates.find(e=>{const t=((e.innerText||'')+' '+(e.getAttribute('aria-label')||'')+' '+(e.title||'')).trim().toLowerCase();return /^(next|следующ|далее|впер[её]д|›|»|下一页|次へ)/i.test(t)&&!e.disabled&&e.getAttribute('aria-disabled')!=='true'});
-              if(!next){const current=[...document.querySelectorAll('[aria-current="page"],.active,.current')].find(e=>/^\d+$/.test((e.textContent||'').trim()));if(current){const wanted=Number((current.textContent||'').trim())+1;next=candidates.find(e=>Number((e.textContent||'').trim())===wanted)}}
-              if(!next)return false;next.click();return true})();
-            """);
-        if (!bool.TryParse(json, out var clicked) || !clicked) return false;
-        for (var attempt = 0; attempt < 16; attempt++)
-        {
-            await Task.Delay(400);
-            var after = await GetShoppingCatalogFingerprintAsync();
-            if (!after.Equals(before, StringComparison.Ordinal)) return true;
-        }
-        return true;
-    }
-
-    public async Task<bool> ScrollShoppingResultsAsync()
-    {
-        if (Core is null) return false;
-        var before = await GetShoppingCatalogFingerprintAsync();
-        await Core.ExecuteScriptAsync("window.scrollTo({top:document.documentElement.scrollHeight,behavior:'smooth'});true");
-        await Task.Delay(1400);
-        var after = await GetShoppingCatalogFingerprintAsync();
-        return !before.Equals(after, StringComparison.Ordinal);
-    }
-
-    private void ResetNetworkSnapshot(string topLevelUrl)
-    {
-        lock (_networkLock)
-        {
-            _contactedHosts.Clear();
-            _thirdPartyHosts.Clear();
-            _blockedTrackerHosts.Clear();
-            _observedPorts.Clear();
-            _requestCount = 0;
-            _networkTopHost = Uri.TryCreate(topLevelUrl, UriKind.Absolute, out var top) ? top.Host : string.Empty;
-        }
-    }
-
-    private void RecordNetworkRequest(string requestUrl, bool blocked)
-    {
-        if (!Uri.TryCreate(requestUrl, UriKind.Absolute, out var request) ||
-            request.Scheme is not ("http" or "https"))
-            return;
-
-        lock (_networkLock)
-        {
-            _requestCount++;
-            _contactedHosts.Add(request.Host);
-            var port = request.IsDefaultPort
-                ? request.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ? 443 : 80
-                : request.Port;
-            if (port is > 0 and <= 65535)
-                _observedPorts.Add(port);
-
-            if (!string.IsNullOrWhiteSpace(_networkTopHost) && !IsSameSite(request.Host, _networkTopHost))
-                _thirdPartyHosts.Add(request.Host);
-            if (blocked)
-                _blockedTrackerHosts.Add(request.Host);
-        }
-    }
-
-    private static bool IsSameSite(string left, string right) =>
-        left.Equals(right, StringComparison.OrdinalIgnoreCase) ||
-        left.EndsWith('.' + right, StringComparison.OrdinalIgnoreCase) ||
-        right.EndsWith('.' + left, StringComparison.OrdinalIgnoreCase);
 
     public void Dispose()
     {
@@ -1336,6 +477,7 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
                 _pendingHttpFallback = null;
                 _upgradedHttpsUrl = null;
                 NavigationSucceeded?.Invoke(this, EventArgs.Empty);
+                _ = ConfigureStartPageAsync();
                 _ = TryRestoreSecureRestartStateAsync();
             }
             else if (_pendingHttpFallback is not null && _upgradedHttpsUrl is not null)
@@ -1523,11 +665,12 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
 
     private static bool IsAllowedInternalMessage(string page, string? type) =>
         page.Equals("/start.html", StringComparison.OrdinalIgnoreCase)
-            ? type is "navigate" or "search" or "settings"
+            ? type is "navigate" or "settings"
             : page.Equals("/search.html", StringComparison.OrdinalIgnoreCase) && type == "result-open";
 
     private void HandleDownload(CoreWebView2DownloadStartingEventArgs e)
     {
+        CrashReportService.AddBreadcrumb("downloads", "starting");
         var operation = e.DownloadOperation;
         var path = operation.ResultFilePath;
         if (string.IsNullOrWhiteSpace(path))
@@ -1541,22 +684,13 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
         var fileName = Path.GetFileName(path);
         var safeSource = DownloadSecurityService.SanitizeSourceForDisplay(operation.Uri);
         var assessment = DownloadSecurityService.Assess(fileName, safeSource);
-        if (assessment.Level == DownloadRiskLevel.High)
-        {
-            var owner = Window.GetWindow(View);
-            var message = $"Файл: {fileName}\nИсточник: {safeSource}\n\n{assessment.Description}.\n\nПродолжить загрузку?";
-            var decision = owner is null
-                ? GlassDialogWindow.Show(message, "Опасная загрузка", MessageBoxButton.YesNo, MessageBoxImage.Warning)
-                : GlassDialogWindow.Show(owner, message, "Опасная загрузка", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-            if (decision != MessageBoxResult.Yes)
-            {
-                e.Cancel = true;
-                return;
-            }
-        }
+        // Risk information is shown next to the file in the downloads flyout;
+        // downloads are never interrupted by a modal warning. The local
+        // Defender scan after completion is the active protection stage.
 
-        // Оставляем стандартную панель загрузок WebView2 видимой для понятного UX.
-        e.Handled = false;
+        // The built-in WebView2 download shelf stays open after completion
+        // until dismissed; the Nexus indicator and hover flyout replace it.
+        e.Handled = true;
         var item = new DownloadItem
         {
             FileName = Path.GetFileName(path),
@@ -1596,13 +730,30 @@ public sealed class BrowserTab : INotifyPropertyChanged, IDisposable
             };
             if (operation.State == CoreWebView2DownloadState.Completed)
             {
-                _ = DownloadSecurityService.InspectCompletedAsync(item);
+                CrashReportService.AddBreadcrumb("downloads", "completed");
+                _ = InspectAndScanAsync(item);
                 VoiceAssistantService.Announce("Загрузка завершена. Файл проверяется локально.",
                     VoiceAnnouncementPriority.Important, _isPrivate);
             }
             else if (operation.State == CoreWebView2DownloadState.Interrupted)
+            {
+                CrashReportService.AddBreadcrumb("downloads", "interrupted");
                 VoiceAssistantService.Announce("Загрузка прервана.", VoiceAnnouncementPriority.Critical, _isPrivate);
+            }
         });
+    }
+
+    private static async Task InspectAndScanAsync(DownloadItem item)
+    {
+        try
+        {
+            await DownloadSecurityService.InspectCompletedAsync(item);
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("downloads", "inspect-completed", ex);
+        }
+        await AntivirusScanService.ScanAsync(item);
     }
 
     private static string MakeUniquePath(string path)

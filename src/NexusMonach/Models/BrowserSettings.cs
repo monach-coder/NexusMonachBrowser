@@ -49,7 +49,7 @@ public enum CrashReportMode
 public enum CrashReportDestination
 {
     HttpsCollector,
-    MatrixDirect
+    GitHubIssues
 }
 
 public enum BrowserTheme
@@ -60,11 +60,45 @@ public enum BrowserTheme
     Amethyst
 }
 
+public enum BrowserThemeMode
+{
+    Dark,
+    Light
+}
+
 public enum VoiceAssistantMode
 {
     Off,
     ImportantOnly,
     Assistant
+}
+
+public enum NeuralVoiceProfile
+{
+    Natasha,   // Ксения — женский (по умолчанию)
+    Irina,     // Ирина — женский (спокойный)
+    Aurora,    // Аврора — женский (выразительный)
+    Eugene     // Евгений — мужской
+}
+
+public enum VideoTranslationMode
+{
+    Fast,
+    Balanced,
+    Quality
+}
+
+/// <summary>Транспорт для обхода DPI-блокировки Tor.</summary>
+public enum TorTransportMode
+{
+    /// <summary>Напрямую, без обфускации — работает только там, где Tor не заблокирован.</summary>
+    Direct,
+    /// <summary>obfs4 через lyrebird — трафик выглядит как случайный шум. По умолчанию.</summary>
+    Obfs4,
+    /// <summary>Snowflake — трафик выглядит как WebRTC-видеозвонок. Тяжело заблокировать.</summary>
+    Snowflake,
+    /// <summary>meek-azure — трафик выглядит как HTTPS к Microsoft CDN. Почти не заблокировать, но медленно.</summary>
+    MeekAzure
 }
 
 public sealed class BrowserSettings
@@ -101,15 +135,28 @@ public sealed class BrowserSettings
     public CrashReportMode CrashReportMode { get; set; } = CrashReportMode.LocalOnly;
     public CrashReportDestination CrashReportDestination { get; set; } = CrashReportDestination.HttpsCollector;
     public string CrashReportEndpoint { get; set; } = string.Empty;
-    public string MatrixHomeserver { get; set; } = string.Empty;
-    public string MatrixRoomId { get; set; } = string.Empty;
+    /// <summary>Репозиторий приёма крашей в формате «владелец/имя».</summary>
+    public string GitHubRepository { get; set; } = "monach-coder/NexusMonachBrowser-crash-reports";
+    /// <summary>
+    /// URL подписанного манифеста сетевой поставки AI-моделей. Пусто —
+    /// модели не подтягиваются (полностью офлайн-режим).
+    /// </summary>
+    public string AiPackManifestUrl { get; set; } = string.Empty;
     public bool InitialProtectionSetupShown { get; set; }
     public BrowserTheme Theme { get; set; } = BrowserTheme.MonachAqua;
+    public BrowserThemeMode ThemeMode { get; set; } = BrowserThemeMode.Dark;
     public bool ThemeSelectionCompleted { get; set; }
     public VoiceAssistantMode VoiceAssistantMode { get; set; } = VoiceAssistantMode.ImportantOnly;
     public bool VoiceSpeakAtStartup { get; set; } = true;
-    public bool VoiceHandsFreeEnabled { get; set; }
-    public int VoiceRate { get; set; } = -1;
+    public bool VoiceHandsFreeEnabled { get; set; } = false;
+    public int VoiceRate { get; set; } = 0;
+    public NeuralVoiceProfile NeuralVoiceProfile { get; set; } = NeuralVoiceProfile.Natasha;
+    public VideoTranslationMode VideoTranslationMode { get; set; } = VideoTranslationMode.Balanced;
+    public bool TrailModeEnabled { get; set; }
+    public TorTransportMode TorTransport { get; set; } = TorTransportMode.Obfs4;
+    public bool TorBridgeEnabled { get; set; }
+    /// <summary>Приватные мосты пользователя (obfs4 IP:PORT KEY cert=...).</summary>
+    public string TorCustomBridges { get; set; } = string.Empty;
 
     public BrowserSettings Clone() => new()
     {
@@ -141,14 +188,17 @@ public sealed class BrowserSettings
         CrashReportMode = CrashReportMode,
         CrashReportDestination = CrashReportDestination,
         CrashReportEndpoint = CrashReportEndpoint,
-        MatrixHomeserver = MatrixHomeserver,
-        MatrixRoomId = MatrixRoomId,
+        GitHubRepository = GitHubRepository,
+        AiPackManifestUrl = AiPackManifestUrl,
         InitialProtectionSetupShown = InitialProtectionSetupShown,
         Theme = Theme,
+        ThemeMode = ThemeMode,
         ThemeSelectionCompleted = ThemeSelectionCompleted,
         VoiceAssistantMode = VoiceAssistantMode,
         VoiceSpeakAtStartup = VoiceSpeakAtStartup,
         VoiceHandsFreeEnabled = VoiceHandsFreeEnabled,
-        VoiceRate = VoiceRate
+        VoiceRate = VoiceRate,
+        NeuralVoiceProfile = NeuralVoiceProfile,
+        VideoTranslationMode = VideoTranslationMode
     };
 }

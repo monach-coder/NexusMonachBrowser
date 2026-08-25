@@ -7,10 +7,11 @@ namespace NexusMonach.Services;
 public static class AiModelCatalog
 {
     public const string TextModelId = "Nexus Fast Intelligence · Qwen3 0.6B";
-    public const string SpeechModelId = "Nexus Speech · Whisper base q5_1";
+    public const string SpeechModelId = "Nexus Speech · Whisper base q5_1 realtime";
     public const string SemanticModelId = "Nexus Semantics · multilingual-e5-small";
     public const string VisionModelId = "Nexus Vision · SmolVLM 500M";
     public const string TranslationModelId = "Nexus Translation · OPUS-MT";
+    public const string VoiceModelId = "Nexus Local Voice · Silero Kseniya V5";
 
     public static string Root => Path.Combine(AppContext.BaseDirectory, "AI");
     public static string LlamaRoot => Path.Combine(Root, "llama");
@@ -25,6 +26,15 @@ public static class AiModelCatalog
     public static string KoreanToEnglishRoot => Path.Combine(TranslationRoot, "ko-en");
     public static string NodeRoot => Path.Combine(Root, "node");
     public static string AdapterRoot => Path.Combine(Root, "adapters");
+    public static string DictionariesRoot => Path.Combine(Root, "dictionaries");
+    public static string FfmpegRoot => Path.Combine(Root, "ffmpeg");
+    public static string? FfmpegExecutable => FindFile(FfmpegRoot, "ffmpeg.exe");
+    public static string VoiceRoot => Path.Combine(Root, "voice");
+    public static string VoskVoiceModelRoot => Path.Combine(Root, "models", "voice", "vosk-tts-ru-multi");
+    public static string SileroVoiceModelRoot => Path.Combine(Root, "models", "voice", "silero-v5-ru");
+    public static string SileroVoiceModel => Path.Combine(SileroVoiceModelRoot, "v5_5_ru.pt");
+    public static string PiperVoiceModelRoot => Path.Combine(Root, "models", "voice", "piper-hd");
+    public static string PiperVoiceModel => Path.Combine(PiperVoiceModelRoot, "voice.onnx");
 
     public static string? LlamaCli => FindFile(LlamaRoot, "llama-cli.exe");
     public static string? LlamaServer => FindFile(LlamaRoot, "llama-server.exe");
@@ -32,12 +42,23 @@ public static class AiModelCatalog
     public static string? WhisperCli => FindFile(WhisperRoot, "whisper-cli.exe");
     public static string? WhisperServer => FindFile(WhisperRoot, "whisper-server.exe");
     public static string? TextModel => FindFile(TextRoot, "*.gguf");
-    public static string? WhisperModel => FindFile(SpeechRoot, "ggml-base-q5_1.bin");
-    public static string? VisionModel => FindFile(VisionRoot, "*SmolVLM*Q8_0.gguf");
+    public static string? WhisperModel => FindFile(SpeechRoot, "ggml-base-q5_1.bin") ??
+                                          FindFile(SpeechRoot, "ggml-small-q5_1.bin");
+    public static string? VisionModel => FindFile(VisionRoot, "SmolVLM*Q8_0.gguf");
     public static string? VisionProjector => FindFile(VisionRoot, "mmproj*.gguf");
     public static string? NodeExecutable => FindFile(NodeRoot, "node.exe");
     public static string SemanticAdapter => Path.Combine(AdapterRoot, "semantic.mjs");
     public static string TranslationAdapter => Path.Combine(AdapterRoot, "translate.mjs");
+    public static string StressDictionary => Path.Combine(DictionariesRoot, "ru-stress-full.txt.gz");
+    public static string YoWordsDictionary => Path.Combine(DictionariesRoot, "ru-yo-words.txt.gz");
+    public static string? PiperVoiceWorker => FindFile(VoiceRoot, "nexus-piper-worker.exe");
+    public static string? SileroVoiceWorker => FindFile(VoiceRoot, "nexus-silero-worker.exe");
+    public static string? PiperCli => FindFile(VoiceRoot, "piper.exe");
+    // Vosk TTS is intentionally not an active fallback.  The selected test
+    // voice is the local Silero Kseniya pack; Piper remains compatible with
+    // older optional packs and Windows SAPI is the final caller-owned fallback.
+    public static string? VoiceWorker => SileroVoiceReady ? SileroVoiceWorker : PiperVoiceWorker;
+    public static string VoiceModel => SileroVoiceReady ? SileroVoiceModel : PiperVoiceModel;
 
     public static bool TextReady => (IsUsable(LlamaServer, 8_000) || IsUsable(LlamaCli, 8_000)) &&
                                     IsUsable(TextModel, 300_000_000);
@@ -50,11 +71,23 @@ public static class AiModelCatalog
     public static bool TranslationReady => IsUsable(NodeExecutable, 20_000_000) && File.Exists(TranslationAdapter) &&
         HasTranslationModel(MultilingualToEnglishRoot) && HasTranslationModel(EnglishToRussianRoot) &&
         HasTranslationModel(KoreanToEnglishRoot);
+    public static bool PiperVoiceReady => (IsUsable(PiperVoiceWorker, 500_000) ||
+                                           IsUsable(PiperCli, 300_000)) &&
+                                          IsUsable(PiperVoiceModel, 50_000_000) &&
+                                          File.Exists(PiperVoiceModel + ".json");
+    public static bool SileroVoiceReady => IsUsable(SileroVoiceWorker, 500_000) &&
+                                           IsUsable(SileroVoiceModel, 100_000_000);
+    public static bool StressDictionaryReady => IsUsable(StressDictionary, 1_000_000);
+    public static bool NeuralVoiceReady => SileroVoiceReady || PiperVoiceReady || OperatingSystem.IsWindows();
 
     public static string ReadinessSummary =>
         $"Текст {(TextReady ? "✓" : "—")} · Речь {(SpeechReady ? "✓" : "—")} · " +
         $"Семантика {(SemanticReady ? "✓" : "—")} · Зрение {(VisionReady ? "✓" : "—")} · " +
-        $"Перевод {(TranslationReady ? "✓" : "—")}";
+        $"Перевод {(TranslationReady ? "✓" : "—")} · Голос {(NeuralVoiceReady ? "✓" : "—")}";
+
+    public static string MissingNeuralVoiceMessage =>
+        "Локальный голос недоступен. Установите Silero Kseniya V5, совместимый Piper HD pack либо " +
+        "русский женский голос Windows. Nexus не использует сетевую озвучку.";
 
     public static string MissingTextRuntimeMessage =>
         "В этой сборке отсутствует автономный текстовый AI-комплект. Ожидается AI\\llama\\llama-server.exe " +
@@ -64,7 +97,8 @@ public static class AiModelCatalog
     public static string MissingSpeechRuntimeMessage =>
         "В этой сборке отсутствует автономный Whisper-комплект. Ожидается AI\\whisper\\whisper-server.exe " +
         "(либо совместимый AI\\whisper\\whisper-cli.exe) " +
-        "и AI\\models\\whisper\\ggml-base-q5_1.bin. Nexus не загружает модели из сети во время работы.";
+        "и AI\\models\\whisper\\ggml-base-q5_1.bin (либо совместимый ggml-small-q5_1.bin). " +
+        "Nexus не загружает модели из сети во время работы.";
 
     public static string MissingTranslationRuntimeMessage =>
         "В этой сборке отсутствует автономный OPUS-комплект перевода. Ожидаются " +

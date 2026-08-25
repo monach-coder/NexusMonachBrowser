@@ -21,8 +21,8 @@
             </StackPanel>
         </StackPanel>
 
-        <Border Grid.Row="1" Margin="0,16,0,12" Padding="12,9" Background="#10262B"
-                BorderBrush="#2B7772" BorderThickness="1" CornerRadius="8">
+        <Border Grid.Row="1" Margin="0,16,0,12" Padding="12,9" Background="{StaticResource SelectedBrush}"
+                BorderBrush="{StaticResource AccentBrush}" BorderThickness="1" CornerRadius="8">
             <TextBlock x:Name="SummaryText" TextWrapping="Wrap" Foreground="{StaticResource AccentBrush}" />
         </Border>
 

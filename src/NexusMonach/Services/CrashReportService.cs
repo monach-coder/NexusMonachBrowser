@@ -10,6 +10,7 @@ using System.Windows;
 using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
 using NexusMonach.Models;
+using NexusMonach.Services.Diagnostics;
 
 namespace NexusMonach.Services;
 
@@ -47,8 +48,11 @@ public static partial class CrashReportService
     private static readonly object FileGate = new();
     private static readonly ConcurrentQueue<CrashBreadcrumb> Breadcrumbs = new();
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly TimeSpan NonFatalDedupWindow = TimeSpan.FromSeconds(60);
     private static int _fatalRecorded;
     private static bool _initialized;
+    private static DateTimeOffset? _lastNonFatalUtc;
+    private static string? _lastNonFatalSignature;
 
     public static string VaultPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NexusMonach", "Guardian", "CrashVault");
@@ -74,8 +78,24 @@ public static partial class CrashReportService
     public static void RecordNonFatal(string component, string stage, Exception? exception = null)
     {
         AddBreadcrumb(component, stage);
-        if (exception is not null)
-            WriteReport(exception, component, stage, fatal: false);
+        if (exception is null) return;
+        // Startup may hit the same broken local worker twice in a few seconds
+        // (chime plus the ready announcement, or a retrying lane). One sanitized
+        // report per unique failure is enough for the vault; exact duplicates
+        // only bury genuinely different problems behind repeated noise.
+        var signature = string.Join('|',
+            LimitToken(component), LimitToken(stage),
+            exception.GetType().FullName ?? exception.GetType().Name, exception.Message);
+        var now = DateTimeOffset.UtcNow;
+        lock (FileGate)
+        {
+            if (_lastNonFatalSignature == signature &&
+                _lastNonFatalUtc is { } previous && now - previous < NonFatalDedupWindow)
+                return;
+            _lastNonFatalSignature = signature;
+            _lastNonFatalUtc = now;
+        }
+        WriteReport(exception, component, stage, fatal: false);
     }
 
     public static void RecordFatal(Exception exception, string component, string stage) =>
@@ -153,9 +173,9 @@ public static partial class CrashReportService
         get
         {
             var settings = SettingsService.Current;
-            return settings.CrashReportDestination == CrashReportDestination.MatrixDirect
-                ? IsHttps(settings.MatrixHomeserver) && !string.IsNullOrWhiteSpace(settings.MatrixRoomId) &&
-                  WindowsCredentialStore.HasMatrixAccessToken()
+            return settings.CrashReportDestination == CrashReportDestination.GitHubIssues
+                ? GitHubCrashReportTransport.IsValidRepository(settings.GitHubRepository) &&
+                  WindowsCredentialStore.HasGitHubAccessToken()
                 : IsHttps(settings.CrashReportEndpoint);
         }
     }
@@ -166,12 +186,13 @@ public static partial class CrashReportService
         if (settings.CrashReportMode == CrashReportMode.LocalOnly) return 0;
         if (settings.CrashReportMode == CrashReportMode.AskBeforeSending && !userApproved) return 0;
         Uri? endpoint = null;
-        string? matrixToken = null;
-        if (settings.CrashReportDestination == CrashReportDestination.MatrixDirect)
+        string? gitHubToken = null;
+        var gitHub = settings.CrashReportDestination == CrashReportDestination.GitHubIssues;
+        if (gitHub)
         {
-            if (!IsHttps(settings.MatrixHomeserver) || string.IsNullOrWhiteSpace(settings.MatrixRoomId)) return 0;
-            matrixToken = WindowsCredentialStore.ReadMatrixAccessToken();
-            if (string.IsNullOrWhiteSpace(matrixToken)) return 0;
+            if (!GitHubCrashReportTransport.IsValidRepository(settings.GitHubRepository)) return 0;
+            gitHubToken = WindowsCredentialStore.ReadGitHubAccessToken();
+            if (string.IsNullOrWhiteSpace(gitHubToken)) return 0;
         }
         else if (!Uri.TryCreate(settings.CrashReportEndpoint, UriKind.Absolute, out endpoint) ||
                  endpoint.Scheme != Uri.UriSchemeHttps)
@@ -186,9 +207,9 @@ public static partial class CrashReportService
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                var delivered = settings.CrashReportDestination == CrashReportDestination.MatrixDirect
-                    ? await MatrixCrashReportTransport.SendReportAsync(client, settings.MatrixHomeserver,
-                        settings.MatrixRoomId, matrixToken!, file, cancellationToken)
+                var delivered = gitHub
+                    ? await GitHubCrashReportTransport.SendReportAsync(
+                        client, settings.GitHubRepository, gitHubToken!, file, cancellationToken)
                     : await PostToCollectorAsync(client, endpoint!, file, cancellationToken);
                 if (!delivered) continue;
                 var sentPath = file.EndsWith(".pending.json", StringComparison.OrdinalIgnoreCase)
@@ -198,7 +219,12 @@ public static partial class CrashReportService
                 sent++;
             }
             catch (OperationCanceledException) { throw; }
-            catch { /* Очередь остаётся локально для следующей попытки. */ }
+            catch (Exception ex)
+            {
+                // Очередь остаётся локально, но отказ доставки больше не
+                // молчит: причина видна в сейфе и в причинном графе.
+                SwallowLog.Log("crash-delivery", Path.GetFileName(file), ex);
+            }
         }
         return sent;
     }
@@ -292,9 +318,103 @@ public static partial class CrashReportService
 
     private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
+        // Перезапуск DWM (краш dwm.exe, смена темы, отключение монитора) на
+        // секунды отключает композицию рабочего стола — WindowChrome не может
+        // растянуть стеклянную рамку и бросает COMException. Это проходящее
+        // состояние: DWM поднимется и отрисует заново. Гасим и работаем дальше
+        // вместо убийства браузера.
+        if (IsTransientDesktopCompositionFailure(e.Exception))
+        {
+            RecordNonFatal("wpf", "dwm-composition-restart", e.Exception);
+            e.Handled = true;
+            return;
+        }
+        // Гибель потока рендеринга WPF (UCEERR_RENDERTHREADFAILURE): окно уже
+        // не отрисуется, но процесс жив. Молча закрываться нельзя — рапорт
+        // пишем, озвучиваем причину и перезапускаемся через Guardian, который
+        // по этому же рапорту поднимет безопасный режим (программная отрисовка
+        // и WebView2 без GPU — лечит и зависания его рендерера).
+        if (IsRenderThreadFailure(e.Exception))
+        {
+            // Если прямо сейчас шла аппаратная проба восстановления — сбой
+            // означает «драйвер ещё не ожил»: сбрасываем счётчик и остаёмся
+            // в осторожном режиме, без перезапуска.
+            if (GpuRecoveryService.ProbeInProgress)
+            {
+                GpuRecoveryService.NotifyProbeRenderFailure();
+                RecordNonFatal("gpu-recovery", "probe-render-failure", e.Exception);
+                e.Handled = true;
+                return;
+            }
+            if (!GuardianRuntime.IsSafeMode)
+            {
+                RecordNonFatal("wpf", "render-thread-failure", e.Exception);
+                e.Handled = true;
+                BeginGraphicsRecoveryRestart();
+                return;
+            }
+        }
         RecordFatalCore(e.Exception, "wpf", "dispatcher-unhandled");
         e.Handled = true;
         Application.Current.Shutdown(-1);
+    }
+
+    /// <summary>0x80263001 — {Композиция рабочего стола отключена}.</summary>
+    private static bool IsTransientDesktopCompositionFailure(Exception exception) =>
+        exception is COMException com && unchecked((uint)com.HResult) == 0x80263001u;
+
+    /// <summary>0x88980406 — UCEERR_RENDERTHREADFAILURE, поток отрисовки WPF умер.</summary>
+    private static bool IsRenderThreadFailure(Exception exception) =>
+        exception is COMException com &&
+        (unchecked((uint)com.HResult) == 0x88980406u ||
+         exception.Message.Contains("UCEERR_RENDERTHREADFAILURE", StringComparison.Ordinal));
+
+    private static int _graphicsRestartStarted;
+
+    /// <summary>
+    /// Перезапуск после сбоя графики: голосом объясняем, что произошло,
+    /// стартуем новый Guardian-процесс (он дождётся нашего выхода и поднимет
+    /// браузер в безопасном режиме) и завершаемся.
+    /// </summary>
+    private static void BeginGraphicsRecoveryRestart()
+    {
+        if (Interlocked.Exchange(ref _graphicsRestartStarted, 1) != 0) return;
+        try
+        {
+            VoiceAssistantService.Announce(
+                "Внимание! Графический сбой окна. Перезапускаю браузер в безопасном режиме отрисовки.",
+                VoiceAnnouncementPriority.Critical);
+        }
+        catch { /* Озвучка не должна мешать восстановлению. */ }
+        _ = Task.Run(async () =>
+        {
+            // Даём фразе прозвучать до остановки голосовых сервисов в OnExit.
+            await Task.Delay(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            try
+            {
+                var root = AppContext.BaseDirectory;
+                var guardian = Path.Combine(root, "NexusMonach.exe");
+                if (File.Exists(guardian))
+                {
+                    var info = new ProcessStartInfo(guardian)
+                    {
+                        UseShellExecute = false,
+                        WorkingDirectory = root
+                    };
+                    info.ArgumentList.Add("--wait-for-previous-instance");
+                    Process.Start(info);
+                }
+                else
+                {
+                    var browser = Environment.ProcessPath;
+                    if (!string.IsNullOrWhiteSpace(browser))
+                        Process.Start(new ProcessStartInfo(browser) { UseShellExecute = true });
+                }
+            }
+            catch { /* Новый процесс не стартовал — завершаемся как обычно. */ }
+            try { Application.Current?.Dispatcher.BeginInvoke(() => Application.Current.Shutdown(-1)); }
+            catch { Environment.Exit(-1); }
+        });
     }
 
     private static void OnUnhandledException(object? sender, UnhandledExceptionEventArgs e)
@@ -305,8 +425,36 @@ public static partial class CrashReportService
 
     private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
     {
+        // Сокеты ловушек и тарпита Дозора прерываются при остановке — это
+        // плановый шум, а не сбой: не засоряем сейф отчётами о норме.
+        if (IsPlannedSocketAbort(e.Exception))
+        {
+            e.SetObserved();
+            return;
+        }
         WriteReport(e.Exception, "tasks", "unobserved-task", fatal: false);
         e.SetObserved();
+    }
+
+    private static bool IsPlannedSocketAbort(Exception exception)
+    {
+        var candidates = exception is AggregateException aggregate
+            ? aggregate.InnerExceptions
+            : (IReadOnlyList<Exception>)[exception];
+        return candidates.Count > 0 && candidates.All(IsSocketAbortCore);
+    }
+
+    private static bool IsSocketAbortCore(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is System.Net.Sockets.SocketException socket)
+                return socket.SocketErrorCode is
+                    System.Net.Sockets.SocketError.OperationAborted or
+                    System.Net.Sockets.SocketError.Interrupted or
+                    System.Net.Sockets.SocketError.ConnectionAborted;
+        }
+        return false;
     }
 
     private static void RecordFatalCore(Exception exception, string component, string stage)
@@ -321,9 +469,21 @@ public static partial class CrashReportService
         try
         {
             Directory.CreateDirectory(VaultPath);
+
+            // Причинный граф: хронология breadcrumbs + системные события
+            // Windows + само исключение. Корневая причина видна сразу, а не
+            // выискивается вручную по логам.
+            var exceptionType = exception.GetType().FullName ?? exception.GetType().Name;
+            var sanitizedMessage = SanitizeForReport(exception.Message);
+            var systemEvents = SystemEventReader.ReadRecent(TimeSpan.FromMinutes(10));
+            var causalGraph = CausalGraphBuilder.Build(new CausalGraphBuilder.CrashContext(
+                exceptionType, sanitizedMessage, LimitToken(component), LimitToken(stage),
+                Breadcrumbs.Select(b => (b.TimestampUtc, b.Component, b.Stage)).ToArray(),
+                systemEvents));
+
             var report = new CrashReport
             {
-                SchemaVersion = 1,
+                SchemaVersion = 2,
                 Id = Guid.NewGuid().ToString("N"),
                 TimestampUtc = DateTimeOffset.UtcNow,
                 Fatal = fatal,
@@ -333,19 +493,36 @@ public static partial class CrashReportService
                 ProcessArchitecture = RuntimeInformation.ProcessArchitecture.ToString(),
                 Component = LimitToken(component),
                 Stage = LimitToken(stage),
-                ExceptionType = exception.GetType().FullName ?? exception.GetType().Name,
-                Message = SanitizeForReport(exception.Message),
-                StackTrace = SanitizeForReport(exception.StackTrace ?? string.Empty),
+                ExceptionType = exceptionType,
+                Message = sanitizedMessage,
+                StackTrace = FormatExceptionForReport(exception),
                 IntegrityStatus = GuardianRuntime.IntegrityStatus,
                 SafeMode = GuardianRuntime.IsSafeMode,
                 GuardianSession = GuardianRuntime.SessionId,
-                Breadcrumbs = Breadcrumbs.ToArray()
+                Breadcrumbs = Breadcrumbs.ToArray(),
+                CausalGraph = causalGraph
             };
-            var path = Path.Combine(VaultPath, $"{report.TimestampUtc:yyyyMMdd-HHmmss}-{report.Id}.pending.json");
+            var basePath = Path.Combine(VaultPath, $"{report.TimestampUtc:yyyyMMdd-HHmmss}-{report.Id}");
             lock (FileGate)
-                File.WriteAllText(path, JsonSerializer.Serialize(report, JsonOptions));
+            {
+                File.WriteAllText(basePath + ".pending.json", JsonSerializer.Serialize(report, JsonOptions));
+                // Стандартные выгрузки графа: Mermaid для issue, DOT для Graphviz,
+                // GraphML для Gephi. Падение экспорта не мешает основному рапорту.
+                TryWriteGraphArtifacts(basePath, causalGraph);
+            }
         }
         catch { /* Обработчик аварии не должен вызвать второе падение. */ }
+    }
+
+    private static void TryWriteGraphArtifacts(string basePath, CausalGraph causalGraph)
+    {
+        try
+        {
+            File.WriteAllText(basePath + ".pending.mermaid", CausalGraphExporter.ToMermaid(causalGraph));
+            File.WriteAllText(basePath + ".pending.dot", CausalGraphExporter.ToDot(causalGraph));
+            File.WriteAllText(basePath + ".pending.graphml", CausalGraphExporter.ToGraphML(causalGraph));
+        }
+        catch { /* Графовые выгрузки необязательны. */ }
     }
 
     private static void WriteSessionResult(bool cleanExit)
@@ -389,6 +566,9 @@ public static partial class CrashReportService
         return sanitized.Length > 16_000 ? sanitized[..16_000] : sanitized;
     }
 
+    internal static string FormatExceptionForReport(Exception exception) =>
+        SanitizeForReport(exception.ToString());
+
     [GeneratedRegex("https?://[^\\s\\\"'<>]+", RegexOptions.IgnoreCase)]
     private static partial Regex UrlRegex();
 
@@ -404,7 +584,7 @@ public static partial class CrashReportService
     [GeneratedRegex(@"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")]
     private static partial Regex JwtRegex();
 
-    [GeneratedRegex(@"(?i)\b[A-Z]:\\[^\r\n:]+")]
+    [GeneratedRegex(@"(?i)\b[A-Z]:\\[^\r\n:'\x22]+")]
     private static partial Regex WindowsPathRegex();
 
     private sealed class CrashReport
@@ -426,6 +606,7 @@ public static partial class CrashReportService
         public bool SafeMode { get; set; }
         public string GuardianSession { get; set; } = string.Empty;
         public IReadOnlyList<CrashBreadcrumb> Breadcrumbs { get; set; } = [];
+        public CausalGraph? CausalGraph { get; set; }
     }
 
     private sealed record CrashBreadcrumb(DateTimeOffset TimestampUtc, string Component, string Stage);

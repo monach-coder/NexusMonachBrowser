@@ -7,6 +7,7 @@ Data/
 *.user
 *.suo
 *_wpftmp.csproj
+.tmp-translation-smoke/
 
 # Веса и нативные runtime публикуются только в проверенном Full Offline release,
 # чтобы случайно не принять в git неподтверждённый многосотмегабайтный файл.
@@ -14,6 +15,9 @@ src/NexusMonach/AI/**/*.gguf
 src/NexusMonach/AI/**/*.bin
 src/NexusMonach/AI/**/*.onnx
 src/NexusMonach/AI/**/*.exe
+src/NexusMonach/AI/voice/
+src/NexusMonach/AI/models/
+src/NexusMonach/AI/node_modules/
 src/NexusMonach/AI/**/*.dll
 
 # Сертификаты подписи и приватные ключи никогда не хранятся в Git.
@@ -21,3 +25,5 @@ src/NexusMonach/AI/**/*.dll
 *.p12
 *.snk
 *.key
+.mimosa/
+src/Nexus.Setup/integrity-public-key.pem

@@ -114,6 +114,33 @@ public sealed partial class TranslationPipelineIntegrationTests : IDisposable
         Assert.Equal(NexusVoiceGender.Female, installedVoices[selectedVoice].Gender);
     }
 
+    [Fact]
+    [Trait("Category", "FullOfflineTranslation")]
+    public async Task VideoPhrases_AreBoundedAndContainNoRunawayMarianTail()
+    {
+        if (!RequireTranslationPayload()) return;
+
+        string[] phrases =
+        [
+            "For vivid images and sharp details.",
+            "The multi-touch trackpad lets you click and scroll.",
+            "And it is easy to add the apps you already use.",
+            "iPhone 17 Pro lets you create setups that would be impossible."
+        ];
+        using var budget = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+
+        foreach (var phrase in phrases)
+        {
+            var translated = await LocalIntelligenceService.TranslateVideoPhraseAsync(
+                phrase, [], budget.Token, "en");
+
+            AssertValidRussian(translated);
+            Assert.InRange(translated.Length, 1, Math.Max(72, phrase.Length * 3 + 24));
+            Assert.DoesNotMatch(@"\.{4,}", translated);
+            Assert.DoesNotMatch(@"(?i)(?:\b[\p{L}]\b[\s,.;:!?]*){6,}", translated);
+        }
+    }
+
     private static bool RequireTranslationPayload()
     {
         if (AiModelCatalog.TranslationReady) return true;

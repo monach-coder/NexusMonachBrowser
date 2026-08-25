@@ -25,15 +25,27 @@ public static class TranslationService
         {
             try
             {
-                // The browser is already visible at this point. Preload only the
-                // smaller English -> Russian stage used by live video captions;
-                // the multilingual stage stays lazy until a page needs it.
                 await Task.Delay(TimeSpan.FromSeconds(3));
                 using var budget = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-                await TranslateToRussianAsync("Translation service is ready.", true, budget.Token);
+                await WarmUpForLiveVideoAsync(includeAllSourceRoutes: false, budget.Token);
             }
             catch { /* Readiness is reported when the user explicitly translates. */ }
         });
+    }
+
+    public static async Task WarmUpForLiveVideoAsync(bool includeAllSourceRoutes = true,
+        CancellationToken cancellationToken = default)
+    {
+        if (!AiModelCatalog.TranslationReady)
+            throw new InvalidOperationException(AiModelCatalog.MissingTranslationRuntimeMessage);
+
+        await TranslateToRussianAsync("Translation service is ready.", true, cancellationToken);
+        if (!includeAllSourceRoutes) return;
+
+        // Live dubbing must not pay the one-time ONNX load cost after the first
+        // scene has already passed. Preload every source route before capture.
+        await TranslateToRussianAsync("Guten Tag.", false, cancellationToken, "de");
+        await TranslateToRussianAsync("안녕하세요.", false, cancellationToken, "ko");
     }
 
     public static async Task<string> TranslateToRussianAsync(string text, bool sourceIsEnglish = false,
@@ -70,25 +82,40 @@ public static class TranslationService
                     source = SelectSourceRoute(item.Text, item.Language, sourceIsEnglish)
                 })
             });
-            await _process!.StandardInput.WriteLineAsync(request.AsMemory(), cancellationToken);
-            await _process.StandardInput.FlushAsync(cancellationToken);
-
-            // ONNX Runtime may print a one-time informational line. Only a JSON
-            // response carrying our correlation id is accepted.
-            for (var attempt = 0; attempt < 80; attempt++)
+            // Переводчик — живой процесс: однажды он замолчал навсегда, и
+            // вечное ожидание строки из его stdout заморозило весь дубляж
+            // (доказано дампом зависшей сессии). Жёсткий бюджет на запрос,
+            // по истечении — процесс убивается и поднимется заново.
+            using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            budget.CancelAfter(TimeSpan.FromSeconds(45));
+            try
             {
-                var line = await _process.StandardOutput.ReadLineAsync(cancellationToken);
-                if (line is null) break;
-                TranslationReply? reply;
-                try { reply = JsonSerializer.Deserialize<TranslationReply>(line, JsonOptions); }
-                catch (JsonException) { continue; }
-                if (reply is null || !reply.Id.Equals(requestId, StringComparison.Ordinal)) continue;
-                if (!string.IsNullOrWhiteSpace(reply.Error))
-                    throw new InvalidOperationException("OPUS: " + reply.Error);
-                return reply.Items?.Where(item => !string.IsNullOrWhiteSpace(item.Id) &&
-                                                   !string.IsNullOrWhiteSpace(item.Text)).ToArray() ?? [];
+                await _process!.StandardInput.WriteLineAsync(request.AsMemory(), budget.Token);
+                await _process.StandardInput.FlushAsync(budget.Token);
+
+                // ONNX Runtime may print a one-time informational line. Only a JSON
+                // response carrying our correlation id is accepted.
+                for (var attempt = 0; attempt < 80; attempt++)
+                {
+                    var line = await _process.StandardOutput.ReadLineAsync(budget.Token);
+                    if (line is null) break;
+                    TranslationReply? reply;
+                    try { reply = JsonSerializer.Deserialize<TranslationReply>(line, JsonOptions); }
+                    catch (JsonException) { continue; }
+                    if (reply is null || !reply.Id.Equals(requestId, StringComparison.Ordinal)) continue;
+                    if (!string.IsNullOrWhiteSpace(reply.Error))
+                        throw new InvalidOperationException("OPUS: " + reply.Error);
+                    return reply.Items?.Where(item => !string.IsNullOrWhiteSpace(item.Id) &&
+                                                       !string.IsNullOrWhiteSpace(item.Text)).ToArray() ?? [];
+                }
+                throw new InvalidOperationException("Автономный переводчик завершился без ответа.");
             }
-            throw new InvalidOperationException("Автономный переводчик завершился без ответа.");
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                StopProcess();
+                throw new InvalidOperationException(
+                    "Автономный переводчик не ответил за 45 с — процесс перезапущен.");
+            }
         }
         catch (OperationCanceledException)
         {

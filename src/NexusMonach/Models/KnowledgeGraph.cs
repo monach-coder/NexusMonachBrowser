@@ -117,6 +117,23 @@ public sealed class TranslationResponse
 public sealed class AudioCaptureResult
 {
     public bool Success { get; set; }
+    public bool WaitingForPlayback { get; set; }
     public string Error { get; set; } = string.Empty;
     public string WavBase64 { get; set; } = string.Empty;
+    /// <summary>Позиция видео (сек) в момент начала сбора сегмента — якорь
+    /// таймкода для предперевода фильма.</summary>
+    public double VideoPosition { get; set; }
+
+    /// <summary>Скорость воспроизведения в момент захвата: на ускоренном
+    /// анализе сегмент покрывает во столько раз больше медиа-времени, а речь
+    /// в нём сжата по темпу — темп восстанавливается перед распознаванием.</summary>
+    public double VideoRate { get; set; } = 1;
 }
+
+/// <summary>Снимок активного видео для двухпроходного дубляжа.</summary>
+public sealed record VideoPlaybackState(
+    double Position,
+    double Duration,
+    bool Paused,
+    bool Ended,
+    double Rate);

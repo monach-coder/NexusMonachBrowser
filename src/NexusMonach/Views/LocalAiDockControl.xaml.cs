@@ -5,6 +5,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Text.Json;
 using System.Diagnostics;
+using System.Net.Http;
 using System.Threading.Channels;
 using Microsoft.Win32;
 using NexusMonach.Intelligence;
@@ -24,6 +25,7 @@ public partial class LocalAiDockControl : UserControl
     private IReadOnlyList<string> _lastResearchNotes = [];
     private string _lastResearchQuery = string.Empty;
     private string? _shoppingImagePath;
+    private bool _shoppingAllowsCrossSiteResults;
     private readonly Dictionary<string, NexusSearchReport> _backgroundResearch =
         new(StringComparer.OrdinalIgnoreCase);
     private bool _showingBackgroundResearch;
@@ -59,6 +61,8 @@ public partial class LocalAiDockControl : UserControl
 
     public async Task TranslateCurrentPageAsync(BrowserTab tab)
     {
+        StopVideoTranslation();
+        VideoDubbingVoiceService.Stop();
         VoiceAssistantService.Announce("Перевожу интерфейс и готовлю озвучивание статьи.",
             VoiceAnnouncementPriority.Important, tab.IsPrivate);
         Visibility = Visibility.Collapsed;
@@ -72,7 +76,6 @@ public partial class LocalAiDockControl : UserControl
         }
         _cancellation?.Cancel();
         _cancellation = new CancellationTokenSource();
-        _cancellation.CancelAfter(TimeSpan.FromMinutes(3));
         var completed = 0;
         var spokenFragments = 0;
         var translatedControls = 0;
@@ -82,6 +85,8 @@ public partial class LocalAiDockControl : UserControl
         {
             articleSegments = await tab.CaptureTranslationSegmentsAsync();
             interactiveSegments = await tab.CaptureInteractiveTranslationSegmentsAsync();
+            _cancellation.CancelAfter(PageNarrationPolicy.SelectOperationTimeout(
+                articleSegments.Sum(segment => segment.Text.Length), articleSegments.Count));
             if (articleSegments.Count == 0 && interactiveSegments.Count == 0)
                 throw new InvalidOperationException(
                     "На странице не найдено основное содержание или элементы интерфейса для перевода.");
@@ -97,6 +102,8 @@ public partial class LocalAiDockControl : UserControl
                 translatedControls += await tab.ApplyInteractiveTranslationSegmentsAsync(
                     translated, translatedControls, interactiveSegments.Count);
             }
+            await tab.UpdateSpokenPageTranslationStatusAsync(
+                spokenFragments, articleSegments.Count, translatedControls);
 
             // Основная статья переводится в памяти и отдаётся только женскому
             // голосу. Меню, реклама, боковые панели и формы были исключены ещё
@@ -158,66 +165,128 @@ public partial class LocalAiDockControl : UserControl
 
     public async Task TranslateVideoAudioAsync(BrowserTab tab)
     {
+        _cancellation?.Cancel();
+        VoiceAssistantService.StopSpeaking();
         Visibility = Visibility.Collapsed;
         _tab = tab;
+        _pageUrl = tab.CurrentUrl;
         if (!AiModelCatalog.TranslationReady)
         {
             GlassDialogWindow.Show(AiModelCatalog.MissingTranslationRuntimeMessage,
                 "Перевод звука видео", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
+        if (!AiModelCatalog.SpeechReady)
+        {
+            GlassDialogWindow.Show(AiModelCatalog.MissingSpeechRuntimeMessage,
+                "Перевод звука видео", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (!AiModelCatalog.NeuralVoiceReady)
+        {
+            GlassDialogWindow.Show(AiModelCatalog.MissingNeuralVoiceMessage,
+                "Перевод звука видео", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
         StopVideoTranslation();
         var session = new CancellationTokenSource();
         _videoCancellation = session;
-        VoiceAssistantService.Announce("Локальный перевод видео запускается.",
-            VoiceAnnouncementPriority.Important, tab.IsPrivate);
-        await WaitForVoiceSilenceAsync(session.Token);
+        var configuredVideoMode = SettingsService.Current.VideoTranslationMode;
+        var durationSeconds = await tab.GetActiveVideoDurationAsync();
+        var videoMode = VideoDubbingPolicy.SelectEffectiveMode(
+            configuredVideoMode, durationSeconds);
         await tab.BeginLiveAudioTranslationAsync();
         var finalStatus = "Перевод звука остановлен.";
+        var profile = VideoDubbingPolicy.ForMode(videoMode);
+        await using var diagnostics = new VideoDubbingDiagnosticLog(videoMode);
+        IContinuousAudioCaptureSession? earlyLoopback = null;
         try
         {
-            await tab.UpdateLiveAudioTranslationStatusAsync("Один раз загружаю Whisper и Nexus OPUS…");
-            await WhisperService.WarmUpAsync(session.Token);
+            CrashReportService.AddBreadcrumb("video-translation", "warmup-started");
+            await tab.UpdateLiveAudioTranslationStatusAsync(
+                "Слушаю начало видео · параллельно прогреваю локальные модели…");
+
+            // Capture starts before model warm-up. The old ordering let the video
+            // continue for five to ten seconds and permanently lost its opening.
+            var firstDirectStartedAt = DateTimeOffset.UtcNow;
+            var firstDirectTask = tab.CaptureActiveVideoAudioAsync(
+                profile.SegmentMilliseconds, session.Token,
+                profile.SegmentOverlapMilliseconds);
+            var earlyLoopbackTask = StartEarlyLoopbackAsync();
+            var warmupTask = Task.WhenAll(
+                WhisperService.WarmUpAsync(WhisperLane.Dubbing, session.Token),
+                TranslationService.WarmUpForLiveVideoAsync(
+                    includeAllSourceRoutes: false, cancellationToken: session.Token),
+                VideoDubbingVoiceService.WarmUpAsync(session.Token));
+            var firstDirect = await firstDirectTask;
+            earlyLoopback = await earlyLoopbackTask;
+            await warmupTask;
+            CrashReportService.AddBreadcrumb("video-translation", "warmup-completed");
             await tab.EnableVideoDubbingMixAsync();
             await tab.UpdateLiveAudioTranslationStatusAsync(
-                "Слушаю видео · русский перевод озвучивает Nexus Voice");
+                $"Слушаю видео · режим {VideoModeLabel(videoMode, videoMode != configuredVideoMode)} · готовлю запас Nexus Voice");
 
-            var lastSpokenTranslation = string.Empty;
-            var lastTranscript = string.Empty;
+            // Пауза видео обязана останавливать и дубляж: иначе озвучка
+            // домолвливает реплики поверх стоящего кадра.
+            var pauseWatcher = Task.Run(async () =>
+            {
+                var wasPaused = false;
+                try
+                {
+                    while (!session.Token.IsCancellationRequested)
+                    {
+                        await Task.Delay(500, session.Token);
+                        var state = await tab.GetVideoStateAsync();
+                        if (state is null) continue;
+                        if (state.Paused && !wasPaused)
+                        {
+                            wasPaused = true;
+                            VideoDubbingVoiceService.Stop();
+                            earlyLoopback?.SuspendForDubbing();
+                            await tab.UpdateLiveAudioTranslationStatusAsync("Пауза · дубляж остановлен");
+                        }
+                        else if (!state.Paused && wasPaused)
+                        {
+                            wasPaused = false;
+                            earlyLoopback?.Resume();
+                            await tab.UpdateLiveAudioTranslationStatusAsync("Продолжаю закадровый перевод");
+                        }
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch { /* наблюдатель фоновый: сбой не должен трогать сеанс */ }
+            });
+
+            var translationContext = new VideoSpeechTranslationContext(videoMode);
+            var recentTranscripts = new RecentVideoPhraseGuard(
+                capacity: profile.ContextPhrases, retentionSeconds: profile.ContextSeconds);
+            // Дубли перевода подавляются только в коротком окне: повтор
+            // распознавания одного звука приходит секундами позже, а честный
+            // повтор говорящим («да», припев, акцент) обязан прозвучать.
+            var recentTranslations = new RecentVideoPhraseGuard(
+                capacity: profile.ContextPhrases, retentionSeconds: 15);
             var consecutiveErrors = 0;
 
-            async Task TranslateAndSpeakAsync(byte[] wav)
+            async Task<VideoSpeechTranslationText?> TranslateSegmentAsync(LiveAudioSegment segment)
             {
-                var speech = await NexusFabricRuntime.TranscribeSpeechDetailedAsync(wav, session.Token);
-                var transcript = RemoveTranscriptOverlap(lastTranscript, speech.Text);
-                if (string.IsNullOrWhiteSpace(transcript)) return;
-                lastTranscript = speech.Text;
-
-                // Whisper только распознаёт исходный язык. В отличие от -tr,
-                // который умеет переводить лишь на английский, Nexus OPUS
-                // выполняет отдельный маршрут исходный язык -> русский.
-                var text = await LocalIntelligenceService.TranslateToRussianAsync(
-                    transcript, session.Token, speech.Language);
+                if (!VideoDubbingPolicy.IsFresh(segment.CapturedAt, DateTimeOffset.UtcNow)) return null;
+                var translated = await translationContext.TranslateAsync(segment, session.Token);
+                if (translated is null) return null;
+                var now = DateTimeOffset.UtcNow;
+                if (!recentTranscripts.IsNovel(translated.Transcript, now)) return null;
+                var text = translated.RussianText;
                 if (string.IsNullOrWhiteSpace(text) ||
-                    text.Equals(lastSpokenTranslation, StringComparison.OrdinalIgnoreCase)) return;
-
-                lastSpokenTranslation = text;
-                await WaitForVoiceSilenceAsync(session.Token);
-                var spoken = await VoiceAssistantService.SpeakAndWaitAsync(
-                    text, VoiceAnnouncementPriority.Important, tab.IsPrivate,
-                    userInitiated: true, rateOverride: VideoDubbingPolicy.SpeechRate,
-                    cancellationToken: session.Token);
-                if (!spoken)
-                    throw new InvalidOperationException(
-                        "Женский голос Nexus не смог озвучить перевод.");
+                    !recentTranslations.IsNovel(text, now)) return null;
+                return translated;
             }
 
-            async Task ProcessSegmentSafelyAsync(byte[] wav)
+            async Task<VideoSpeechTranslationText?> TranslateSegmentSafelyAsync(LiveAudioSegment segment)
             {
                 try
                 {
-                    await TranslateAndSpeakAsync(wav);
+                    var text = await TranslateSegmentAsync(segment);
                     consecutiveErrors = 0;
+                    return text;
                 }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
@@ -227,48 +296,128 @@ public partial class LocalAiDockControl : UserControl
                         await tab.UpdateLiveAudioTranslationStatusAsync(
                             "Продолжаю слушать · последняя ошибка: " +
                             ex.Message[..Math.Min(ex.Message.Length, 140)]);
+                    return null;
                 }
             }
 
-            var firstDirect = await tab.CaptureActiveVideoAudioAsync(3, session.Token);
-            if (firstDirect.Success)
+            var silentDirectProbes = 0;
+            var useLoopback = false;
+            var useCapturedOpening = true;
+            while (true)
             {
+                if (!useCapturedOpening)
+                {
+                    firstDirectStartedAt = DateTimeOffset.UtcNow;
+                    firstDirect = await tab.CaptureActiveVideoAudioAsync(
+                        profile.SegmentMilliseconds, session.Token,
+                        profile.SegmentOverlapMilliseconds);
+                }
+                useCapturedOpening = false;
+                if (firstDirect.WaitingForPlayback)
+                {
+                    await tab.UpdateLiveAudioTranslationStatusAsync(
+                        "Видео на паузе · прямой перевод начнётся вместе с воспроизведением");
+                    if (await tab.ShouldStopLiveAudioTranslationAsync())
+                        throw new OperationCanceledException(session.Token);
+                    await Task.Delay(VideoDubbingPolicy.PlaybackProbeMilliseconds, session.Token);
+                    continue;
+                }
+                if (VideoDubbingPolicy.IsSilentDirectCapture(
+                        firstDirect.Success, firstDirect.WavBase64))
+                {
+                    if (earlyLoopback?.IsProcessIsolated == true)
+                    {
+                        useLoopback = true;
+                        break;
+                    }
+                    silentDirectProbes++;
+                    if (silentDirectProbes < VideoDubbingPolicy.DirectSilenceProbeLimit)
+                    {
+                        await tab.UpdateLiveAudioTranslationStatusAsync(
+                            $"Проверяю аудиопоток видео · тишина {silentDirectProbes} / {VideoDubbingPolicy.DirectSilenceProbeLimit}");
+                        continue;
+                    }
+                    useLoopback = true;
+                }
+                else if (!firstDirect.Success)
+                    useLoopback = true;
+                break;
+            }
+            if (VideoDubbingPolicy.HasUsableDirectAudio(
+                    firstDirect.Success, firstDirect.WavBase64))
+            {
+                if (earlyLoopback is not null)
+                {
+                    await earlyLoopback.DisposeAsync();
+                    earlyLoopback = null;
+                }
+                CrashReportService.AddBreadcrumb("video-translation", "direct-capture-selected");
                 await tab.UpdateLiveAudioTranslationStatusAsync(
-                    "Закадровый перевод · оригинал приглушён · без пауз");
-                var directSegments = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(
+                    "Прямой перевод · распознавание не пропускает речь во время озвучки");
+                var directSegments = Channel.CreateBounded<LiveAudioSegment>(new BoundedChannelOptions(
                     VideoDubbingPolicy.MaxBufferedSegments)
                 {
-                    FullMode = BoundedChannelFullMode.DropOldest,
+                    FullMode = BoundedChannelFullMode.Wait,
                     SingleReader = true,
                     SingleWriter = true
                 });
                 if (!string.IsNullOrWhiteSpace(firstDirect.WavBase64))
-                    directSegments.Writer.TryWrite(Convert.FromBase64String(firstDirect.WavBase64));
+                    directSegments.Writer.TryWrite(new LiveAudioSegment(
+                        Convert.FromBase64String(firstDirect.WavBase64), firstDirectStartedAt,
+                        TimeSpan.FromMilliseconds(profile.SegmentMilliseconds)));
                 using var producerCancellation =
                     CancellationTokenSource.CreateLinkedTokenSource(session.Token);
 
                 async Task ProduceDirectSegmentsAsync()
                 {
                     var failures = 0;
+                    var silentCaptures = 0;
                     try
                     {
                         while (!producerCancellation.IsCancellationRequested)
                         {
+                            var capturedAt = DateTimeOffset.UtcNow -
+                                             TimeSpan.FromMilliseconds(
+                                                 profile.SegmentOverlapMilliseconds);
                             var captured = await tab.CaptureActiveVideoAudioAsync(
-                                VideoDubbingPolicy.DirectSegmentSeconds, producerCancellation.Token);
+                                profile.SegmentMilliseconds, producerCancellation.Token,
+                                profile.SegmentOverlapMilliseconds);
+                            if (captured.WaitingForPlayback)
+                            {
+                                failures = 0;
+                                await tab.UpdateLiveAudioTranslationStatusAsync(
+                                    "Видео на паузе · перевод продолжится вместе с воспроизведением");
+                                await Task.Delay(VideoDubbingPolicy.PlaybackProbeMilliseconds,
+                                    producerCancellation.Token);
+                                continue;
+                            }
                             if (captured.Success)
                             {
                                 failures = 0;
-                                if (!string.IsNullOrWhiteSpace(captured.WavBase64))
-                                    directSegments.Writer.TryWrite(
-                                        Convert.FromBase64String(captured.WavBase64));
+                                if (VideoDubbingPolicy.IsSilentDirectCapture(
+                                        captured.Success, captured.WavBase64))
+                                {
+                                    if (++silentCaptures >= VideoDubbingPolicy.DirectSilenceProbeLimit)
+                                    {
+                                        useLoopback = true;
+                                        break;
+                                    }
+                                    continue;
+                                }
+                                silentCaptures = 0;
+                                await directSegments.Writer.WriteAsync(
+                                    new LiveAudioSegment(
+                                        Convert.FromBase64String(captured.WavBase64), capturedAt,
+                                        TimeSpan.FromMilliseconds(profile.SegmentMilliseconds +
+                                                                  profile.SegmentOverlapMilliseconds)),
+                                    producerCancellation.Token);
                                 continue;
                             }
                             if (++failures >= 3)
-                                throw new InvalidOperationException(
-                                    captured.Error.Length == 0
-                                        ? "Плеер прекратил прямой захват звука."
-                                        : captured.Error);
+                            {
+                                useLoopback = true;
+                                break;
+                            }
                         }
                     }
                     catch (OperationCanceledException) { }
@@ -277,40 +426,149 @@ public partial class LocalAiDockControl : UserControl
                 }
 
                 var producer = ProduceDirectSegmentsAsync();
+                await using var dubbingBuffer = new VideoDubbingBuffer(
+                    profile, diagnostics, session.Token);
                 try
                 {
-                    await foreach (var wav in directSegments.Reader.ReadAllAsync(session.Token))
+                    await foreach (var segment in directSegments.Reader.ReadAllAsync(session.Token))
                     {
-                        if (await tab.ShouldStopLiveAudioTranslationAsync()) break;
-                        await ProcessSegmentSafelyAsync(wav);
+                        if (await tab.ShouldStopLiveAudioTranslationAsync())
+                        {
+                            dubbingBuffer.Stop();
+                            throw new OperationCanceledException(session.Token);
+                        }
+                        var translation = await TranslateSegmentSafelyAsync(segment);
+                        if (translation is not null)
+                            await dubbingBuffer.QueueAsync(translation);
                     }
                 }
                 finally
                 {
                     producerCancellation.Cancel();
                     try { await producer; } catch { }
+                    await dubbingBuffer.CompleteAsync();
                 }
             }
-            else
+            if (useLoopback)
             {
+                CrashReportService.AddBreadcrumb("video-translation", "loopback-selected");
                 // DRM и некоторые нестандартные плееры запрещают captureStream.
-                // В резерве остаётся системный loopback. На этом пути кадр
-                // ненадолго удерживается, иначе SAPI попал бы в собственный вход.
+                // В резерве сначала пробуем process-loopback, который слышит
+                // только WebView2. Endpoint-loopback никогда не управляет
+                // воспроизведением видео: на время Kseniya приостанавливается
+                // исключительно захват общего аудиоустройства.
                 await tab.UpdateLiveAudioTranslationStatusAsync(
-                    "Совместимый режим · короткая пауза только во время озвучки");
-                await using var audio = SystemAudioCaptureService.StartContinuousCapture(
-                    segmentMilliseconds: 2_800, overlapMilliseconds: 300);
-                await foreach (var segment in audio.ReadSegmentsAsync(session.Token))
+                    "Подключаю изолированный аудиопоток WebView2…");
+                var audio = earlyLoopback ??
+                            await SystemAudioCaptureService.StartPreferredContinuousCaptureAsync(
+                                tab.WebViewProcessId,
+                                segmentMilliseconds: profile.SegmentMilliseconds,
+                                overlapMilliseconds: profile.SegmentOverlapMilliseconds,
+                                cancellationToken: session.Token);
+                earlyLoopback = null;
+                await using (audio)
                 {
-                    if (await tab.ShouldStopLiveAudioTranslationAsync()) break;
-                    audio.SuspendAndFlush();
-                    await tab.PrepareVideoForSpokenTranslationAsync(pausePlayback: true);
-                    try { await ProcessSegmentSafelyAsync(segment.Wav); }
+                await tab.UpdateLiveAudioTranslationStatusAsync(audio.IsProcessIsolated
+                    ? "Закадровый перевод · изолированный поток WebView2 · непрерывное видео"
+                    : "Совместимый перевод · видео воспроизводится непрерывно");
+                await using var capturedSegments =
+                    audio.ReadSegmentsAsync(session.Token).GetAsyncEnumerator(session.Token);
+                bool hasFirstSegment;
+                try
+                {
+                    hasFirstSegment = await capturedSegments.MoveNextAsync().AsTask().WaitAsync(
+                        TimeSpan.FromMilliseconds(
+                            VideoDubbingPolicy.FirstLoopbackSegmentTimeoutMilliseconds),
+                        session.Token);
+                }
+                catch (TimeoutException)
+                {
+                    throw new InvalidOperationException(
+                        "Аудиопоток вкладки не передал звук. Проверьте воспроизведение и устройство вывода.");
+                }
+                if (!hasFirstSegment)
+                    throw new InvalidOperationException("Аудиопоток вкладки завершился без звука.");
+
+                if (audio.IsProcessIsolated)
+                {
+                    await using var dubbingBuffer = new VideoDubbingBuffer(
+                        profile, diagnostics, session.Token);
+                    try
+                    {
+                        do
+                        {
+                            if (await tab.ShouldStopLiveAudioTranslationAsync())
+                            {
+                                dubbingBuffer.Stop();
+                                throw new OperationCanceledException(session.Token);
+                            }
+                            var segment = capturedSegments.Current;
+                            var translation = await TranslateSegmentSafelyAsync(
+                                new LiveAudioSegment(segment.Wav, segment.CapturedAt,
+                                    TimeSpan.FromMilliseconds(profile.SegmentMilliseconds)));
+                            if (translation is not null)
+                                await dubbingBuffer.QueueAsync(translation);
+                        }
+                        while (await capturedSegments.MoveNextAsync());
+                    }
                     finally
                     {
-                        audio.Resume();
-                        await tab.ResumeVideoAfterSpokenTranslationAsync();
+                        await dubbingBuffer.CompleteAsync();
                     }
+                }
+                else
+                {
+                    await using var dubbingBuffer = new VideoDubbingBuffer(
+                        profile, diagnostics, session.Token,
+                        beforeSpeaking: () =>
+                        {
+                            audio.SuspendForDubbing();
+                            return Task.CompletedTask;
+                        },
+                        afterSpeaking: () =>
+                        {
+                            audio.Resume();
+                            return Task.CompletedTask;
+                        });
+                    try
+                    {
+                        do
+                        {
+                            if (await tab.ShouldStopLiveAudioTranslationAsync())
+                            {
+                                dubbingBuffer.Stop();
+                                throw new OperationCanceledException(session.Token);
+                            }
+                            var segment = capturedSegments.Current;
+                            var translation = await TranslateSegmentSafelyAsync(
+                                new LiveAudioSegment(segment.Wav, segment.CapturedAt,
+                                    TimeSpan.FromMilliseconds(profile.SegmentMilliseconds)));
+                            if (translation is not null)
+                                await dubbingBuffer.QueueAsync(translation);
+                        }
+                        while (await capturedSegments.MoveNextAsync());
+                    }
+                    finally { await dubbingBuffer.CompleteAsync(); }
+                }
+                }
+            }
+
+            async Task<IContinuousAudioCaptureSession?> StartEarlyLoopbackAsync()
+            {
+                try
+                {
+                    return await SystemAudioCaptureService.StartPreferredContinuousCaptureAsync(
+                        tab.WebViewProcessId,
+                        segmentMilliseconds: profile.SegmentMilliseconds,
+                        overlapMilliseconds: profile.SegmentOverlapMilliseconds,
+                        cancellationToken: session.Token);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    CrashReportService.RecordNonFatal("video-translation",
+                        "early-loopback-unavailable", ex);
+                    return null;
                 }
             }
         }
@@ -322,49 +580,885 @@ public partial class LocalAiDockControl : UserControl
         }
         finally
         {
-            VoiceAssistantService.StopSpeaking();
+            if (earlyLoopback is not null)
+                try { await earlyLoopback.DisposeAsync(); } catch { }
+            VideoDubbingVoiceService.Stop();
             Interlocked.CompareExchange(ref _videoCancellation, null, session);
             session.Dispose();
             try { await tab.ResumeVideoAfterSpokenTranslationAsync(); } catch { }
             try { await tab.EndLiveAudioTranslationAsync(finalStatus); } catch { }
-            VoiceAssistantService.Announce(
-                finalStatus.StartsWith("Ошибка", StringComparison.OrdinalIgnoreCase)
-                    ? "Перевод видео завершился с ошибкой."
-                    : "Перевод видео остановлен.",
-                finalStatus.StartsWith("Ошибка", StringComparison.OrdinalIgnoreCase)
-                    ? VoiceAnnouncementPriority.Critical
-                    : VoiceAnnouncementPriority.Important,
-                tab.IsPrivate);
         }
     }
 
     public void StopVideoTranslation() => Interlocked.Exchange(ref _videoCancellation, null)?.Cancel();
 
-    private static string RemoveTranscriptOverlap(string previous, string current)
+    /// <summary>
+    /// Синхронный перевод видео: приоритет — предперевод по отдельной
+    /// аудиодорожке с точными таймкодами (TrackDubbingSession); если сайт
+    /// дорожку не отдаёт, сессия сама откатывается на живой закадровый.
+    /// </summary>
+    public async Task TranslateVideoDubbedAsync(BrowserTab tab)
     {
-        current = System.Text.RegularExpressions.Regex.Replace(current ?? string.Empty, @"\s+", " ").Trim();
-        previous = System.Text.RegularExpressions.Regex.Replace(previous ?? string.Empty, @"\s+", " ").Trim();
-        if (current.Length == 0 || previous.Length == 0) return current;
-        if (previous.Equals(current, StringComparison.OrdinalIgnoreCase) ||
-            previous.Contains(current, StringComparison.OrdinalIgnoreCase)) return string.Empty;
-
-        var oldWords = previous.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var newWords = current.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var maximum = Math.Min(Math.Min(oldWords.Length, newWords.Length), 12);
-        for (var overlap = maximum; overlap >= 2; overlap--)
+        _cancellation?.Cancel();
+        VoiceAssistantService.StopSpeaking();
+        Visibility = Visibility.Collapsed;
+        _tab = tab;
+        _pageUrl = tab.CurrentUrl;
+        if (!AiModelCatalog.TranslationReady || !AiModelCatalog.SpeechReady ||
+            !AiModelCatalog.NeuralVoiceReady)
         {
-            var matches = true;
-            for (var index = 0; index < overlap; index++)
-                if (!oldWords[oldWords.Length - overlap + index].Equals(
-                        newWords[index], StringComparison.OrdinalIgnoreCase))
-                {
-                    matches = false;
-                    break;
-                }
-            if (matches) return string.Join(' ', newWords.Skip(overlap));
+            await TranslateVideoAudioAsync(tab);
+            return;
         }
-        return current;
+        StopVideoTranslation();
+        var session = new CancellationTokenSource();
+        _videoCancellation = session;
+        try
+        {
+            using var dubbing = new Services.Dubbing.TrackDubbingSession(tab);
+            await dubbing.RunAsync(
+                fallbackToLive: () => TranslateVideoAudioAsync(tab),
+                externalToken: session.Token);
+        }
+        finally
+        {
+            Interlocked.CompareExchange(ref _videoCancellation, null, session);
+            session.Dispose();
+        }
     }
+
+    /// <summary>
+    /// Временный подробный трейс конвейера дубляжа: каждый шаг пишет строку с
+    /// меткой времени, поэтому один прогон точно называет место зависания.
+    /// </summary>
+    internal static void DubbingTrace(string step)
+    {
+        try
+        {
+            File.AppendAllText(Path.Combine(Path.GetTempPath(), "nexus-dubbing-trace.log"),
+                $"{DateTimeOffset.Now:HH:mm:ss.fff} {step}\n", System.Text.Encoding.UTF8);
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// Синхронный перевод видео одним нажатием: видео ставится на паузу с
+    /// панелью «Предварительная буферизация и перевод…», накопленный кусок
+    /// переводится целыми предложениями, затем показ идёт с идеальным
+    /// дубляжом по таймкоду, а когда воспроизведение подбирается к границе
+    /// переведённого, короткая догрузка расширяет окно — и так до конца.
+    /// </summary>
+    public async Task PrecomputeVideoDubbingAsync(BrowserTab tab)
+    {
+        _cancellation?.Cancel();
+        VoiceAssistantService.StopSpeaking();
+        Visibility = Visibility.Collapsed;
+        _tab = tab;
+        _pageUrl = tab.CurrentUrl;
+        if (!AiModelCatalog.TranslationReady)
+        {
+            GlassDialogWindow.Show(AiModelCatalog.MissingTranslationRuntimeMessage,
+                "Синхронный перевод видео", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (!AiModelCatalog.SpeechReady)
+        {
+            GlassDialogWindow.Show(AiModelCatalog.MissingSpeechRuntimeMessage,
+                "Синхронный перевод видео", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (!AiModelCatalog.NeuralVoiceReady)
+        {
+            GlassDialogWindow.Show(AiModelCatalog.MissingNeuralVoiceMessage,
+                "Синхронный перевод видео", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        StopVideoTranslation();
+        var session = new CancellationTokenSource();
+        _videoCancellation = session;
+        var finalStatus = "Синхронный перевод остановлен.";
+        var allWavs = new List<string>();
+        PrecomputedDubbingPlayer? player = null;
+        RollingAnalysis? analysis = null;
+        CancellationTokenSource? followCts = null;
+        Task? follow = null;
+        double watchPosition = 0;
+        var completedNaturally = false;
+        string? _lastStatusLine = null;
+        try
+        {
+            var duration = await tab.GetActiveVideoDurationAsync()
+                         ?? throw new InvalidOperationException(
+                                "Не удалось определить длительность видео. Откройте видео и попробуйте снова.");
+            watchPosition = await CurrentPositionAsync(tab, session.Token);
+            var profile = VideoDubbingPolicy.ForPrecompute();
+            await tab.BeginLiveAudioTranslationAsync();
+            tab.EnableAudioTrackWatch();
+            await tab.PrepareVideoForAnalysisAsync();
+            await tab.EnableVideoDubbingMixAsync();
+            await tab.SetBufferingVeilAsync(true, "Предварительная буферизация\nПрогреваю локальные модели…");
+            var warmupStarted = DateTimeOffset.UtcNow;
+            var coreWarmup = Task.WhenAll(
+                WhisperService.WarmUpAsync(WhisperLane.Dubbing, session.Token),
+                TranslationService.WarmUpForLiveVideoAsync(
+                    includeAllSourceRoutes: false, cancellationToken: session.Token));
+            var voiceWarmup = VideoDubbingVoiceService.WarmUpAsync(session.Token);
+            var allWarmup = Task.WhenAll(coreWarmup, voiceWarmup);
+            while (!allWarmup.IsCompleted)
+            {
+                var elapsed = (int)(DateTimeOffset.UtcNow - warmupStarted).TotalSeconds;
+                await tab.SetBufferingVeilAsync(true,
+                    $"Предварительная буферизация\nПрогреваю локальные модели · {elapsed} с…");
+                try { await Task.Delay(2000, session.Token); }
+                catch (OperationCanceledException) { break; }
+            }
+            await coreWarmup;
+            // Прогрев голоса с повторами внутри; если он всё же не встал —
+            // сеанс живёт: синтез поднимется на первой реплике, а сбой
+            // попадёт в Crash Vault вместо убийства всего перевода.
+            try { await voiceWarmup; }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                CrashReportService.RecordNonFatal("video-translation", "voice-warmup", ex);
+            }
+            CrashReportService.AddBreadcrumb("video-translation", "rolling-dubbing-started");
+
+            // Зритель видит паузу с карточкой «подождите минуту»: под вуалью
+            // видео идёт на обычной скорости ×1 (звук заглушен), а конвейер
+            // непрерывно стекает звук и переводит вперёд — без перемоток.
+            analysis = new RollingAnalysis(tab, profile, duration, allWavs);
+            player = new PrecomputedDubbingPlayer();
+            await analysis.BufferWindowAsync(
+                watchPosition,
+                TimeSpan.FromSeconds(VideoDubbingPolicy.InitialBufferWallBudgetSeconds),
+                VideoDubbingPolicy.InitialLookaheadSeconds,
+                session.Token, "Предварительная буферизация и перевод");
+            var phrases = analysis.Snapshot();
+            phrases.Sort((left, right) => left.StartSeconds.CompareTo(right.StartSeconds));
+
+            // Возврат ровно туда, где зритель остановился: прогон под вуалью
+            // не должен сдвигать позицию просмотра.
+            await tab.SetBufferingVeilAsync(false, string.Empty);
+            await tab.ResumeVideoFromAsync(watchPosition);
+            await tab.UpdateLiveAudioTranslationStatusAsync(
+                phrases.Count == 0
+                    ? "Синхронный дубляж · речевых реплик пока нет — слушаю дальше"
+                    : $"Синхронный дубляж · {phrases.Count} реплик · приятного просмотра");
+
+            // Пока идёт показ, «попутчик» переводит звук в фоне на ×1 и
+            // отодвигает границу; когда показ догоняет её — короткая
+            // невидимая догрузка под вуалью.
+            followCts = CancellationTokenSource.CreateLinkedTokenSource(session.Token);
+            follow = analysis.FollowAsync(followCts.Token);
+
+            // Сердцебиение: каждый оборот цикла ставит отметку; если планировщик
+            // застрял в одном await-е дольше 90 с — сеанс останавливается и
+            // видео честно возвращается зрителю, вместо вечной заморозки.
+            var heartbeat = new long[1];
+            Interlocked.Exchange(ref heartbeat[0], DateTimeOffset.UtcNow.Ticks);
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    while (!session.IsCancellationRequested)
+                    {
+                        await Task.Delay(15_000, session.Token);
+                        DubbingTrace($"heartbeat-проверка возраст={(DateTimeOffset.UtcNow - new DateTime(Interlocked.Read(ref heartbeat[0]), DateTimeKind.Utc)).TotalSeconds:F0}с");
+                        if (completedNaturally) return;
+                        var last = new DateTime(Interlocked.Read(ref heartbeat[0]), DateTimeKind.Utc);
+                        if ((DateTimeOffset.UtcNow - last).TotalSeconds > 90)
+                        {
+                            CrashReportService.RecordNonFatal("video-translation",
+                                "scheduler-heartbeat",
+                                new InvalidOperationException(
+                                    "Планировщик не подавал признаков жизни 90 с — сеанс остановлен."));
+                            session.Cancel();
+                            return;
+                        }
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    CrashReportService.RecordNonFatal("video-translation", "heartbeat-watchdog", ex);
+                }
+            });
+
+            var next = 0;
+            var lastEnqueuedStart = -1.0;
+            var version = analysis.Version;
+            var playerPaused = false;
+            var lastCatchUpAt = DateTimeOffset.MinValue;
+            while (!session.IsCancellationRequested)
+            {
+                Interlocked.Exchange(ref heartbeat[0], DateTimeOffset.UtcNow.Ticks);
+                DubbingTrace("планировщик-итерация");
+                if (await tab.ShouldStopLiveAudioTranslationAsync()) break;
+                var state = await tab.GetVideoStateAsync();
+                if (state is null || state.Ended) break;
+                if (state.Paused)
+                {
+                    if (!playerPaused)
+                    {
+                        player.Pause();
+                        playerPaused = true;
+                        await tab.UpdateLiveAudioTranslationStatusAsync("Пауза");
+                    }
+                    await Task.Delay(250, session.Token);
+                    continue;
+                }
+                if (playerPaused)
+                {
+                    player.Resume();
+                    playerPaused = false;
+                }
+                if (analysis.Version != version)
+                {
+                    // Фон добавил реплики — забираю снимок и сортирую по таймкоду.
+                    phrases = analysis.Snapshot();
+                    phrases.Sort((left, right) => left.StartSeconds.CompareTo(right.StartSeconds));
+                    version = analysis.Version;
+                    while (next < phrases.Count &&
+                           phrases[next].StartSeconds <= lastEnqueuedStart)
+                        next++;
+                }
+                while (next < phrases.Count && phrases[next].EndSeconds < state.Position - 0.5)
+                    next++;
+                if (next < phrases.Count &&
+                    phrases[next].StartSeconds <= state.Position + 0.12 &&
+                    !player.IsPlaying)
+                {
+                    lastEnqueuedStart = phrases[next].StartSeconds;
+                    player.Enqueue(phrases[next].WavPaths);
+                    next++;
+                }
+                var telemetry = $"▶{player.PlayedChains}·оч{(player.QueueDepth)}" +
+                                (player.ThreadAlive ? string.Empty : "·ПОТОК УМЕР");
+                var followState = follow is null
+                    ? "—"
+                    : follow.Status switch
+                    {
+                        TaskStatus.RanToCompletion => "готов",
+                        TaskStatus.Faulted => "СБОЙ",
+                        TaskStatus.Canceled => "стоп",
+                        _ => "жив",
+                    };
+                var nextStart = next < phrases.Count ? (int)phrases[next].StartSeconds : -1;
+                var statusLine =
+                    $"Дубляж · {phrases.Count} реплик · {telemetry} · след:{nextStart} · поз:{(int)state.Position} · грань:{(int)analysis.Frontier} · фон:{followState}";
+                if (!string.Equals(statusLine, _lastStatusLine, StringComparison.Ordinal))
+                {
+                    _lastStatusLine = statusLine;
+                    await tab.UpdateLiveAudioTranslationStatusAsync(statusLine);
+                }
+                const double safetySeconds = 6;
+                var frontier = analysis.Frontier;
+                if (state.Position > frontier - safetySeconds && frontier < duration - 1 &&
+                    DateTimeOffset.UtcNow - lastCatchUpAt > TimeSpan.FromSeconds(20))
+                {
+                    lastCatchUpAt = DateTimeOffset.UtcNow;
+                    // Попутчик может застрять в непрерываемом ожидании —
+                    // планировщик не имеет права ждать его дольше пары секунд.
+                    analysis.RetireFollow();
+                    followCts!.Cancel();
+                    var retired = await Task.WhenAny(follow!, Task.Delay(4000, session.Token));
+                    if (retired != follow)
+                        CrashReportService.RecordNonFatal("video-translation", "follow-stuck",
+                            new InvalidOperationException("Фоновый переводчик не ответил на остановку за 4 с"));
+                    followCts.Dispose();
+                    player.Pause();
+                    playerPaused = true;
+                    await tab.PrepareVideoForAnalysisAsync();
+                    var frontierBefore = analysis.Frontier;
+                    // Жёсткий предохранитель бюджета: окно не имеет права
+                    // длиться дольше бюджета + запаса, что бы внутри ни висло.
+                    var windowBudget = TimeSpan.FromSeconds(
+                        VideoDubbingPolicy.CatchUpWallBudgetSeconds + 30);
+                    var window = analysis.BufferWindowAsync(
+                        Math.Max(frontier, state.Position),
+                        TimeSpan.FromSeconds(VideoDubbingPolicy.CatchUpWallBudgetSeconds),
+                        VideoDubbingPolicy.CatchUpLookaheadSeconds,
+                        session.Token, "Догружаю следующую часть");
+                    var finished = await Task.WhenAny(window, Task.Delay(windowBudget, session.Token));
+                    if (finished != window)
+                    {
+                        CrashReportService.RecordNonFatal("video-translation", "catchup-overdue",
+                            new InvalidOperationException(
+                                "Догрузка превысила бюджет и остановлена принудительно."));
+                    }
+                    else
+                    {
+                        try { await window; }
+                        catch (OperationCanceledException) { throw; }
+                        catch { /* окно уже погасило свои ошибки внутри */ }
+                    }
+                    if (analysis.Frontier < frontierBefore + 5)
+                        CrashReportService.RecordNonFatal("video-translation", "catchup-no-progress",
+                            new InvalidOperationException(
+                                $"Догрузка не продвинула границу: {frontierBefore:F0} → {analysis.Frontier:F0}."));
+                    phrases = analysis.Snapshot();
+                    phrases.Sort((left, right) => left.StartSeconds.CompareTo(right.StartSeconds));
+                    version = analysis.Version;
+                    while (next < phrases.Count &&
+                           phrases[next].StartSeconds <= lastEnqueuedStart)
+                        next++;
+                    await tab.SetBufferingVeilAsync(false, string.Empty);
+                    await tab.ResumeVideoFromAsync(state.Position);
+                    player.Resume();
+                    playerPaused = false;
+                    followCts = CancellationTokenSource.CreateLinkedTokenSource(session.Token);
+                    follow = analysis.FollowAsync(followCts.Token);
+                    await tab.UpdateLiveAudioTranslationStatusAsync(
+                        $"Синхронный дубляж · {phrases.Count} реплик");
+                    continue;
+                }
+                await Task.Delay(120, session.Token);
+            }
+            completedNaturally = true;
+            finalStatus = "Синхронный дубляж завершён.";
+        }
+        catch (OperationCanceledException) { finalStatus = "Синхронный перевод остановлен."; }
+        catch (Exception ex)
+        {
+            if (ReferenceEquals(Volatile.Read(ref _videoCancellation), session))
+                finalStatus = "Синхронный перевод прерван: " +
+                              ex.Message[..Math.Min(ex.Message.Length, 160)];
+            CrashReportService.RecordNonFatal("video-translation", "rolling-dubbing", ex);
+        }
+        finally
+        {
+            // Кольчуга: ни один шаг очистки не имеет права уронить процесс —
+            // дважды за ночь необработанная ошибка здесь убивала весь браузер.
+            try { await tab.SetBufferingVeilAsync(false, string.Empty); } catch { }
+            try { tab.DisableAudioTrackWatch(); } catch { }
+            if (followCts is not null)
+            {
+                try
+                {
+                    analysis?.RetireFollow();
+                    followCts.Cancel();
+                    if (follow is not null)
+                        await Task.WhenAny(follow, Task.Delay(3000));
+                }
+                catch { }
+                try { followCts.Dispose(); } catch { }
+            }
+            if (analysis is not null)
+            {
+                try { await analysis.StopAsync(); } catch { }
+                try { await tab.SetLoopbackCaptureModeAsync(false); } catch { }
+            }
+            try
+            {
+                // При любом исходе зритель возвращается на свою позицию с
+                // обычной скоростью — подготовка не оставляет следов.
+                if (!completedNaturally)
+                    await tab.ResumeVideoFromAsync(watchPosition);
+                else
+                    await tab.RestoreVideoRateAsync();
+            }
+            catch { }
+            player?.Dispose();
+            foreach (var wav in allWavs)
+                try { File.Delete(wav); } catch { }
+            VideoDubbingVoiceService.Stop();
+            Interlocked.CompareExchange(ref _videoCancellation, null, session);
+            session.Dispose();
+            try { await tab.EndLiveAudioTranslationAsync(finalStatus); } catch { }
+        }
+    }
+
+    private static async Task<double> CurrentPositionAsync(BrowserTab tab,
+        CancellationToken cancellationToken)
+    {
+        var state = await tab.GetVideoStateAsync();
+        if (state is not null) return state.Position;
+        cancellationToken.ThrowIfCancellationRequested();
+        return 0;
+    }
+
+    /// <summary>
+    /// Сквозной анализатор на обычной скорости ×1: непрерывно стекает
+    /// накопленный звук (кольцевой буфер страницы не даёт дыр) и переводит
+    /// целыми предложениями. Одна и та же петля работает и под вуалью
+    /// буферизации, и фоновым «попутчиком» во время показа. Если страничный
+    /// тап глух или капризничает — конвейер сам переходит на системный
+    /// захват звука процесса WebView2, который странице не подконтролен.
+    /// </summary>
+    private sealed class RollingAnalysis
+    {
+        private readonly BrowserTab _tab;
+        private readonly VideoDubbingModeProfile _profile;
+        private readonly double _duration;
+        private readonly List<string> _allWavs;
+        private readonly object _gate = new();
+        private readonly List<PrecomputedDubbingPhrase> _phrases = [];
+        private VideoSpeechTranslationContext _context;
+        private double _lastAnchor = double.NaN;
+        private int _transcribeFailures;
+        private IContinuousAudioCaptureSession? _loopback;
+        private IAsyncEnumerator<SystemAudioCaptureService.AudioSegment>? _loopbackSegments;
+        private double _loopbackAnchorEnd = double.NaN;
+        private int _pageFailureStreak;
+        private int _loopbackFailures;
+        private int _followGeneration;
+        private OnlineAudioTrackTap? _trackTap;
+
+        /// <summary>
+        /// Профессиональный путь: теневая загрузка отдельной аудиодорожки.
+        /// instant-режим не ждёт новых сетевых запросов — если URL ещё не
+        /// подсмотрен, возвращает false сразу, и сеанс начинается со
+        /// страничного тапа, а попутчик позже upgrade-ится на дорожку.
+        /// </summary>
+        private async Task<bool> TryStartTrackTapAsync(CancellationToken cancellationToken,
+            bool instant = false)
+        {
+            if (_trackTap is not null) return true;
+            if (AiModelCatalog.FfmpegExecutable is null) return false;
+            var (url, referer) = await _tab.GetVideoAudioTrackUrlAsync(
+                waitForNetworkMs: instant ? 0 : 8_000);
+            if (string.IsNullOrWhiteSpace(url)) return false;
+            _trackTap = await OnlineAudioTrackTap.StartAsync(url, referer, cancellationToken);
+            return _trackTap is not null;
+        }
+
+        /// <summary>
+        /// Буферизация по файлу дорожки: видео стоит на паузе, перевод идёт
+        /// быстрее реального времени, таймкоды — абсолютные.
+        /// </summary>
+        private async Task BufferFromTrackAsync(double fromSeconds, double lookaheadSeconds,
+            DateTimeOffset deadline, Func<string?, Task> report, CancellationToken cancellationToken)
+        {
+            var wanted = _duration > 0
+                ? Math.Min(fromSeconds + lookaheadSeconds, _duration - 0.5)
+                : fromSeconds + lookaheadSeconds;
+            while (!cancellationToken.IsCancellationRequested &&
+                   DateTimeOffset.UtcNow < deadline)
+            {
+                var fresh = await _trackTap!.DecodeNewSegmentsAsync(cancellationToken);
+                foreach (var segment in fresh)
+                {
+                    if (segment.StartSeconds >= wanted) break;
+                    if (segment.EndSeconds <= fromSeconds - 1) continue;
+                    await TranslateWavAsync(segment.Wav, segment.StartSeconds, cancellationToken);
+                }
+                var ahead = Frontier - fromSeconds;
+                if (ahead >= lookaheadSeconds - 0.5 && _trackTap.DownloadFinished) break;
+                await report(ahead >= lookaheadSeconds - 0.5
+                    ? null
+                    : $"скачано {(_trackTap.TotalBytes > 0 ? (int)(100.0 * _trackTap.DownloadedBytes / _trackTap.TotalBytes) : 0)}% дорожки");
+                await Task.Delay(1500, cancellationToken);
+            }
+        }
+
+        /// <summary>
+        /// Помечает текущего «попутчика» устаревшим: тот выходит на ближайшей
+        /// проверке, даже если успел застрять в долгом ожидании.
+        /// </summary>
+        public void RetireFollow() => Interlocked.Increment(ref _followGeneration);
+
+        public RollingAnalysis(BrowserTab tab, VideoDubbingModeProfile profile,
+            double duration, List<string> allWavs)
+        {
+            _tab = tab;
+            _profile = profile;
+            _duration = duration;
+            _allWavs = allWavs;
+            _context = new VideoSpeechTranslationContext(profile);
+        }
+
+        /// <summary>
+        /// Останавливает системный захват и теневую загрузку, если они были.
+        /// </summary>
+        public async Task StopAsync()
+        {
+            if (_loopbackSegments is not null)
+                try { await _loopbackSegments.DisposeAsync(); } catch { }
+            if (_loopback is not null)
+                try { await _loopback.DisposeAsync(); } catch { }
+            _loopbackSegments = null;
+            _loopback = null;
+            _trackTap?.Dispose();
+            _trackTap = null;
+        }
+
+        /// <summary>
+        /// Резервный путь: системный захват выхода WebView2 (WASAPI). Страничные
+        /// причуды — captureStream без дорожек, DRM, чужой WebAudio-граф — ему
+        /// не помеха. Подготовка при нём слышна, и карточка об этом говорит.
+        /// </summary>
+        private async Task<bool> TrySwitchToLoopbackAsync(CancellationToken cancellationToken)
+        {
+            if (_loopback is not null) return true;
+            try
+            {
+                _loopback = await SystemAudioCaptureService.StartPreferredContinuousCaptureAsync(
+                    _tab.WebViewProcessId, _profile.SegmentMilliseconds,
+                    _profile.SegmentOverlapMilliseconds, cancellationToken);
+                _loopbackAnchorEnd = double.NaN;
+                _loopbackFailures = 0;
+                await _tab.SetLoopbackCaptureModeAsync(true);
+                return true;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                CrashReportService.RecordNonFatal("video-translation", "loopback-switch", ex);
+                return false;
+            }
+        }
+
+        /// <summary>Один такт системного захвата: сегмент → таймлайн → перевод.</summary>
+        private async Task<double> LoopbackStepAsync(CancellationToken cancellationToken)
+        {
+            _loopbackSegments ??= _loopback!.ReadSegmentsAsync(cancellationToken)
+                .GetAsyncEnumerator(cancellationToken);
+            // ValueTask канального энумератора нельзя бросать полупотреблённым
+            // (это однажды корраптировало энумератор и уронило весь процесс):
+            // сначала одноразовое преобразование в Task, затем WaitAsync —
+            // таймаут рвёт только ожидание, сама задача потребляется честно.
+            bool has;
+            var moving = _loopbackSegments.MoveNextAsync().AsTask().WaitAsync(
+                TimeSpan.FromSeconds(5), cancellationToken);
+            try
+            {
+                has = await moving;
+            }
+            catch (TimeoutException)
+            {
+                _loopbackFailures++;
+                DubbingTrace("loopback: сегмент не пришёл за 5 с");
+                return 0;
+            }
+            if (!has)
+            {
+                await Task.Delay(300, cancellationToken);
+                return 0;
+            }
+            var segment = _loopbackSegments.Current;
+            var mediaSeconds = AudioRateRestore.PcmDurationSeconds(segment.Wav);
+            if (mediaSeconds <= 0) return 0;
+            if (double.IsNaN(_loopbackAnchorEnd))
+            {
+                var state = await _tab.GetVideoStateAsync();
+                _loopbackAnchorEnd = (state?.Position ?? 0) - 0.2;
+            }
+            var anchor = _loopbackAnchorEnd - mediaSeconds;
+            _loopbackAnchorEnd = anchor + mediaSeconds;
+            if (segment.Rms < 0.002)
+            {
+                Frontier = Math.Max(Frontier, _loopbackAnchorEnd);
+                return mediaSeconds;
+            }
+            return await TranslateWavAsync(segment.Wav, anchor, cancellationToken);
+        }
+
+        /// <summary>Версия списка реплик — растёт при каждом добавлении.</summary>
+        public int Version { get; private set; }
+
+        /// <summary>Медиа-позиция, до которой звук уже стекает без дыр.</summary>
+        public double Frontier { get; private set; }
+
+        private bool HasModelIssues => Volatile.Read(ref _transcribeFailures) >= 3;
+
+        /// <summary>Снимок реплик для потока показа — список меняется фоном.</summary>
+        public List<PrecomputedDubbingPhrase> Snapshot()
+        {
+            lock (_gate) return [.. _phrases];
+        }
+
+        /// <summary>
+        /// Вуальная фаза. Приоритет — теневая загрузка отдельной аудиодорожки:
+        /// видео честно стоит на паузе, а перевод идёт по файлу быстрее
+        /// реального времени с абсолютными таймкодами. Если дорожка
+        /// недоступна (не-YouTube, DRM) — видео идёт под вуалью на ×1 и
+        /// конвейер слушает страничный тап или системный захват.
+        /// </summary>
+        public async Task BufferWindowAsync(double fromSeconds, TimeSpan wallBudget,
+            double lookaheadSeconds, CancellationToken cancellationToken, string title)
+        {
+            if (_duration > 0 && fromSeconds + wallBudget.TotalSeconds > _duration)
+                wallBudget = TimeSpan.FromSeconds(Math.Max(5, _duration - fromSeconds));
+            var deadline = DateTimeOffset.UtcNow + wallBudget;
+
+            async Task ReportAsync(string? note)
+            {
+                var remaining = Math.Max(0,
+                    (deadline - DateTimeOffset.UtcNow).TotalSeconds);
+                var ahead = Math.Max(0, Frontier - fromSeconds);
+                var text =
+                    $"{title}\nпереведено вперёд: {(int)ahead} с · осталось ≤ {(int)remaining} с · реплик: {Snapshot().Count}";
+                if (note is not null) text += $"\n{note}";
+                await _tab.SetBufferingVeilAsync(true, text);
+            }
+
+            if (await TryStartTrackTapAsync(cancellationToken, instant: true))
+            {
+                DubbingTrace("буфер-окно: путь дорожки");
+                await ReportAsync("Скачиваю и перевожу аудиодорожку — без перемотки");
+                await BufferFromTrackAsync(fromSeconds, lookaheadSeconds, deadline,
+                    ReportAsync, cancellationToken);
+                DubbingTrace("буфер-окно: дорожка готова");
+                return;
+            }
+            DubbingTrace("буфер-окно: путь страничного тапа");
+
+            await _tab.SeekVideoAsync(fromSeconds);
+            await _tab.SetVideoAnalysisRateAsync(1);
+            // После перемотки хвосты старого материала не должны подмешиваться.
+            await _tab.FlushAudioCaptureBufferAsync();
+            Frontier = Math.Max(Frontier, fromSeconds);
+            var silenceStreak = 0;
+
+            while (!cancellationToken.IsCancellationRequested &&
+                   DateTimeOffset.UtcNow < deadline)
+            {
+                if (_loopback is not null)
+                {
+                    await LoopbackStepAsync(cancellationToken);
+                    await ReportAsync(HasModelIssues
+                        ? "Проблема конвейера — распознавание или синтез голоса"
+                        : null);
+                    continue;
+                }
+                var state = await _tab.GetVideoStateAsync();
+                if (state is null || state.Ended) break;
+                if (state.Paused)
+                {
+                    await ReportAsync("Жду, пока плеер продолжит показ…");
+                    await Task.Delay(250, cancellationToken);
+                    continue;
+                }
+                var captured = await _tab.CaptureActiveVideoAudioAsync(0, cancellationToken,
+                    _profile.SegmentOverlapMilliseconds);
+                if (captured.WaitingForPlayback)
+                {
+                    await ReportAsync("Жду звук видео…");
+                    await Task.Delay(200, cancellationToken);
+                    continue;
+                }
+                if (!captured.Success || string.IsNullOrWhiteSpace(captured.WavBase64))
+                {
+                    if (captured.Success) silenceStreak++;
+                    else await Task.Delay(150, cancellationToken);
+                    // Ошибки захвата видны зрителю сразу — никаких слепых
+                    // «перевода нет» без причины.
+                    string note;
+                    if (!captured.Success && !string.IsNullOrWhiteSpace(captured.Error))
+                        note = captured.Error is "Видео на паузе." or "silence"
+                            ? "Собираю звук…"
+                            : captured.Error[..Math.Min(captured.Error.Length, 90)];
+                    else if (silenceStreak >= 4)
+                        note = "Тихий фрагмент — слушаю дальше";
+                    else
+                        note = "Собираю звук…";
+                    // Страничный тап глух или капризничает — конвейер сам
+                    // переходит на системный захват звука процесса WebView2.
+                    if (++_pageFailureStreak >= 8 &&
+                        await TrySwitchToLoopbackAsync(cancellationToken))
+                        note = "Системный захват звука — подготовка будет слышна";
+                    await ReportAsync(note);
+                    continue;
+                }
+                _pageFailureStreak = 0;
+                silenceStreak = 0;
+                await TranslateDrainedAsync(captured, cancellationToken);
+                await ReportAsync(HasModelIssues
+                    ? "Проблема конвейера — распознавание или синтез голоса"
+                    : null);
+            }
+
+            // Льготная сдача хвостов: добираем накопленный буфер, чтобы
+            // минута ожидания не теряла концовку последней фразы.
+            var grace = DateTimeOffset.UtcNow.AddSeconds(15);
+            var lastDrainAt = DateTimeOffset.UtcNow;
+            while (!cancellationToken.IsCancellationRequested &&
+                   DateTimeOffset.UtcNow < grace)
+            {
+                if (_loopback is not null)
+                {
+                    await Task.Delay(500, cancellationToken);
+                    continue;
+                }
+                var captured = await _tab.CaptureActiveVideoAudioAsync(0, cancellationToken,
+                    _profile.SegmentOverlapMilliseconds);
+                if (captured.WaitingForPlayback ||
+                    !captured.Success || string.IsNullOrWhiteSpace(captured.WavBase64))
+                    break;
+                var now = DateTimeOffset.UtcNow;
+                var elapsed = (now - lastDrainAt).TotalSeconds;
+                lastDrainAt = now;
+                var drained = await TranslateDrainedAsync(captured, cancellationToken);
+                if (drained <= elapsed + 1.0) break; // буфер разобран
+                await ReportAsync("Завершаю перевод фрагмента…");
+            }
+            await _tab.FlushAudioCaptureBufferAsync();
+        }
+
+        /// <summary>
+        /// Фоновый «попутчик» во время показа: стекает тот же звук на ×1 и
+        /// отодвигает границу, пока конвейер успевает за показом.
+        /// </summary>
+        public async Task FollowAsync(CancellationToken cancellationToken)
+        {
+            var generation = Volatile.Read(ref _followGeneration);
+            var trackRetryAt = DateTimeOffset.MinValue;
+            while (!cancellationToken.IsCancellationRequested &&
+                   Volatile.Read(ref _followGeneration) == generation)
+            {
+                // Дорожку нередко подсматривают в сети только во время показа:
+                // как только URL замечен — переходим на файловый перевод.
+                if (_trackTap is null && AiModelCatalog.FfmpegExecutable is not null &&
+                    DateTimeOffset.UtcNow >= trackRetryAt)
+                {
+                    trackRetryAt = DateTimeOffset.UtcNow.AddSeconds(20);
+                    await TryStartTrackTapAsync(cancellationToken, instant: true);
+                }
+                // Дорожка уже качается тенью: переводим её хвост таймкодно.
+                if (_trackTap is not null)
+                {
+                    try
+                    {
+                        var fresh = await _trackTap.DecodeNewSegmentsAsync(cancellationToken);
+                        foreach (var segment in fresh)
+                            if (segment.EndSeconds > Frontier - 1)
+                                await TranslateWavAsync(segment.Wav, segment.StartSeconds,
+                                    cancellationToken);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        CrashReportService.RecordNonFatal("video-translation", "follow-track", ex);
+                    }
+                    await _tab.UpdateLiveAudioTranslationStatusAsync(
+                        $"Синхронный дубляж · реплик: {Snapshot().Count}");
+                    await Task.Delay(4000, cancellationToken);
+                    continue;
+                }
+                if (_loopback is not null)
+                {
+                    await LoopbackStepAsync(cancellationToken);
+                    await _tab.UpdateLiveAudioTranslationStatusAsync(
+                        $"Синхронный дубляж · реплик: {Snapshot().Count}");
+                    continue;
+                }
+                var state = await _tab.GetVideoStateAsync();
+                if (state is null || state.Ended) break;
+                if (state.Paused)
+                {
+                    await Task.Delay(300, cancellationToken);
+                    continue;
+                }
+                var captured = await _tab.CaptureActiveVideoAudioAsync(0, cancellationToken,
+                    _profile.SegmentOverlapMilliseconds);
+                if (captured.WaitingForPlayback ||
+                    !captured.Success || string.IsNullOrWhiteSpace(captured.WavBase64))
+                {
+                    if (!captured.WaitingForPlayback &&
+                        ++_pageFailureStreak >= 8)
+                        await TrySwitchToLoopbackAsync(cancellationToken);
+                    await Task.Delay(200, cancellationToken);
+                    continue;
+                }
+                _pageFailureStreak = 0;
+                await TranslateDrainedAsync(captured, cancellationToken);
+                await _tab.UpdateLiveAudioTranslationStatusAsync(
+                    $"Синхронный дубляж · реплик: {Snapshot().Count}");
+            }
+        }
+
+        /// <summary>
+        /// Один такт конвейера: сток накопленного звука → whisper → перевод →
+        /// синтез. Возвращает число стекших медиа-секунд.
+        /// </summary>
+        private async Task<double> TranslateDrainedAsync(AudioCaptureResult captured,
+            CancellationToken cancellationToken)
+        {
+            var rate = captured.VideoRate > 0.05 ? captured.VideoRate : 1.0;
+            var wav = AudioRateRestore.RestoreTempo(
+                Convert.FromBase64String(captured.WavBase64), rate);
+            var anchor = captured.VideoPosition -
+                         _profile.SegmentOverlapMilliseconds / 1000.0 * rate;
+            return await TranslateWavAsync(wav, anchor, cancellationToken);
+        }
+
+        private async Task<double> TranslateWavAsync(byte[] wav, double anchor,
+            CancellationToken cancellationToken)
+        {
+            var mediaSeconds = AudioRateRestore.PcmDurationSeconds(wav);
+            // Разрыв стока (пауза, перемотка) — новая фраза с чистого листа.
+            if (!double.IsNaN(_lastAnchor) && Math.Abs(anchor - _lastAnchor) > 2.5)
+                _context = new VideoSpeechTranslationContext(_profile);
+            _lastAnchor = anchor + mediaSeconds;
+            Frontier = Math.Max(Frontier, anchor + mediaSeconds);
+            var segment = new LiveAudioSegment(wav, DateTimeOffset.UtcNow,
+                TimeSpan.FromSeconds(mediaSeconds));
+            VideoSpeechTranslationText? translated = null;
+            try
+            {
+                DubbingTrace($"whisper-начало anchor={anchor:F1} сек={mediaSeconds:F1}");
+                translated = await _context.TranslateAsync(segment, cancellationToken, anchor);
+                DubbingTrace($"whisper-конец anchor={anchor:F1} реплика={(translated is null ? "-" : "+")}");
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (OperationCanceledException ex)
+            {
+                // Внутренний бюджет (например, зависший whisper-запрос) — это
+                // сбой одного сегмента, а не повод ронять весь сеанс.
+                Interlocked.Increment(ref _transcribeFailures);
+                CrashReportService.RecordNonFatal("video-translation",
+                    "rolling-translate-timeout", ex);
+            }
+            catch (Exception ex)
+            {
+                Interlocked.Increment(ref _transcribeFailures);
+                CrashReportService.RecordNonFatal("video-translation",
+                    "rolling-translate", ex);
+            }
+            if (translated is null || double.IsNaN(translated.VideoStartedAt))
+                return mediaSeconds;
+            var wavs = new List<string>();
+            try
+            {
+                foreach (var chunk in VideoDubbingPolicy.SplitTtsText(
+                             translated.RussianText, _profile))
+                {
+                    var speech = await VideoDubbingVoiceService.PrepareAsync(chunk, 0,
+                        cancellationToken);
+                    wavs.Add(speech.Path);
+                    _allWavs.Add(speech.Path);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                // Сбой синтеза одной реплики не должен ронять окно буферизации:
+                // реплика пропускается, счётчик проблем скажет об этом в карточке.
+                Interlocked.Increment(ref _transcribeFailures);
+                CrashReportService.RecordNonFatal("video-translation",
+                    "rolling-tts", ex);
+                return mediaSeconds;
+            }
+            if (wavs.Count > 0)
+                lock (_gate)
+                {
+                    _phrases.Add(new PrecomputedDubbingPhrase(
+                        translated.VideoStartedAt, translated.VideoEndedAt, wavs,
+                        translated.RussianText));
+                    Version++;
+                }
+            return mediaSeconds;
+        }
+    }
+
+    private static string VideoModeLabel(VideoTranslationMode mode, bool automatic = false) =>
+        (mode switch
+    {
+        VideoTranslationMode.Fast => "Быстрый",
+        VideoTranslationMode.Quality => "Качественный",
+        _ => "Сбалансированный"
+    }) + (automatic ? " · авто по длительности" : string.Empty);
 
     private static bool ContainsCyrillic(string? text) =>
         !string.IsNullOrWhiteSpace(text) &&
@@ -379,14 +1473,20 @@ public partial class LocalAiDockControl : UserControl
         ShoppingAgentPanel.Visibility = Visibility.Visible;
         ShoppingQueryBox.Text = "Что нужно найти?";
         _shoppingImagePath = null;
+        _shoppingAllowsCrossSiteResults = false;
         ShoppingImageNameText.Text = "Фото не выбрано";
+        var surface = GetShoppingSurface(tab);
         if (_backgroundResearch.TryGetValue(tab.CurrentUrl, out var research))
             ShowTextResult(FormatBackgroundResearch(research) +
                 "\n\nНиже можно отдельно найти товары в каталоге этого сайта.");
+        else if (surface is "new-tab" or "search-provider")
+            ShowTextResult("Введите товар и нажмите «Начать поиск» или Enter. Следопыт запросит настроенную поисковую машину, прочитает найденные страницы и локально соберёт сравнение. Ничего не покупается и не добавляется в корзину.");
         else
-            ShowTextResult("Введите описание товара или выберите фотографию, затем нажмите «Начать поиск». Nexus просмотрит до пяти страниц текущего сайта и покажет 3–5 наиболее подходящих карточек. Корзина, вход и оформление заказа не затрагиваются.");
+            ShowTextResult("Введите описание товара или выберите фотографию, затем нажмите «Начать поиск» или Enter. Следопыт сначала использует поиск этого сайта и просмотрит до пяти страниц. Если каталог не читается, он выполнит резервный поиск только по этому домену. Корзина, вход и оформление заказа не затрагиваются.");
         StatusText.Text = NexusFabricRuntime.IsAvailable
-            ? "Nexus Intelligence Fabric готов к поиску."
+            ? surface is "new-tab" or "search-provider"
+                ? "Режим: поиск через настроенную поисковую машину. Запуск — по кнопке или Enter."
+                : "Режим: поиск и сравнение на текущем сайте. Запуск — по кнопке или Enter."
             : NexusFabricRuntime.Status.Message;
         ShoppingQueryBox.Focus();
         ShoppingQueryBox.SelectAll();
@@ -442,6 +1542,16 @@ public partial class LocalAiDockControl : UserControl
 
     public void HandleNavigation(BrowserTab tab)
     {
+        if (ReferenceEquals(_tab, tab) &&
+            !string.IsNullOrWhiteSpace(_pageUrl) &&
+            !string.Equals(_pageUrl, tab.CurrentUrl, StringComparison.Ordinal))
+        {
+            _cancellation?.Cancel();
+            StopVideoTranslation();
+            VideoDubbingVoiceService.Stop();
+            VoiceAssistantService.StopSpeaking();
+            _pageUrl = tab.CurrentUrl;
+        }
         if (!_showingBackgroundResearch) return;
         if (ReferenceEquals(_tab, tab) && IsSameSite(_backgroundResearchHost, tab.CurrentHost)) return;
         _showingBackgroundResearch = false;
@@ -474,7 +1584,7 @@ public partial class LocalAiDockControl : UserControl
         ShoppingCardsPanel.Children.Add(new TextBlock
         {
             Text = "ВЫЖИМКА СЛЕДОПЫТА\n" + report.DirectAnswer,
-            TextWrapping = TextWrapping.Wrap, Foreground = Brushes.White,
+            TextWrapping = TextWrapping.Wrap, Foreground = ThemeBrush("TextBrush"),
             FontSize = 13.5, Margin = new Thickness(2, 0, 2, 12)
         });
         foreach (var item in report.Items.Take(6))
@@ -483,12 +1593,12 @@ public partial class LocalAiDockControl : UserControl
             content.Children.Add(new TextBlock
             {
                 Text = item.Title, TextWrapping = TextWrapping.Wrap,
-                FontSize = 13.5, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White
+                FontSize = 13.5, FontWeight = FontWeights.SemiBold, Foreground = ThemeBrush("TextBrush")
             });
             content.Children.Add(new TextBlock
             {
                 Text = item.Answer, TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 6, 0, 0), Foreground = new SolidColorBrush(Color.FromRgb(200, 205, 213))
+                Margin = new Thickness(0, 6, 0, 0), Foreground = ThemeBrush("MutedTextBrush")
             });
             if (!string.IsNullOrWhiteSpace(item.Url))
             {
@@ -502,8 +1612,8 @@ public partial class LocalAiDockControl : UserControl
             }
             ShoppingCardsPanel.Children.Add(new Border
             {
-                Background = new SolidColorBrush(Color.FromArgb(105, 16, 16, 16)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(120, 255, 255, 255)),
+                Background = ThemeBrush("PanelBrush"),
+                BorderBrush = ThemeBrush("BorderBrush"),
                 BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(12),
                 Padding = new Thickness(11), Margin = new Thickness(0, 0, 0, 9), Child = content
             });
@@ -609,130 +1719,220 @@ public partial class LocalAiDockControl : UserControl
 
     private async Task RunShoppingAgentAsync()
     {
-        if (_tab is null || UrlService.IsInternal(_tab.CurrentUrl))
-        { StatusText.Text = "Открой сайт магазина или каталога."; return; }
+        var tab = _tab;
+        var surface = tab is null ? "unknown" : GetShoppingSurface(tab);
+        var runId = SledopytDiagnosticsService.Begin("shopping", "button-or-enter", surface);
+        if (tab is null)
+        {
+            SledopytDiagnosticsService.Record("shopping", "blocked", "failed", code: "tab-unavailable",
+                runId: runId, trigger: "button-or-enter", surface: surface);
+            StatusText.Text = "Активная вкладка недоступна.";
+            return;
+        }
         var query = ShoppingQueryBox.Text.Trim();
         if (query.StartsWith("Что нужно", StringComparison.Ordinal)) query = string.Empty;
         if (string.IsNullOrWhiteSpace(query) && string.IsNullOrWhiteSpace(_shoppingImagePath))
-        { StatusText.Text = "Введите описание товара или выберите фотографию."; return; }
-        if (_model is null) { await EnsureModelAsync(); if (_model is null) return; }
-        _cancellation?.Cancel(); _cancellation = new CancellationTokenSource();
+        {
+            SledopytDiagnosticsService.Record("shopping", "blocked", "failed", code: "missing-query",
+                runId: runId, trigger: "button-or-enter", surface: surface);
+            StatusText.Text = "Введите описание товара или выберите фотографию.";
+            return;
+        }
+        if (_model is null)
+        {
+            await EnsureModelAsync();
+            if (_model is null)
+            {
+                SledopytDiagnosticsService.Record("shopping", "blocked", "failed", code: "model-unavailable",
+                    runId: runId, trigger: "button-or-enter", surface: surface);
+                return;
+            }
+        }
+        _cancellation?.Cancel();
+        var operation = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        _cancellation = operation;
         CancelButton.IsEnabled = true; ResultBox.Clear();
         var stopwatch = Stopwatch.StartNew();
         var rawCount = 0;
         var pagesViewed = 0;
-        SledopytDiagnosticsService.Record("shopping", "started", "success");
+        var globalSearch = surface is "new-tab" or "search-provider";
+        _shoppingAllowsCrossSiteResults = globalSearch;
+        SledopytDiagnosticsService.Record("shopping", "started", "success", runId: runId,
+            trigger: "button-or-enter", surface: surface);
         CrashReportService.AddBreadcrumb("sledopyt", "shopping-started");
-        VoiceAssistantService.Announce("Следопыт начал анализ каталога.",
-            VoiceAnnouncementPriority.Important, _tab.IsPrivate);
+        VoiceAssistantService.Announce(globalSearch
+                ? "Следопыт начал поиск товаров через поисковую машину."
+                : "Следопыт начал анализ каталога.",
+            VoiceAnnouncementPriority.Important, tab.IsPrivate);
         try
         {
             if (!string.IsNullOrWhiteSpace(_shoppingImagePath))
             {
-                StatusText.Text = "Nexus Vision локально распознаёт товар на фото…";
-                var imageInfo = new FileInfo(_shoppingImagePath);
-                if (!imageInfo.Exists || imageInfo.Length > 20 * 1024 * 1024)
-                    throw new InvalidOperationException("Изображение не найдено или превышает безопасный лимит 20 МБ.");
-                var imageAnswer = await NexusFabricRuntime.UnderstandImageAsync(
-                    await File.ReadAllBytesAsync(_shoppingImagePath, _cancellation.Token), _cancellation.Token);
-                using var imageDocument = JsonDocument.Parse(LocalIntelligenceService.ExtractJson(imageAnswer));
-                var imageQuery = imageDocument.RootElement.TryGetProperty("query", out var q) ? q.GetString() : null;
-                if (string.IsNullOrWhiteSpace(imageQuery))
-                    throw new InvalidOperationException("Nexus Vision не смог составить запрос по фотографии.");
-                query = string.IsNullOrWhiteSpace(query) ? imageQuery : query + ". По фотографии: " + imageQuery;
-                ShoppingQueryBox.Text = query;
+                try
+                {
+                    StatusText.Text = "Nexus Vision локально распознаёт товар на фото…";
+                    var imageInfo = new FileInfo(_shoppingImagePath);
+                    if (!imageInfo.Exists || imageInfo.Length > 20 * 1024 * 1024)
+                        throw new InvalidOperationException("Изображение не найдено или превышает безопасный лимит 20 МБ.");
+                    var imageAnswer = await NexusFabricRuntime.UnderstandImageAsync(
+                        await File.ReadAllBytesAsync(_shoppingImagePath, operation.Token), operation.Token);
+                    using var imageDocument = JsonDocument.Parse(LocalIntelligenceService.ExtractJson(imageAnswer));
+                    var imageQuery = imageDocument.RootElement.TryGetProperty("query", out var q) ? q.GetString() : null;
+                    if (string.IsNullOrWhiteSpace(imageQuery))
+                        throw new InvalidOperationException("Nexus Vision не смог составить запрос по фотографии.");
+                    query = string.IsNullOrWhiteSpace(query) ? imageQuery : query + ". По фотографии: " + imageQuery;
+                    ShoppingQueryBox.Text = query;
+                    SledopytDiagnosticsService.Record("shopping", "vision", "success",
+                        stopwatch.ElapsedMilliseconds, resultCount: 1, runId: runId,
+                        trigger: "button-or-enter", surface: surface);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    var code = !AiModelCatalog.VisionReady ? "vision-unavailable" : "vision-failed";
+                    SledopytDiagnosticsService.Record("shopping", "vision", "failed",
+                        stopwatch.ElapsedMilliseconds, code: code, runId: runId,
+                        trigger: "button-or-enter", surface: surface);
+                    throw;
+                }
             }
-            StatusText.Text = "Nexus Следопыт находит каталог и ждёт обновления DOM…";
-            var searched = await _tab.SearchCurrentSiteForAgentAsync(query, _cancellation.Token);
-            if (!searched)
-                StatusText.Text = "Поле поиска не найдено — анализирую открытый каталог и его страницы…";
             var rawItems = new List<string>();
             var itemKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { _tab.CurrentUrl };
             var pages = 0;
             var previewCount = 0;
             ShoppingReport? preview = null;
+            string CardsJson() => "[" + string.Join(",", rawItems) + "]";
+            void AppendCardsJson(string json)
+            {
+                try
+                {
+                    using var document = JsonDocument.Parse(json);
+                    if (document.RootElement.ValueKind != JsonValueKind.Array) return;
+                    foreach (var item in document.RootElement.EnumerateArray())
+                    {
+                        var key = item.TryGetProperty("url", out var url) && !string.IsNullOrWhiteSpace(url.GetString())
+                            ? url.GetString()!
+                            : item.TryGetProperty("name", out var name) ? name.GetString() ?? string.Empty : string.Empty;
+                        if (string.IsNullOrWhiteSpace(key) || !itemKeys.Add(key)) continue;
+                        rawItems.Add(item.GetRawText());
+                        if (rawItems.Count >= 150) break;
+                    }
+                }
+                catch (JsonException) { }
+            }
             void UpdatePreview()
             {
                 if (rawItems.Count == 0 || rawItems.Count == previewCount) return;
-                var json = "[" + string.Join(",", rawItems) + "]";
-                var candidate = LocalIntelligenceService.BuildShoppingPreview(query, json);
+                var candidate = LocalIntelligenceService.BuildShoppingPreview(query, CardsJson());
                 if (candidate.Items.Count == 0) return;
                 preview = candidate;
                 previewCount = rawItems.Count;
                 ShowShoppingCards(candidate);
                 StatusText.Text = $"Уже найдено карточек: {candidate.Items.Count} · продолжаю обход каталога…";
             }
-            for (var page = 1; page <= 5 && rawItems.Count < 150; page++)
+
+            if (globalSearch)
             {
-                pages = page;
-                pagesViewed = page;
-                StatusText.Text = $"Сбор результатов: страница {page} из 5…";
-                async Task AppendCurrentPageAsync()
-                {
-                    var json = await _tab.ExtractShoppingCardsAsync();
-                    try
-                    {
-                        using var document = JsonDocument.Parse(json);
-                        if (document.RootElement.ValueKind != JsonValueKind.Array) return;
-                        foreach (var item in document.RootElement.EnumerateArray())
-                        {
-                            var key = item.TryGetProperty("url", out var url) && !string.IsNullOrWhiteSpace(url.GetString())
-                                ? url.GetString()!
-                                : item.TryGetProperty("name", out var name) ? name.GetString() ?? string.Empty : string.Empty;
-                            if (string.IsNullOrWhiteSpace(key) || !itemKeys.Add(key)) continue;
-                            rawItems.Add(item.GetRawText());
-                            if (rawItems.Count >= 150) break;
-                        }
-                    }
-                    catch (JsonException) { }
-                }
-                await AppendCurrentPageAsync();
+                StatusText.Text = "Поисковая машина находит страницы товаров; Nexus читает их локально…";
+                var progress = new Progress<string>(message => StatusText.Text = message);
+                var discovery = await NexusSearchService.SearchShoppingAsync(query, null, progress,
+                    operation.Token);
+                AppendCardsJson(discovery.CardsJson);
+                rawCount = rawItems.Count;
+                pages = discovery.DiscoveryCount;
+                pagesViewed = discovery.DiscoveryCount;
+                SledopytDiagnosticsService.Record("shopping", "provider-search",
+                    rawCount > 0 ? "success" : "failed", stopwatch.ElapsedMilliseconds,
+                    discovery.DiscoveryCount, rawCount, rawCount > 0 ? "ok" : "no-cards",
+                    runId, "button-or-enter", surface);
                 UpdatePreview();
-                for (var scrollRound = 0; scrollRound < 6 && rawItems.Count < 150; scrollRound++)
+            }
+            else
+            {
+                StatusText.Text = "Nexus Следопыт находит поиск сайта и ждёт обновления DOM…";
+                var searched = await tab.SearchCurrentSiteForAgentAsync(query, operation.Token);
+                SledopytDiagnosticsService.Record("shopping", "search-submit",
+                    searched ? "success" : "partial", stopwatch.ElapsedMilliseconds,
+                    code: searched ? "site-search-confirmed" : "search-field-not-found",
+                    runId: runId, trigger: "button-or-enter", surface: surface);
+                if (!searched)
+                    StatusText.Text = "Поле поиска не найдено — читаю открытый каталог, затем проверю домен через поисковую машину…";
+                var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { tab.CurrentUrl };
+                for (var page = 1; page <= 5 && rawItems.Count < 150; page++)
                 {
-                    var catalogChanged = await _tab.ScrollShoppingResultsAsync();
+                    pages = page;
+                    pagesViewed = page;
+                    StatusText.Text = $"Сбор результатов: страница {page} из 5…";
+                    async Task AppendCurrentPageAsync()
+                    {
+                        AppendCardsJson(await tab.ExtractShoppingCardsAsync());
+                    }
                     await AppendCurrentPageAsync();
                     UpdatePreview();
-                    if (!catalogChanged) break;
+                    SledopytDiagnosticsService.Record("shopping", "page-extracted",
+                        rawItems.Count > 0 ? "success" : "partial", stopwatch.ElapsedMilliseconds,
+                        rawItems.Count, code: $"page-{page}", runId: runId,
+                        trigger: "button-or-enter", surface: surface);
+                    for (var scrollRound = 0; scrollRound < 6 && rawItems.Count < 150; scrollRound++)
+                    {
+                        var catalogChanged = await tab.ScrollShoppingResultsAsync();
+                        await AppendCurrentPageAsync();
+                        UpdatePreview();
+                        if (!catalogChanged) break;
+                    }
+                    var next = await tab.GetNextShoppingPageUrlAsync();
+                    if (page == 5) break;
+                    if (string.IsNullOrWhiteSpace(next))
+                    {
+                        StatusText.Text = $"Поиск кнопки следующей страницы после {page}…";
+                        if (!await tab.TryClickNextShoppingPageAsync()) break;
+                        continue;
+                    }
+                    if (!visited.Add(next)) break;
+                    StatusText.Text = $"Переход к странице {page + 1}…";
+                    if (!await tab.NavigateAndWaitAsync(next, TimeSpan.FromSeconds(20))) break;
+                    await Task.Delay(1200, operation.Token);
                 }
-                var next = await _tab.GetNextShoppingPageUrlAsync();
-                if (page == 5) break;
-                if (string.IsNullOrWhiteSpace(next))
+
+                if (rawItems.Count == 0)
                 {
-                    StatusText.Text = $"Поиск кнопки следующей страницы после {page}…";
-                    if (!await _tab.TryClickNextShoppingPageAsync()) break;
-                    continue;
+                    StatusText.Text = "Карточки сайта не прочитаны — выполняю резервный поиск только по этому домену…";
+                    var progress = new Progress<string>(message => StatusText.Text = message);
+                    var discovery = await NexusSearchService.SearchShoppingAsync(query, tab.CurrentHost, progress,
+                        operation.Token);
+                    AppendCardsJson(discovery.CardsJson);
+                    SledopytDiagnosticsService.Record("shopping", "site-fallback",
+                        rawItems.Count > 0 ? "success" : "failed", stopwatch.ElapsedMilliseconds,
+                        discovery.DiscoveryCount, rawItems.Count, rawItems.Count > 0 ? "ok" : "no-cards",
+                        runId, "button-or-enter", surface);
+                    UpdatePreview();
                 }
-                if (!visited.Add(next)) break;
-                StatusText.Text = $"Переход к странице {page + 1}…";
-                if (!await _tab.NavigateAndWaitAsync(next, TimeSpan.FromSeconds(20))) break;
-                await Task.Delay(1200, _cancellation.Token);
             }
             var count = rawItems.Count;
             rawCount = count;
             if (count == 0)
             {
-                StatusText.Text = "Локальный AI определяет, что показал сайт…";
-                var visibleText = await _tab.GetReadablePageTextAsync();
-                var diagnosis = await LocalIntelligenceService.DiagnoseAgentPageAsync(
-                    query, _tab.Title, _tab.CurrentUrl, visibleText, _cancellation.Token);
+                var diagnosis = globalSearch
+                    ? "Поисковая машина не вернула страниц, которые можно безопасно использовать как карточки товаров."
+                    : "Ни DOM каталога, ни ограниченный поиск по домену не дали проверяемых карточек товаров.";
                 throw new InvalidOperationException("Карточки товаров не извлечены. " + diagnosis);
             }
-            var cards = "[" + string.Join(",", rawItems) + "]";
+            var cards = CardsJson();
             preview ??= LocalIntelligenceService.BuildShoppingPreview(query, cards);
             if (preview.Items.Count > 0) ShowShoppingCards(preview);
             StatusText.Text = $"Карточки готовы · уточняю итог среди {count} вариантов локально…";
+            SledopytDiagnosticsService.Record("shopping", "ranking", "success",
+                stopwatch.ElapsedMilliseconds, count, preview.Items.Count, runId: runId,
+                trigger: "button-or-enter", surface: surface);
             ShoppingReport report = preview;
-            using (var rankingBudget = CancellationTokenSource.CreateLinkedTokenSource(_cancellation.Token))
+            using (var rankingBudget = CancellationTokenSource.CreateLinkedTokenSource(operation.Token))
             {
                 rankingBudget.CancelAfter(TimeSpan.FromSeconds(45));
                 try
                 {
                     report = await LocalIntelligenceService.AnalyzeShoppingResultsAsync(
-                        query, _tab.CurrentHost, cards, rankingBudget.Token);
+                        query, globalSearch ? "поисковая машина" : tab.CurrentHost, cards, rankingBudget.Token);
                 }
-                catch (OperationCanceledException) when (!_cancellation.IsCancellationRequested)
+                catch (OperationCanceledException) when (!operation.IsCancellationRequested)
                 {
                     // Deterministic cards are already visible; a slow optional
                     // recommendation must not make the search appear unfinished.
@@ -743,41 +1943,69 @@ public partial class LocalAiDockControl : UserControl
                 throw new InvalidOperationException(
                     "Каталог открыт, но карточек, связанных с запросом, не найдено. " +
                     "Следопыт не будет подменять результат несвязанными товарами.");
-            if (!_tab.IsPrivate)
-                await KnowledgeGraphService.RecordShoppingResearchAsync(report, _cancellation.Token);
+            if (!tab.IsPrivate)
+                await KnowledgeGraphService.RecordShoppingResearchAsync(report, operation.Token);
             ShowShoppingCards(report);
-            StatusText.Text = $"Готово. Просмотрено страниц: {pages}; вариантов в выводе: {report.Items.Count}.";
+            StatusText.Text = globalSearch
+                ? $"Готово. Поиском изучено источников: {pages}; вариантов в выводе: {report.Items.Count}."
+                : $"Готово. Просмотрено страниц: {pages}; вариантов в выводе: {report.Items.Count}.";
             SledopytDiagnosticsService.Record("shopping", "completed", "success",
-                stopwatch.ElapsedMilliseconds, rawCount, report.Items.Count, $"pages-{pagesViewed}");
+                stopwatch.ElapsedMilliseconds, rawCount, report.Items.Count, $"pages-{pagesViewed}",
+                runId, "button-or-enter", surface);
             CrashReportService.AddBreadcrumb("sledopyt", "shopping-completed");
             var top = report.Items.FirstOrDefault();
             VoiceAssistantService.Announce(
                 $"Анализ каталога завершён. Найдено вариантов: {report.Items.Count}. " +
                 (top is null ? string.Empty : $"Первый вариант: {top.Name}. Цена: {top.Price}."),
-                VoiceAnnouncementPriority.Important, _tab.IsPrivate);
+                VoiceAnnouncementPriority.Important, tab.IsPrivate);
+        }
+        catch (OperationCanceledException) when (operation.IsCancellationRequested)
+        {
+            SledopytDiagnosticsService.Record("shopping", "cancelled", "partial",
+                stopwatch.ElapsedMilliseconds, rawCount, code: "user-or-timeout", runId: runId,
+                trigger: "button-or-enter", surface: surface);
+            StatusText.Text = "Сбор остановлен.";
         }
         catch (OperationCanceledException)
         {
-            SledopytDiagnosticsService.Record("shopping", "cancelled", "partial",
-                stopwatch.ElapsedMilliseconds, rawCount, code: "user-or-timeout");
-            StatusText.Text = "Сбор остановлен.";
+            SledopytDiagnosticsService.Record("shopping", "failed", "failed",
+                stopwatch.ElapsedMilliseconds, rawCount, code: "stage-timeout", runId: runId,
+                trigger: "button-or-enter", surface: surface);
+            ResultBox.Text = "Один из сетевых этапов превысил лимит времени. Попробуйте повторить запрос или сменить поисковую систему.";
+            StatusText.Text = "Nexus Следопыт не завершил сетевой этап.";
         }
         catch (Exception ex)
         {
             SledopytDiagnosticsService.Record("shopping", "failed", "failed",
-                stopwatch.ElapsedMilliseconds, rawCount, code: ClassifyShoppingFailure(ex));
+                stopwatch.ElapsedMilliseconds, rawCount, code: ClassifyShoppingFailure(ex), runId: runId,
+                trigger: "button-or-enter", surface: surface);
             CrashReportService.AddBreadcrumb("sledopyt", "shopping-failed");
             ResultBox.Text = ex.Message;
             StatusText.Text = "Nexus Следопыт не собрал сравнение.";
             VoiceAssistantService.Announce("Следопыт не смог собрать сравнение товаров.",
-                VoiceAnnouncementPriority.Critical, _tab.IsPrivate);
+                VoiceAnnouncementPriority.Critical, tab.IsPrivate);
         }
-        finally { CancelButton.IsEnabled = false; }
+        finally
+        {
+            if (ReferenceEquals(_cancellation, operation)) _cancellation = null;
+            operation.Dispose();
+            CancelButton.IsEnabled = false;
+        }
+    }
+
+    private static string GetShoppingSurface(BrowserTab tab)
+    {
+        if (tab.CurrentUrl.Equals(UrlService.NewTabUrl, StringComparison.OrdinalIgnoreCase)) return "new-tab";
+        if (UrlService.IsSearchProviderUrl(tab.CurrentUrl) ||
+            tab.CurrentUrl.StartsWith("https://nexus.local/search.html", StringComparison.OrdinalIgnoreCase))
+            return "search-provider";
+        return UrlService.IsInternal(tab.CurrentUrl) ? "new-tab" : "site";
     }
 
     private static string ClassifyShoppingFailure(Exception ex) => ex switch
     {
         TimeoutException => "timeout",
+        HttpRequestException => "network",
         JsonException => "invalid-response",
         InvalidOperationException => "catalog-unavailable",
         _ => "operation-error"
@@ -806,7 +2034,7 @@ public partial class LocalAiDockControl : UserControl
         ShoppingCardsPanel.Children.Add(new TextBlock
         {
             Text = "Найдено вариантов: " + report.Items.Count,
-            Foreground = Brushes.White,
+            Foreground = ThemeBrush("TextBrush"),
             FontSize = 16,
             FontWeight = FontWeights.SemiBold,
             Margin = new Thickness(2, 0, 2, 9)
@@ -825,9 +2053,9 @@ public partial class LocalAiDockControl : UserControl
                 content.Children.Add(image);
                 _ = LoadShoppingImageAsync(image, item);
             }
-            content.Children.Add(new TextBlock { Text = item.Name, TextWrapping = TextWrapping.Wrap, FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White });
-            content.Children.Add(new TextBlock { Text = $"Цена: {item.Price}   Рейтинг: {item.Rating}", Margin = new Thickness(0, 6, 0, 0), Foreground = new SolidColorBrush(Color.FromRgb(127, 245, 231)) });
-            content.Children.Add(new TextBlock { Text = "Купили/отзывы: " + item.Buyers, Margin = new Thickness(0, 3, 0, 0), Foreground = new SolidColorBrush(Color.FromRgb(200, 205, 213)) });
+            content.Children.Add(new TextBlock { Text = item.Name, TextWrapping = TextWrapping.Wrap, FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = ThemeBrush("TextBrush") });
+            content.Children.Add(new TextBlock { Text = $"Цена: {item.Price}   Рейтинг: {item.Rating}", Margin = new Thickness(0, 6, 0, 0), Foreground = ThemeBrush("AccentBrush") });
+            content.Children.Add(new TextBlock { Text = "Купили/отзывы: " + item.Buyers, Margin = new Thickness(0, 3, 0, 0), Foreground = ThemeBrush("MutedTextBrush") });
             if (!string.IsNullOrWhiteSpace(item.Url))
             {
                 var open = new Button { Content = "Открыть товар", Tag = item.Url, Margin = new Thickness(0, 8, 0, 0), Padding = new Thickness(10, 6, 10, 6), HorizontalAlignment = HorizontalAlignment.Left };
@@ -836,8 +2064,8 @@ public partial class LocalAiDockControl : UserControl
             }
             ShoppingCardsPanel.Children.Add(new Border
             {
-                Background = new SolidColorBrush(Color.FromArgb(105, 16, 16, 16)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(120, 255, 255, 255)),
+                Background = ThemeBrush("PanelBrush"),
+                BorderBrush = ThemeBrush("BorderBrush"),
                 BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(12),
                 Padding = new Thickness(12), Margin = new Thickness(0, 0, 0, 9), Child = content
             });
@@ -846,10 +2074,13 @@ public partial class LocalAiDockControl : UserControl
         {
             Text = "ВЫВОД NEXUS AI\n" + report.Recommendation +
                    (string.IsNullOrWhiteSpace(report.Caveat) ? string.Empty : "\n\nОграничение: " + report.Caveat),
-            TextWrapping = TextWrapping.Wrap, Foreground = Brushes.White, Margin = new Thickness(3, 5, 3, 12)
+            TextWrapping = TextWrapping.Wrap, Foreground = ThemeBrush("TextBrush"), Margin = new Thickness(3, 5, 3, 12)
         });
         ShoppingCardsScroll.ScrollToHome();
     }
+
+    private static Brush ThemeBrush(string key) =>
+        (Brush)Application.Current.FindResource(key);
 
     private async Task LoadShoppingImageAsync(Image image, ShoppingCandidate item)
     {
@@ -891,10 +2122,12 @@ public partial class LocalAiDockControl : UserControl
     {
         if (sender is not Button { Tag: string url } || _tab?.Core is null) return;
         if (!Uri.TryCreate(url, UriKind.Absolute, out var target) ||
-            !Uri.TryCreate(_tab.CurrentUrl, UriKind.Absolute, out var current) ||
-            !(target.Host.Equals(current.Host, StringComparison.OrdinalIgnoreCase) ||
-              target.Host.EndsWith('.' + current.Host, StringComparison.OrdinalIgnoreCase) ||
-              current.Host.EndsWith('.' + target.Host, StringComparison.OrdinalIgnoreCase))) return;
+            !NexusSearchService.IsAllowedResultUrl(target.AbsoluteUri)) return;
+        if (!_shoppingAllowsCrossSiteResults &&
+            (!Uri.TryCreate(_tab.CurrentUrl, UriKind.Absolute, out var current) ||
+             !(target.Host.Equals(current.Host, StringComparison.OrdinalIgnoreCase) ||
+               target.Host.EndsWith('.' + current.Host, StringComparison.OrdinalIgnoreCase) ||
+               current.Host.EndsWith('.' + target.Host, StringComparison.OrdinalIgnoreCase)))) return;
         if (!_tab.IsPrivate)
             _ = KnowledgeGraphService.RecordResearchChoiceAsync(ShoppingQueryBox.Text.Trim(), target.AbsoluteUri);
         _tab.Core.Navigate(target.AbsoluteUri);
