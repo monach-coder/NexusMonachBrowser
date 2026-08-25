@@ -136,7 +136,12 @@ public sealed class BrowserSettings
     public CrashReportDestination CrashReportDestination { get; set; } = CrashReportDestination.HttpsCollector;
     public string CrashReportEndpoint { get; set; } = string.Empty;
     /// <summary>Репозиторий приёма крашей в формате «владелец/имя».</summary>
-    public string GitHubRepository { get; set; } = "monach-coder/NexusMonachBrowser";
+    public string GitHubRepository { get; set; } = "monach-coder/NexusMonachBrowser-crash-reports";
+    /// <summary>
+    /// URL подписанного манифеста сетевой поставки AI-моделей. Пусто —
+    /// модели не подтягиваются (полностью офлайн-режим).
+    /// </summary>
+    public string AiPackManifestUrl { get; set; } = string.Empty;
     public bool InitialProtectionSetupShown { get; set; }
     public BrowserTheme Theme { get; set; } = BrowserTheme.MonachAqua;
     public BrowserThemeMode ThemeMode { get; set; } = BrowserThemeMode.Dark;
@@ -184,6 +189,7 @@ public sealed class BrowserSettings
         CrashReportDestination = CrashReportDestination,
         CrashReportEndpoint = CrashReportEndpoint,
         GitHubRepository = GitHubRepository,
+        AiPackManifestUrl = AiPackManifestUrl,
         InitialProtectionSetupShown = InitialProtectionSetupShown,
         Theme = Theme,
         ThemeMode = ThemeMode,

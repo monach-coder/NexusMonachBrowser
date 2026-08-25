@@ -126,6 +126,9 @@ public static class GitHubCrashReportTransport
 
     private static void ConfigureClient(HttpClient client, string accessToken)
     {
+        // Клетка повторной конфигурации: один клиент живёт на всю очередь
+        // отправок, заголовки выставляются ровно один раз.
+        if (client.DefaultRequestHeaders.Authorization is not null) return;
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
         client.DefaultRequestHeaders.UserAgent.ParseAdd($"NexusGuardian/{ProductVersion}");
         client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
@@ -137,8 +140,10 @@ public static class GitHubCrashReportTransport
     {
         try
         {
-            // Сигнатуру берём в кавычки: квадратные скобки в GitHub-поиске — операторы.
-            var query = Uri.EscapeDataString($"repo:{repository} in:title \"[{signature}]\"");
+            // Сигнатуру берём в кавычки (скобки — операторы поиска), а запрос
+            // обязан содержать is:issue: иначе GitHub отвечает 422.
+            var query = Uri.EscapeDataString(
+                $"repo:{repository} is:issue in:title \"[{signature}]\"");
             using var response = await client.GetAsync($"{ApiRoot}/search/issues?q={query}", cancellationToken);
             if (!response.IsSuccessStatusCode) return null;
             using var document = await JsonDocument.ParseAsync(

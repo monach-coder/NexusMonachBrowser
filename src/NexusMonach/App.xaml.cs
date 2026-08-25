@@ -274,6 +274,8 @@ public partial class App : Application
                     _ = Task.Run(RussianStressDictionary.WarmUp);
                     // Осторожный режим: пробуем вернуть полный режим сами.
                     GpuRecoveryService.StartIfCautiousMode();
+                    // Недостающие AI-модели подтягиваются по сети в фоне.
+                    Services.OnlinePack.AiPackFetchService.StartBackgroundFetch();
                 }
             }
             if (smokeSelfTest)

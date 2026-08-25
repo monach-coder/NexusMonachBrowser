@@ -18,6 +18,11 @@ internal sealed class IntegrityFile
     public string Sha256 { get; set; } = string.Empty;
     public bool Critical { get; set; }
     public bool Large { get; set; }
+    /// <summary>
+    /// Файл сетевой поставки (AI-пакеты): в лёгкой установке его может не быть —
+    /// отсутствие не нарушение; после доставки проверяется на общих основаниях.
+    /// </summary>
+    public bool Pending { get; set; }
 }
 
 internal enum IntegrityState

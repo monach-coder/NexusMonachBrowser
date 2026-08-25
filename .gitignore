@@ -26,3 +26,4 @@ src/NexusMonach/AI/**/*.dll
 *.snk
 *.key
 .mimosa/
+src/Nexus.Setup/integrity-public-key.pem

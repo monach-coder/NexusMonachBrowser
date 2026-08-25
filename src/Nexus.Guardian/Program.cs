@@ -20,6 +20,7 @@ internal static class Program
              args[0].Equals("--generate-report-key", StringComparison.OrdinalIgnoreCase) ||
              args[0].Equals("--decrypt-report", StringComparison.OrdinalIgnoreCase) ||
              args[0].Equals("--create-manifest", StringComparison.OrdinalIgnoreCase) ||
+             args[0].Equals("--create-release-manifest", StringComparison.OrdinalIgnoreCase) ||
              args[0].Equals("--verify-only", StringComparison.OrdinalIgnoreCase) ||
              args[0].Equals("--background-update-check", StringComparison.OrdinalIgnoreCase) ||
              args[0].Equals("--apply-pending-update", StringComparison.OrdinalIgnoreCase));
@@ -51,6 +52,13 @@ internal static class Program
                 var keyIndex = Array.FindIndex(args, x => x.Equals("--private-key", StringComparison.OrdinalIgnoreCase));
                 IntegrityVerifier.CreateManifest(args[1], keyIndex >= 0 && keyIndex + 1 < args.Length ? args[keyIndex + 1] : null);
                 return 0;
+            }
+
+            if (args.Length > 1 && args[0].Equals("--create-release-manifest", StringComparison.OrdinalIgnoreCase))
+            {
+                var keyIndex = Array.FindIndex(args, x => x.Equals("--private-key", StringComparison.OrdinalIgnoreCase));
+                return ReleaseManifestTool.Create(args[1],
+                    keyIndex >= 0 && keyIndex + 1 < args.Length ? args[keyIndex + 1] : null);
             }
 
             if (args.Length > 0 && args[0].Equals("--verify-only", StringComparison.OrdinalIgnoreCase))

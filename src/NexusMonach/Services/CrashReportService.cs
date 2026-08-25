@@ -219,7 +219,12 @@ public static partial class CrashReportService
                 sent++;
             }
             catch (OperationCanceledException) { throw; }
-            catch { /* Очередь остаётся локально для следующей попытки. */ }
+            catch (Exception ex)
+            {
+                // Очередь остаётся локально, но отказ доставки больше не
+                // молчит: причина видна в сейфе и в причинном графе.
+                SwallowLog.Log("crash-delivery", Path.GetFileName(file), ex);
+            }
         }
         return sent;
     }

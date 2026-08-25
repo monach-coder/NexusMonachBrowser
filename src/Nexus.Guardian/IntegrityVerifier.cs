@@ -102,6 +102,9 @@ internal static class IntegrityVerifier
 
             if (!File.Exists(fullPath))
             {
+                // Файл сетевой поставки ещё не докачан — не нарушение.
+                if (entry.Pending)
+                    continue;
                 (entry.Critical ? criticalProblems : otherProblems).Add("Отсутствует: " + entry.Path);
                 continue;
             }
@@ -152,7 +155,7 @@ internal static class IntegrityVerifier
         return new IntegrityResult { State = IntegrityState.Verified };
     }
 
-    public static void CreateManifest(string root, string? privateKeyPath)
+    public static void CreateManifest(string root, string? privateKeyPath, bool markAiPending = false)
     {
         var normalizedRoot = Path.GetFullPath(root);
         var version = FileVersionInfo.GetVersionInfo(Path.Combine(normalizedRoot, "NexusMonach.Browser.exe")).ProductVersion ?? "unknown";
@@ -162,7 +165,7 @@ internal static class IntegrityVerifier
             CreatedUtc = DateTimeOffset.UtcNow,
             Files = Directory.EnumerateFiles(normalizedRoot, "*", SearchOption.AllDirectories)
                 .Where(path => !ShouldExclude(normalizedRoot, path))
-                .Select(path => CreateEntry(normalizedRoot, path))
+                .Select(path => CreateEntry(normalizedRoot, path, markAiPending))
                 .OrderBy(x => x.Path, StringComparer.Ordinal)
                 .ToList()
         };
@@ -191,7 +194,7 @@ internal static class IntegrityVerifier
         File.WriteAllText(Path.Combine(directory, PublicKeyName), ecdsa.ExportSubjectPublicKeyInfoPem(), new UTF8Encoding(false));
     }
 
-    private static IntegrityFile CreateEntry(string root, string path)
+    private static IntegrityFile CreateEntry(string root, string path, bool markAiPending = false)
     {
         var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
         var info = new FileInfo(path);
@@ -203,7 +206,11 @@ internal static class IntegrityVerifier
             Length = info.Length,
             Sha256 = ComputeSha256(path),
             Critical = critical,
-            Large = info.Length >= 64L * 1024 * 1024 || largeModelBlob
+            Large = info.Length >= 64L * 1024 * 1024 || largeModelBlob,
+            // Вариант манифеста для лёгкой установки: AI помечается как
+            // «приедет по сети» — допустимо отсутствовать до доставки.
+            Pending = markAiPending &&
+                      relative.StartsWith("AI/", StringComparison.OrdinalIgnoreCase)
         };
     }
 
@@ -212,6 +219,13 @@ internal static class IntegrityVerifier
         var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
         return relative.Equals(ManifestName, StringComparison.OrdinalIgnoreCase) ||
                relative.Equals(SignatureName, StringComparison.OrdinalIgnoreCase) ||
+               // Манифест сетевой поставки живёт рядом, но не является частью
+               // локальной целостности: он описывает СКАЧИВАЕМОЕ, а не стоящее.
+               relative.Equals("release-manifest.json", StringComparison.OrdinalIgnoreCase) ||
+               relative.Equals("release-manifest.json.sig", StringComparison.OrdinalIgnoreCase) ||
+               // Деинсталлятор кладёт сам установщик; это инфраструктура,
+               // а не компонент браузера.
+               relative.Equals("NexusMonach-Setup.exe", StringComparison.OrdinalIgnoreCase) ||
                relative.StartsWith("Data/", StringComparison.OrdinalIgnoreCase) ||
                // Служебное состояние внешних инструментов разработки не входит в
                // поставку и не влияет на поведение браузера — каталог .mimosa
