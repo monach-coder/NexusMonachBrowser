@@ -226,19 +226,25 @@ dotnet run --project src/NexusMonach/NexusMonach.csproj -- --smoke-self-test
 | `Alt+←` / `Alt+→` | назад / вперёд |
 | `F5` | обновить / остановить |
 
+## Установка
+
+- **Лёгкий сетевой установщик** — [`NexusMonach-Setup.exe`](https://github.com/monach-coder/NexusMonachBrowser/releases/latest/download/NexusMonach-Setup.exe) (~68 МБ): ставит ядро браузера для текущего пользователя без прав администратора за секунды; нейросети (перевод, голос, распознавание — 2.1 ГБ) подтягиваются по сети в фоне, каждый пакет проверяется SHA-256 по подписанному ECDSA-манифесту.
+- **Полный офлайн-архив** — `NexusMonach-Portable-win-x64.zip` из раздела [Releases](https://github.com/monach-coder/NexusMonachBrowser/releases): все компоненты, включая модели, без сети.
+
 ## Структура проекта
 
 ```text
 src/Nexus.Intelligence.Contracts/  публичные интерфейсы и DTO локального Fabric
 src/Nexus.Intelligence.Fabric/     открытая исследовательская оркестрация
-src/Nexus.Guardian/                проверка целостности, crash-loop и безопасный запуск
-src/Nexus.Guardian.Relay/          безопасная доставка отчётов тестировщиков в Matrix
+src/Nexus.Guardian/                целостность, crash-loop, подписанные манифесты поставки
+src/Nexus.Guardian.Relay/          опциональный релей HTTPS-приёмника отчётов
+src/Nexus.Setup/                   лёгкий сетевой установщик и деинсталлятор
 src/NexusMonach/
-  Assets/        эмблема и локальная стартовая страница
+  Assets/        эмблема и локальные страницы (старт, поиск, 3D-граф крашей)
   Models/        настройки, вкладки и пользовательские данные
-  Services/      профиль, защита, URL, локальный граф знаний, расширения
+  Services/      профиль, защита, перевод, голос, OnlinePack — сетевая поставка AI
   Views/         главное окно и вспомогательные окна
-scripts/         сборка и проверка
+scripts/         сборка, установка, подпись релизов
 ```
 
 Весь собственный исходный код оболочки, Nexus Guardian, Guardian Relay, `Nexus.Intelligence.Contracts` и `Nexus.Intelligence.Fabric` распространяется по **GNU General Public License v3.0 only (`GPL-3.0-only`)**. При распространении изменённой версии необходимо предоставить соответствующий исходный код на условиях GPLv3. Название и эмблема регулируются отдельной политикой `TRADEMARKS.md`, а сторонние runtime, библиотеки и модели сохраняют собственные лицензии, перечисленные в `THIRD_PARTY_NOTICES.md`.
