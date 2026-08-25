@@ -69,7 +69,10 @@ internal sealed class PrecomputedDubbingPlayer : IDisposable
         lock (_sync)
         {
             _paused = true;
-            try { _output?.Pause(); } catch { }
+            try { _output?.Pause(); } catch (Exception swallowed)
+            {
+                Services.SwallowLog.Log("precomputed-dubbing", "Pause", swallowed);
+            }
         }
     }
 
@@ -78,7 +81,10 @@ internal sealed class PrecomputedDubbingPlayer : IDisposable
         lock (_sync)
         {
             _paused = false;
-            try { _output?.Play(); } catch { }
+            try { _output?.Play(); } catch (Exception swallowed)
+            {
+                Services.SwallowLog.Log("precomputed-dubbing", "Resume", swallowed);
+            }
             Monitor.Pulse(_sync);
         }
     }
@@ -93,7 +99,10 @@ internal sealed class PrecomputedDubbingPlayer : IDisposable
             Monitor.Pulse(_sync);
         }
         _queue.CompleteAdding();
-        try { _thread.Join(3000); } catch { }
+        try { _thread.Join(3000); } catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("precomputed-dubbing", "Dispose", swallowed);
+        }
         lock (_sync)
         {
             StopCurrentLocked();
@@ -101,7 +110,10 @@ internal sealed class PrecomputedDubbingPlayer : IDisposable
         }
         _queue.Dispose();
         foreach (var path in pendingFiles)
-            try { File.Delete(path); } catch { }
+            try { File.Delete(path); } catch (Exception swallowed)
+            {
+                Services.SwallowLog.Log("precomputed-dubbing", "Dispose", swallowed);
+            }
     }
 
     private void Run()
@@ -118,10 +130,16 @@ internal sealed class PrecomputedDubbingPlayer : IDisposable
                         WaveFileReader reader;
                         lock (_sync)
                         {
-                            if (_disposed) { try { File.Delete(path); } catch { } return; }
+                            if (_disposed) { try { File.Delete(path); } catch (Exception swallowed)
+                            {
+                                Services.SwallowLog.Log("precomputed-dubbing", "Run", swallowed);
+                            } return; }
                             while (_paused && !_disposed)
                                 Monitor.Wait(_sync);
-                            if (_disposed) { try { File.Delete(path); } catch { } return; }
+                            if (_disposed) { try { File.Delete(path); } catch (Exception swallowed)
+                            {
+                                Services.SwallowLog.Log("precomputed-dubbing", "Run", swallowed);
+                            } return; }
                             StopCurrentLocked();
                             reader = new WaveFileReader(path);
                             output = new WaveOutEvent();
@@ -167,12 +185,18 @@ internal sealed class PrecomputedDubbingPlayer : IDisposable
                             StopCurrentLocked();
                         }
                     }
-                    try { File.Delete(path); } catch { }
+                    try { File.Delete(path); } catch (Exception swallowed)
+                    {
+                        Services.SwallowLog.Log("precomputed-dubbing", "Run", swallowed);
+                    }
                 }
                 Interlocked.Increment(ref _playedChains);
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException swallowed)
+        {
+            Services.SwallowLog.Log("precomputed-dubbing", "Run", swallowed);
+        }
         catch
         {
             // Плеер фоновый: любые сбои просто завершают цепочку.
@@ -185,9 +209,18 @@ internal sealed class PrecomputedDubbingPlayer : IDisposable
 
     private void StopCurrentLocked()
     {
-        try { _output?.Stop(); } catch { }
-        try { _output?.Dispose(); } catch { }
-        try { _reader?.Dispose(); } catch { }
+        try { _output?.Stop(); } catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("precomputed-dubbing", "StopCurrentLocked", swallowed);
+        }
+        try { _output?.Dispose(); } catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("precomputed-dubbing", "StopCurrentLocked", swallowed);
+        }
+        try { _reader?.Dispose(); } catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("precomputed-dubbing", "StopCurrentLocked", swallowed);
+        }
         _output = null;
         _reader = null;
     }

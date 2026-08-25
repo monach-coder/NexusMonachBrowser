@@ -176,6 +176,7 @@ public partial class App : Application
         var smokeSelfTest = e.Args.Any(x => x.Equals("--smoke-self-test", StringComparison.OrdinalIgnoreCase));
         ShutdownMode = ShutdownMode.OnLastWindowClose;
         AppPaths.Initialize(e.Args);
+        Services.Ui.CaptureFrom(this);
         CrashReportService.Initialize();
         CrashReportService.AddBreadcrumb("startup", "app-paths-ready");
         if (GuardianRuntime.IsSafeMode)

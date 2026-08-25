@@ -48,11 +48,19 @@ public partial class MainWindow : Window
     private int[] _localUdpPorts = [];
     private LocalPortInfo[] _localPortDetails = [];
     private bool _localPortsAvailable;
-    private readonly Dictionary<BrowserTab, string> _lastKnowledgeUrl = [];
-    private readonly Dictionary<BrowserTab, CancellationTokenSource> _searchOperations = [];
-    private readonly Dictionary<BrowserTab, PendingSiteResearch> _pendingSearchFollowUp = [];
-    private readonly Dictionary<BrowserTab, SiteResearchContext> _siteResearchContexts = [];
-    private readonly Dictionary<BrowserTab, CancellationTokenSource> _siteResearchOperations = [];
+    // Одна точка правды о per-вкладочном исследовании вместо пяти
+    // параллельных словарей, которые было легко рассинхронизировать.
+    private readonly Dictionary<BrowserTab, TabResearchState> _tabResearch = [];
+
+    private TabResearchState ResearchState(BrowserTab tab)
+    {
+        if (!_tabResearch.TryGetValue(tab, out var state))
+        {
+            state = new TabResearchState();
+            _tabResearch[tab] = state;
+        }
+        return state;
+    }
     private readonly SemaphoreSlim _voiceListenGate = new(1, 1);
     private CancellationTokenSource? _voiceListenCancellation;
     private CancellationTokenSource? _handsFreeCancellation;
@@ -67,6 +75,20 @@ public partial class MainWindow : Window
     private BrowserTab? ActiveTab => TabsList.SelectedItem as BrowserTab;
     private sealed record PendingSiteResearch(string Query, string RunId, string Trigger);
     private sealed record SiteResearchContext(string Query, string Host, string RunId, string Trigger);
+
+    /// <summary>
+    /// Per-вкладочное состояние исследований: граф знаний, поиск Nexus,
+    /// ожидание выбора результата и анализ выбранного сайта — всё вместе,
+    /// с общим жизненным циклом «от активности до закрытия вкладки».
+    /// </summary>
+    private sealed class TabResearchState
+    {
+        public string? LastKnowledgeUrl { get; set; }
+        public CancellationTokenSource? NexusSearch { get; set; }
+        public PendingSiteResearch? PendingFollowUp { get; set; }
+        public SiteResearchContext? ResearchContext { get; set; }
+        public CancellationTokenSource? SiteResearch { get; set; }
+    }
 
     public MainWindow(bool isPrivate)
     {
@@ -273,19 +295,20 @@ public partial class MainWindow : Window
             if (!_isPrivate)
             {
                 var current = tab.CurrentUrl;
-                _lastKnowledgeUrl.TryGetValue(tab, out var previous);
-                _lastKnowledgeUrl[tab] = current;
+                var knowledge = ResearchState(tab);
+                var previous = knowledge.LastKnowledgeUrl;
+                knowledge.LastKnowledgeUrl = current;
                 _ = IndexKnowledgeAsync(tab, current, previous);
             }
-            if (_pendingSearchFollowUp.TryGetValue(tab, out var pending) &&
+            if (_tabResearch.TryGetValue(tab, out var state) && state.PendingFollowUp is { } pending &&
                 !UrlService.IsInternal(tab.CurrentUrl) && !UrlService.IsSearchProviderUrl(tab.CurrentUrl))
             {
-                _pendingSearchFollowUp.Remove(tab);
+                state.PendingFollowUp = null;
                 var context = new SiteResearchContext(pending.Query, tab.CurrentHost, pending.RunId, pending.Trigger);
-                _siteResearchContexts[tab] = context;
+                state.ResearchContext = context;
                 ScheduleSelectedSiteResearch(tab, context);
             }
-            else if (_siteResearchContexts.TryGetValue(tab, out var context))
+            else if (_tabResearch.TryGetValue(tab, out var state2) && state2.ResearchContext is { } context)
             {
                 if (IsSameSite(context.Host, tab.CurrentHost) &&
                     !UrlService.IsInternal(tab.CurrentUrl) && !UrlService.IsSearchProviderUrl(tab.CurrentUrl))
@@ -311,8 +334,8 @@ public partial class MainWindow : Window
         {
             if (!NexusSearchService.IsAllowedResultUrl(e.Url) || !Uri.TryCreate(e.Url, UriKind.Absolute, out var target)) return;
             if (!_isPrivate) await NexusSearchService.RecordChoiceAsync(e.Query, target.AbsoluteUri);
-            if (!_pendingSearchFollowUp.TryGetValue(tab, out var pending) ||
-                !pending.Query.Equals(e.Query, StringComparison.OrdinalIgnoreCase))
+            if (!(_tabResearch.TryGetValue(tab, out var state) && state.PendingFollowUp is { } pending &&
+                  pending.Query.Equals(e.Query, StringComparison.OrdinalIgnoreCase)))
                 BeginPendingSiteResearch(tab, e.Query, "nexus-search", "search-provider");
             tab.Navigate(target.AbsoluteUri);
         };
@@ -377,7 +400,10 @@ public partial class MainWindow : Window
                 if (ok)
                     System.Diagnostics.Debug.WriteLine("[Trail] Порт-страж применён к вкладке");
             }
-            catch { }
+            catch (Exception swallowed)
+            {
+                Services.SwallowLog.Log("main-window", "EnsureTabReadyAsync", swallowed);
+            }
         }
         SyncUi();
         LocalAiDock.UpdateTab(tab);
@@ -408,12 +434,16 @@ public partial class MainWindow : Window
 
     private void BeginPendingSiteResearch(BrowserTab tab, string query, string trigger, string surface)
     {
-        if (_pendingSearchFollowUp.Remove(tab, out var previous))
+        var state = ResearchState(tab);
+        if (state.PendingFollowUp is { } previous)
+        {
             SledopytDiagnosticsService.Record("site-research", "cancelled", "partial",
                 code: "superseded-query", runId: previous.RunId, trigger: previous.Trigger,
                 surface: "search-provider");
+            state.PendingFollowUp = null;
+        }
         var runId = SledopytDiagnosticsService.Begin("site-research", trigger, surface);
-        _pendingSearchFollowUp[tab] = new PendingSiteResearch(query.Trim(), runId, trigger);
+        state.PendingFollowUp = new PendingSiteResearch(query.Trim(), runId, trigger);
         SledopytDiagnosticsService.Record("site-research", "preflight", "success", code: "waiting-result",
             runId: runId, trigger: trigger, surface: surface);
     }
@@ -422,17 +452,22 @@ public partial class MainWindow : Window
     {
         StopSelectedSiteResearch(tab, forgetContext: false);
         var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(90));
-        _siteResearchOperations[tab] = cancellation;
+        ResearchState(tab).SiteResearch = cancellation;
         _ = AnalyzeSelectedSearchResultAsync(tab, context, tab.CurrentUrl, cancellation);
     }
 
     private void StopSelectedSiteResearch(BrowserTab tab, bool forgetContext)
     {
-        if (_siteResearchOperations.Remove(tab, out var operation))
+        if (_tabResearch.TryGetValue(tab, out var state))
         {
-            operation.Cancel();
+            if (state.SiteResearch is { } operation)
+            {
+                state.SiteResearch = null;
+                operation.Cancel();
+            }
+            if (forgetContext)
+                state.ResearchContext = null;
         }
-        if (forgetContext) _siteResearchContexts.Remove(tab);
     }
 
     private async Task AnalyzeSelectedSearchResultAsync(BrowserTab tab, SiteResearchContext context, string sourceUrl,
@@ -491,7 +526,8 @@ public partial class MainWindow : Window
             SledopytDiagnosticsService.Record("site-research", "cancelled", "partial",
                 stopwatch.ElapsedMilliseconds, candidateCount, code: "navigation-or-timeout",
                 runId: context.RunId, trigger: context.Trigger, surface: "site");
-            if (!_siteResearchOperations.TryGetValue(tab, out var active) || !ReferenceEquals(active, cancellation))
+            if (!_tabResearch.TryGetValue(tab, out var activeState) ||
+                !ReferenceEquals(activeState.SiteResearch, cancellation))
                 return;
             Dispatcher.Invoke(() =>
             {
@@ -511,8 +547,9 @@ public partial class MainWindow : Window
         }
         finally
         {
-            if (_siteResearchOperations.TryGetValue(tab, out var active) && ReferenceEquals(active, cancellation))
-                _siteResearchOperations.Remove(tab);
+            if (_tabResearch.TryGetValue(tab, out var activeState) &&
+                ReferenceEquals(activeState.SiteResearch, cancellation))
+                activeState.SiteResearch = null;
             cancellation.Dispose();
         }
     }
@@ -535,16 +572,18 @@ public partial class MainWindow : Window
     {
         query = query.Trim();
         if (query.Length < 2) return;
-        if (_searchOperations.Remove(tab, out var previous))
+        var searchState = ResearchState(tab);
+        if (searchState.NexusSearch is { } previous)
         {
             previous.Cancel();
             previous.Dispose();
+            searchState.NexusSearch = null;
         }
         // The first offline model start can take tens of seconds on a 16 GB PC.
         // Individual AI stages have their own shorter budgets and deterministic
         // fallbacks; this outer limit only protects the whole research session.
         var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(150));
-        _searchOperations[tab] = cancellation;
+        searchState.NexusSearch = cancellation;
         try
         {
             var internalUrl = "https://nexus.local/search.html?q=" + Uri.EscapeDataString(query);
@@ -577,8 +616,9 @@ public partial class MainWindow : Window
         }
         finally
         {
-            if (_searchOperations.TryGetValue(tab, out var current) && ReferenceEquals(current, cancellation))
-                _searchOperations.Remove(tab);
+            if (_tabResearch.TryGetValue(tab, out var finalState) &&
+                ReferenceEquals(finalState.NexusSearch, cancellation))
+                finalState.NexusSearch = null;
             cancellation.Dispose();
         }
     }
@@ -837,10 +877,13 @@ public partial class MainWindow : Window
         if (index < 0) return;
         if (ReferenceEquals(BrowserHost.Content, tab.View))
             BrowserHost.Content = null;
-        _lastKnowledgeUrl.Remove(tab);
-        _pendingSearchFollowUp.Remove(tab);
-        StopSelectedSiteResearch(tab, forgetContext: true);
-        if (_searchOperations.Remove(tab, out var search)) { search.Cancel(); search.Dispose(); }
+        // Единая точка очистки: гасим обе операции и выкидываем состояние вкладки.
+        if (_tabResearch.Remove(tab, out var research))
+        {
+            research.NexusSearch?.Cancel();
+            research.NexusSearch?.Dispose();
+            research.SiteResearch?.Cancel();
+        }
         Tabs.Remove(tab);
         tab.Dispose();
 
@@ -1040,7 +1083,10 @@ public partial class MainWindow : Window
         {
             await ListenAndExecuteVoiceCommandAsync(requireWakeWord: false, TimeSpan.FromSeconds(6.5), cancellation.Token);
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException swallowed)
+        {
+            Services.SwallowLog.Log("main-window", "StartPushToTalkAsync", swallowed);
+        }
         catch (Exception ex)
         {
             CrashReportService.RecordNonFatal("voice", "push-to-talk", ex);
@@ -1089,7 +1135,10 @@ public partial class MainWindow : Window
                 await Task.Delay(300, session.Token);
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException swallowed)
+        {
+            Services.SwallowLog.Log("main-window", "RunHandsFreeLoopAsync", swallowed);
+        }
         catch (Exception ex)
         {
             CrashReportService.RecordNonFatal("voice", "hands-free", ex);
@@ -1556,7 +1605,11 @@ public partial class MainWindow : Window
         _voiceListenCancellation?.Cancel();
         StopHandsFree();
         SshTerminalDock.Disconnect();
-        foreach (var search in _searchOperations.Values) search.Cancel();
+        foreach (var research in _tabResearch.Values)
+        {
+            research.NexusSearch?.Cancel();
+            research.SiteResearch?.Cancel();
+        }
 
         if (!_isPrivate && _restartRequested)
         {

@@ -357,7 +357,10 @@ public static class WhisperService
 
     private static async Task DrainAsync(StreamReader reader)
     {
-        try { await reader.ReadToEndAsync(); } catch { }
+        try { await reader.ReadToEndAsync(); } catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("whisper", "DrainAsync", swallowed);
+        }
     }
 
     private static async Task<string> RunCliAsync(LaneState state, byte[] wav, bool translateToEnglish,
@@ -400,7 +403,10 @@ public static class WhisperService
             try { await process.WaitForExitAsync(cancellationToken); }
             catch (OperationCanceledException)
             {
-                try { process.Kill(entireProcessTree: true); } catch { }
+                try { process.Kill(entireProcessTree: true); } catch (Exception swallowed)
+                {
+                    Services.SwallowLog.Log("whisper", "RunCliAsync", swallowed);
+                }
                 throw;
             }
             var log = (await stdout) + "\n" + (await stderr);
@@ -416,7 +422,10 @@ public static class WhisperService
         finally
         {
             state.InferenceGate.Release();
-            try { Directory.Delete(work, recursive: true); } catch { }
+            try { Directory.Delete(work, recursive: true); } catch (Exception swallowed)
+            {
+                Services.SwallowLog.Log("whisper", "RunCliAsync", swallowed);
+            }
         }
     }
 
@@ -431,8 +440,14 @@ public static class WhisperService
 
     private static void StopServer(LaneState state)
     {
-        try { if (state.Server is { HasExited: false }) state.Server.Kill(entireProcessTree: true); } catch { }
-        try { state.Server?.Dispose(); } catch { }
+        try { if (state.Server is { HasExited: false }) state.Server.Kill(entireProcessTree: true); } catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("whisper", "StopServer", swallowed);
+        }
+        try { state.Server?.Dispose(); } catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("whisper", "StopServer", swallowed);
+        }
         state.Server = null;
         state.InferenceEndpoint = null;
     }

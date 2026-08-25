@@ -32,7 +32,10 @@ internal sealed class PreparedDubbingSpeech : IDisposable
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        try { File.Delete(Path); } catch { }
+        try { File.Delete(Path); } catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("neural-voice", "Dispose", swallowed);
+        }
     }
 }
 
@@ -102,7 +105,10 @@ public static class NeuralVoiceService
         }
         finally
         {
-            try { File.Delete(output); } catch { }
+            try { File.Delete(output); } catch (Exception swallowed)
+            {
+                Services.SwallowLog.Log("neural-voice", "WarmUpAsync", swallowed);
+            }
         }
     }
 
@@ -126,7 +132,10 @@ public static class NeuralVoiceService
         }
         catch
         {
-            try { File.Delete(output); } catch { }
+            try { File.Delete(output); } catch (Exception swallowed)
+            {
+                Services.SwallowLog.Log("neural-voice", "PrepareDubbingSpeechAsync", swallowed);
+            }
             throw;
         }
     }
@@ -177,7 +186,10 @@ public static class NeuralVoiceService
             }
             finally
             {
-                try { File.Delete(output); } catch { }
+                try { File.Delete(output); } catch (Exception swallowed)
+                {
+                    Services.SwallowLog.Log("neural-voice", "TrySpeak", swallowed);
+                }
             }
         }
     }
@@ -190,7 +202,10 @@ public static class NeuralVoiceService
         var state = StateFor(lane);
         Interlocked.Increment(ref state.StopGeneration);
         lock (state.OutputSync)
-            try { state.ActiveOutput?.Stop(); } catch { }
+            try { state.ActiveOutput?.Stop(); } catch (Exception swallowed)
+            {
+                Services.SwallowLog.Log("neural-voice", "Stop", swallowed);
+            }
         // A worker can be blocked inside model inference and has no cooperative
         // cancellation API. Killing it is the only bounded, idempotent stop;
         // the next request starts a fresh worker on demand.
@@ -216,7 +231,10 @@ public static class NeuralVoiceService
                         output.Pause();
                         _dubbingPausedByPriority = true;
                     }
-                    catch { }
+                    catch (Exception swallowed)
+                    {
+                        Services.SwallowLog.Log("neural-voice", "SuspendDubbingPlayback", swallowed);
+                    }
         }
     }
 
@@ -229,7 +247,10 @@ public static class NeuralVoiceService
             lock (DubbingLane.OutputSync)
                 if (_dubbingPausedByPriority &&
                     DubbingLane.ActiveOutput is { PlaybackState: PlaybackState.Paused } output)
-                    try { output.Play(); } catch { }
+                    try { output.Play(); } catch (Exception swallowed)
+                    {
+                        Services.SwallowLog.Log("neural-voice", "ResumeDubbingPlayback", swallowed);
+                    }
             _dubbingPausedByPriority = false;
             DubbingPlaybackAllowed.Set();
         }
@@ -248,8 +269,14 @@ public static class NeuralVoiceService
                 return state.Worker;
             if (state.Worker is not null)
             {
-                try { if (!state.Worker.HasExited) state.Worker.Kill(true); } catch { }
-                try { state.Worker.Dispose(); } catch { }
+                try { if (!state.Worker.HasExited) state.Worker.Kill(true); } catch (Exception swallowed)
+                {
+                    Services.SwallowLog.Log("neural-voice", "EnsureWorker", swallowed);
+                }
+                try { state.Worker.Dispose(); } catch (Exception swallowed)
+                {
+                    Services.SwallowLog.Log("neural-voice", "EnsureWorker", swallowed);
+                }
                 state.Worker = null;
             }
             var start = new ProcessStartInfo(executable)
@@ -432,7 +459,10 @@ public static class NeuralVoiceService
         }
         catch
         {
-            try { if (!process.HasExited) process.Kill(true); } catch { }
+            try { if (!process.HasExited) process.Kill(true); } catch (Exception swallowed)
+            {
+                Services.SwallowLog.Log("neural-voice", "SynthesizeWithPiperCli", swallowed);
+            }
             throw;
         }
         finally
@@ -484,7 +514,10 @@ public static class NeuralVoiceService
             }
             if (!completed.Wait(PlaybackTimeout))
             {
-                try { player.Stop(); } catch { }
+                try { player.Stop(); } catch (Exception swallowed)
+                {
+                    Services.SwallowLog.Log("neural-voice", "PlayWave", swallowed);
+                }
                 throw new TimeoutException("Воспроизведение локальной речи не завершилось вовремя.");
             }
             if (stopped?.Exception is not null) throw stopped.Exception;
@@ -582,8 +615,14 @@ public static class NeuralVoiceService
             state.WorkerStderrTail.Clear();
         }
         if (worker is null) return;
-        try { if (!worker.HasExited) worker.Kill(true); } catch { }
-        try { worker.Dispose(); } catch { }
+        try { if (!worker.HasExited) worker.Kill(true); } catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("neural-voice", "StopWorker", swallowed);
+        }
+        try { worker.Dispose(); } catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("neural-voice", "StopWorker", swallowed);
+        }
     }
 
     /// <summary>Thrown when the TTS worker process dies before answering a request.</summary>

@@ -8,7 +8,7 @@ public sealed class OnlineAudioTrackTapTests
     [Theory]
     [InlineData("https://rr4---sn-abc.googlevideo.com/videoplayback?mime=audio%2Fmp4")]
     [InlineData("https://example.com/audio.m4a")]
-    public async Task SafePublicUrl_IsAccepted(string url)
+    public void SafePublicUrl_IsAccepted(string url)
     {
         // Дорожечный URL с публичного хоста не должен отклоняться.
         // StartAsync вернёт null только если хост недоступен, но не из-за
@@ -44,7 +44,7 @@ public sealed class OnlineAudioTrackTapTests
     }
 
     [Fact]
-    public async Task DecodeTimeout_ReturnsNullInsteadOfHanging()
+    public void DecodeTimeout_ReturnsNullInsteadOfHanging()
     {
         // Если MediaFoundation зависает на битом контейнере, DecodeAllAsync
         // обязан вернуть null за 15 с, а не подвесить сеанс навечно.

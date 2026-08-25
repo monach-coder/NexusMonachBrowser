@@ -63,9 +63,15 @@ internal sealed class VideoDubbingBuffer : IAsyncDisposable
         if (Interlocked.Exchange(ref _completed, 1) == 0)
             _translations.Writer.TryComplete();
         try { await _preparer.ConfigureAwait(false); }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException swallowed)
+        {
+            Services.SwallowLog.Log("dubbing-buffer", "CompleteAsync", swallowed);
+        }
         try { await _speaker.ConfigureAwait(false); }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException swallowed)
+        {
+            Services.SwallowLog.Log("dubbing-buffer", "CompleteAsync", swallowed);
+        }
     }
 
     private async Task PrepareLoopAsync()
@@ -320,14 +326,20 @@ internal sealed class VideoDubbingBuffer : IAsyncDisposable
                 return;
             while (_prepared.Reader.TryRead(out var item)) ready.Enqueue(item);
         }
-        catch (TimeoutException) { }
+        catch (TimeoutException swallowed)
+        {
+            Services.SwallowLog.Log("dubbing-buffer", "WaitForRefillAsync", swallowed);
+        }
     }
 
     public async ValueTask DisposeAsync()
     {
         _stop.Cancel();
         _translations.Writer.TryComplete();
-        try { await CompleteAsync().ConfigureAwait(false); } catch { }
+        try { await CompleteAsync().ConfigureAwait(false); } catch (Exception swallowed)
+        {
+            Services.SwallowLog.Log("dubbing-buffer", "DisposeAsync", swallowed);
+        }
         _stop.Dispose();
     }
 

@@ -115,7 +115,7 @@ public static class AntivirusScanService
     }
 
     private static void SetState(DownloadItem item, DownloadScanState state) =>
-        System.Windows.Application.Current.Dispatcher.Invoke(() => item.ScanState = state);
+        Ui.Invoke(() => item.ScanState = state);
 
     private static string? FindMpCmdRun()
     {
