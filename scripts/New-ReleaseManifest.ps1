@@ -34,9 +34,10 @@ Get-ChildItem "dist" -Filter "nexus-*.zip" | Copy-Item -Destination $out.FullNam
 
 # Установщик проверяет подпись манифеста тем же ключом, которым подписан
 # дистрибутив: кладём публичную половину рядом с проектом установщика.
-$distPublic = Join-Path $root "dist\NexusMonach-Portable\integrity-public-key.pem"
+# $root здесь — сам каталог сборки, $repo — корень проекта.
+$distPublic = Join-Path $root "integrity-public-key.pem"
 if (Test-Path $distPublic) {
-    Copy-Item $distPublic (Join-Path $root "src\Nexus.Setup\integrity-public-key.pem") -Force
+    Copy-Item $distPublic (Join-Path $repo "src\Nexus.Setup\integrity-public-key.pem") -Force
     Write-Host "Setup trust key refreshed from dist" -ForegroundColor Cyan
 }
 
