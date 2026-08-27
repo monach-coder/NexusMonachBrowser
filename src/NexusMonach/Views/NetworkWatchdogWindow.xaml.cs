@@ -49,7 +49,9 @@ public partial class NetworkWatchdogWindow : Window
 
     /// <summary>
     /// Сканирует порты этой машины через IP Helper API (без прав админа),
-    /// заполняет таблицу и озвучивает итог голосом помощника.
+    /// заполняет таблицу и озвучивает итог голосом помощника. Итог честно
+    /// разделяет: утечки закрыты порт-щитом автоматически, службы —
+    /// сознательно не тронуты.
     /// </summary>
     private void ScanPorts_Click(object sender, RoutedEventArgs e)
     {
@@ -64,15 +66,23 @@ public partial class NetworkWatchdogWindow : Window
 
             var dangerous = results.Count(r => r.Severity == 2);
             var warnings = results.Count(r => r.Severity == 1);
+            var shieldOn = Services.PortShieldService.AreRulesApplied();
+            var shieldLine = shieldOn
+                ? "Порт-щит: АКТИВЕН — mDNS/SSDP/NetBIOS закрыты файрволом на сессию, IP не утекает."
+                : "Порт-щит: не активен (включите режим «Авто» в настройках — утечки закроются сами).";
             ScanSummary.Text =
-                $"Готово: слушателей — {results.Count}, опасных — {dangerous}, " +
-                $"требуют внимания — {warnings}. Красное стоит закрыть или привязать к 127.0.0.1.";
+                shieldLine + "\n" +
+                (dangerous > 0
+                    ? $"Службы удалённого доступа/файлообмена: {dangerous}. Браузер их НЕ закрывает, чтобы не сломать твой доступ — отключите ненужные вручную (RDP, SMB, VNC). "
+                    : "Опасных служб не найдено. ") +
+                $"Утечки LAN: {warnings} (порт-щит закрывает их автоматически).";
 
             // Голосовой итог — фирменная озвучка уведомлений браузера.
             var spoken = dangerous > 0
-                ? $"Сканирование завершено. Обнаружено опасных портов: {dangerous}. " +
-                  "Рекомендую закрыть их или проверить настройки удалённого доступа."
-                : $"Сканирование завершено. Открытых слушателей: {results.Count}. Опасных портов не найдено.";
+                ? $"Сканирование завершено. Служб удалённого доступа: {dangerous} — браузер их не трогает, отключите ненужные вручную. Порт-щит активен."
+                : shieldOn
+                    ? "Сканирование завершено. Утечки локальной сети закрыты порт-щитом."
+                    : $"Сканирование завершено. Открытых слушателей: {results.Count}. Порт-щит не активен.";
             Services.VoiceAssistantService.Announce(spoken,
                 Services.VoiceAnnouncementPriority.Important);
         }

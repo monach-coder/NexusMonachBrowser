@@ -157,14 +157,23 @@ public static class PortShieldService
             if (process is null) return false;
             var output = await process.StandardOutput.ReadToEndAsync();
             await process.WaitForExitAsync();
-            return output.Contains("Enabled:", StringComparison.Ordinal) ||
-                   output.Contains("Включено:", StringComparison.Ordinal);
+            return RulesPresentIn(output);
         }
         catch
         {
             return false;
         }
     }
+
+    /// <summary>В выводе netsh есть живое правило — локализовано-независимо.</summary>
+    internal static bool RulesPresentIn(string netshOutput) =>
+        netshOutput.Contains("Enabled:", StringComparison.Ordinal) ||
+        netshOutput.Contains("Включено:", StringComparison.Ordinal) ||
+        netshOutput.Contains("Включен:", StringComparison.Ordinal);
+
+    /// <summary>Синхронная проверка для UI (окно Дозора).</summary>
+    public static bool AreRulesApplied() =>
+        AreRulesAppliedAsync().GetAwaiter().GetResult();
 
     /// <summary>Применяет правила на сессию одним скрытым повышенным вызовом.</summary>
     private static async Task<bool> ApplySessionShieldAsync()
