@@ -48,7 +48,7 @@ internal static class ReleaseManifestTool
         ("nexus-ai-models.zip", "ai", "модели перевода и голоса",
             relative => relative.StartsWith("AI/models/", StringComparison.OrdinalIgnoreCase) &&
                         relative.Split('/').Skip(2).First() is "translation" or "voice" or "whisper"
-                            or "multilingual-e5-small"),
+                            or "multilingual-e5-small" or "parakeet-tdt"),
         ("nexus-ai-vlm.zip", "ai", "описание страниц (опционально)",
             relative => relative.StartsWith("AI/models/", StringComparison.OrdinalIgnoreCase) &&
                         relative.Split('/').Skip(2).First() is "qwen3-0.6b" or "smolvlm-500m"),

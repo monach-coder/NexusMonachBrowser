@@ -110,6 +110,15 @@ public static class WhisperService
         WhisperLane lane, CancellationToken cancellationToken = default)
     {
         if (wav.Length < 1_000) return new WhisperTranscript(string.Empty, string.Empty);
+
+        // Parakeet TDT: быстрее и точнее whisper — приоритетный путь,
+        // если модель доставлена. Фолбэк на whisper при любой ошибке.
+        if (lane == WhisperLane.Dubbing && ParakeetService.IsAvailable)
+        {
+            var parakeet = await TryParakeetAsync(wav, cancellationToken);
+            if (parakeet is not null) return parakeet;
+        }
+
         await EnsureInstalledAsync(cancellationToken: cancellationToken);
         var state = GetLane(lane);
 
@@ -147,6 +156,52 @@ public static class WhisperService
     public static Task<string> TranscribeToEnglishAsync(byte[] wav,
         CancellationToken cancellationToken = default) =>
         RunCliAsync(CommandsLane, wav, translateToEnglish: true, cancellationToken);
+
+    /// <summary>
+    /// Конвертирует WAV (16-bit PCM, 16 кГц) в массив float32 для Parakeet.
+    /// </summary>
+    internal static float[]? WavToPcmFloats(byte[] wav)
+    {
+        if (!AudioRateRestore.TryGetLayout(wav, out var layout)) return null;
+        var dataStart = (int)layout.DataOffset;
+        var dataLength = (int)layout.DataLength;
+        if (dataLength < 2) return null;
+
+        var sampleCount = dataLength / 2; // 16-bit = 2 байта на сэмпл
+        var floats = new float[sampleCount];
+        for (var i = 0; i < sampleCount; i++)
+            floats[i] = BitConverter.ToInt16(wav, dataStart + i * 2) / 32768f;
+        return floats;
+    }
+
+    /// <summary>
+    /// Прогоняет WAV через Parakeet TDT. Возвращает WhisperTranscript при
+    /// успехе, null — при ошибке (фолбэк на whisper).
+    /// </summary>
+    private static async Task<WhisperTranscript?> TryParakeetAsync(
+        byte[] wav, CancellationToken ct)
+    {
+        try
+        {
+            var pcm = WavToPcmFloats(wav);
+            if (pcm is null || pcm.Length < 1600) return null;
+            var result = await ParakeetService.TranscribeAsync(pcm, ct);
+            if (result is null) return null;
+
+            var segments = result.Segments
+                .Where(s => !string.IsNullOrWhiteSpace(s.Text))
+                .Select(s => new WhisperTimedSegment(s.Start, s.End, s.Text))
+                .ToList();
+            CrashReportService.AddBreadcrumb("parakeet",
+                $"transcribed-{segments.Count}-segments");
+            return new WhisperTranscript(result.Text, "auto") { Segments = segments };
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("parakeet", "try-transcribe", ex);
+            return null;
+        }
+    }
 
     private static async Task<WhisperTranscript> RunServerInferenceAsync(LaneState state, byte[] wav,
         CancellationToken cancellationToken)
