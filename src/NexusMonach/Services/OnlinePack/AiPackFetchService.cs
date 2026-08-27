@@ -90,12 +90,23 @@ public static class AiPackFetchService
                         "download-" + outcome.ToString().ToLowerInvariant());
                     continue;
                 }
-                System.IO.Compression.ZipFile.ExtractToDirectory(stagedZip, root, overwriteFiles: true);
+                // Распаковка может встретить файлы, уже открытые запущенными
+                // процессами (whisper держит модель) — пропускаем их, а не
+                // роняем всю доставку: файл уже на месте и корректен.
+                try
+                {
+                    System.IO.Compression.ZipFile.ExtractToDirectory(stagedZip, root, overwriteFiles: true);
+                }
+                catch (System.IO.IOException locked)
+                {
+                    CrashReportService.AddBreadcrumb("ai-pack", "extract-skip-locked");
+                }
                 try { File.Delete(stagedZip); } catch { }
                 CrashReportService.AddBreadcrumb("ai-pack", "pack-extracted");
             }
 
-            // Все пакеты на месте — конвейеры можно греть.
+            // Все пакеты обработаны — конвейеры можно греть, даже если часть
+            // файлов была заблокирована (они уже на месте с прошлого раза).
             RaisePacksReady();
             Ui.Post(() => VoiceAssistantService.Announce(
                 "Нейросети загружены. Перевод, голос и распознавание доступны.",
@@ -104,6 +115,9 @@ public static class AiPackFetchService
         catch (Exception ex)
         {
             CrashReportService.RecordNonFatal("ai-pack", "background-fetch", ex);
+            // Даже при ошибке доставки модели, скорее всего, уже стоят с
+            // прошлой сессии — не оставляем конвейеры замороженными.
+            RaisePacksReady();
         }
         finally
         {
