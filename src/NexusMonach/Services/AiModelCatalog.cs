@@ -42,8 +42,11 @@ public static class AiModelCatalog
     public static string? WhisperCli => FindFile(WhisperRoot, "whisper-cli.exe");
     public static string? WhisperServer => FindFile(WhisperRoot, "whisper-server.exe");
     public static string? TextModel => FindFile(TextRoot, "*.gguf");
-    public static string? WhisperModel => FindFile(SpeechRoot, "ggml-base-q5_1.bin") ??
-                                          FindFile(SpeechRoot, "ggml-small-q5_1.bin");
+    // Приоритет: small — лучший баланс точность/скорость на CPU (244M параметров,
+    // 1.2× realtime); base — быстрый резерв; large-v3-turbo — опционально для
+    // мощных машин/GPU (6.5× realtime на CPU — неприемлемо для дефолта).
+    public static string? WhisperModel => FindFile(SpeechRoot, "ggml-small-q5_1.bin") ??
+                                          FindFile(SpeechRoot, "ggml-base-q5_1.bin");
     public static string? VisionModel => FindFile(VisionRoot, "SmolVLM*Q8_0.gguf");
     public static string? VisionProjector => FindFile(VisionRoot, "mmproj*.gguf");
     public static string? NodeExecutable => FindFile(NodeRoot, "node.exe");
