@@ -21,14 +21,39 @@ public partial class MainWindow : Window
     private const string DefaultManifestUrl =
         "https://github.com/monach-coder/NexusMonachBrowser/releases/latest/download/release-manifest.json";
 
-    public static string InstallRoot =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Programs", "NexusMonach");
-
     private string _manifestUrl = DefaultManifestUrl;
     private string _publicKeyPem = string.Empty;
     private ReleaseManifestDto? _manifest;
     private string? _downloadedCoreZip;
+
+    public static string DefaultInstallRoot
+    {
+        get
+        {
+            var fallback = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Programs", "NexusMonach");
+            // Умный дефолт: нейросетям нужно ~3 ГБ; если системный диск
+            // забит, предлагаем самый свободный. Пользователь может сменить.
+            try
+            {
+                var systemDrive = Path.GetPathRoot(Environment.GetFolderPath(
+                    Environment.SpecialFolder.LocalApplicationData))!;
+                var systemFree = new DriveInfo(systemDrive).AvailableFreeSpace;
+                if (systemFree > 6L * 1024 * 1024 * 1024) return fallback;
+                var roomiest = DriveInfo.GetDrives()
+                    .Where(d => d.IsReady && d.DriveType == DriveType.Fixed)
+                    .OrderByDescending(d => d.AvailableFreeSpace)
+                    .FirstOrDefault();
+                if (roomiest is { AvailableFreeSpace: > 12L * 1024 * 1024 * 1024 })
+                    return Path.Combine(roomiest.RootDirectory.FullName, "NexusMonach");
+            }
+            catch { /* Любая ошибка — стандартный путь в профиле. */ }
+            return fallback;
+        }
+    }
+
+    private string _installRoot = DefaultInstallRoot;
 
     public MainWindow()
     {
@@ -37,6 +62,10 @@ public partial class MainWindow : Window
             a => a.Equals("--manifest", StringComparison.OrdinalIgnoreCase));
         if (manifestArg >= 0 && Environment.GetCommandLineArgs().Length > manifestArg + 1)
             _manifestUrl = Environment.GetCommandLineArgs()[manifestArg + 1];
+        var dirArg = Array.FindIndex(Environment.GetCommandLineArgs(),
+            a => a.Equals("--install-dir", StringComparison.OrdinalIgnoreCase));
+        if (dirArg >= 0 && Environment.GetCommandLineArgs().Length > dirArg + 1)
+            _installRoot = Environment.GetCommandLineArgs()[dirArg + 1];
         if (Environment.GetCommandLineArgs().Contains("--uninstall", StringComparer.OrdinalIgnoreCase))
         {
             Loaded += (_, _) => UninstallAndClose();
@@ -46,7 +75,43 @@ public partial class MainWindow : Window
             Loaded += async (_, _) => await RunInstallAsync();
         }
         _publicKeyPem = LoadEmbeddedPublicKey();
+        InstallDirBox.Text = _installRoot;
+        UpdateDirHint();
         Log("Установщик Nexus Monach готов.");
+    }
+
+    private string InstallRoot => _installRoot;
+
+    private void UpdateDirHint()
+    {
+        try
+        {
+            var root = Path.GetPathRoot(Path.GetFullPath(InstallDirBox.Text.Trim()))!;
+            var drive = new DriveInfo(root);
+            var freeGb = drive.AvailableFreeSpace / 1024.0 / 1024 / 1024;
+            DirHintText.Text = freeGb >= 4
+                ? $"Диск {root} — свободно {freeGb:0.#} ГБ"
+                : $"Диск {root} — всего {freeGb:0.#} ГБ свободно: нейросетям нужно ~3 ГБ, выберите другой диск";
+        }
+        catch
+        {
+            DirHintText.Text = string.Empty;
+        }
+    }
+
+    private void Browse_Click(object sender, RoutedEventArgs e)
+    {
+        using var dialog = new System.Windows.Forms.FolderBrowserDialog
+        {
+            Description = "Папка установки Nexus Monach",
+            UseDescriptionForTitle = true,
+            SelectedPath = string.IsNullOrWhiteSpace(InstallDirBox.Text) ? DefaultInstallRoot : InstallDirBox.Text
+        };
+        if (dialog.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+        {
+            InstallDirBox.Text = Path.Combine(dialog.SelectedPath, "NexusMonach");
+            UpdateDirHint();
+        }
     }
 
     private static string LoadEmbeddedPublicKey()
@@ -106,9 +171,39 @@ public partial class MainWindow : Window
             CreateShortcuts();
             Log("Протокол nexus://, запись удаления и ярлыки созданы.");
 
-            Status("Готово! Браузер запускается, нейросети доедут сами.");
-            Log("Ядро установлено. Нейросети докачает сам браузер в фоне.");
-            Progress.Value = 100;
+            // 5. Нейросети — здесь же, в установщике: перевод, голос и
+            // распознавание готовы к первому запуску. Медленный канал —
+            // «Пропустить», и браузер докачает фоном сам.
+            var aiPacks = _manifest.Files.Where(f => f.Group == "ai").ToList();
+            if (aiPacks.Count > 0)
+            {
+                _aiPhase = true;
+                SkipButton.Visibility = Visibility.Visible;
+                InstallButton.Visibility = Visibility.Collapsed;
+                var done = 0;
+                foreach (var pack in aiPacks)
+                {
+                    if (_skipAi) break;
+                    Status("Нейросети: " + pack.Purpose + "…");
+                    var stagedZip = Path.Combine(Path.GetTempPath(), pack.RelativePath);
+                    await DownloadVerifiedAsync(http, pack, stagedZip);
+                    Status("Распаковка: " + pack.Purpose + "…");
+                    ZipFile.ExtractToDirectory(stagedZip, InstallRoot, overwriteFiles: true);
+                    try { File.Delete(stagedZip); } catch { }
+                    done++;
+                }
+                SkipButton.Visibility = Visibility.Collapsed;
+                _aiPhase = false;
+                Status(done == aiPacks.Count
+                    ? "Готово! Нейросети установлены — запуск браузера…"
+                    : "Ядро установлено. Нейросети докачает браузер в фоне.");
+            }
+            else
+            {
+                Status("Готово! Браузер запускается…");
+            }
+            Dispatcher.Invoke(() => ProgressFill.Width = ActualWidth > 0 ? ActualWidth - 80 : 480);
+
             // Одна кнопка — один поток: запуск и тихий выход. Порт-щит
             // сработает беззвучно: уведомительный режим по умолчанию.
             try
@@ -139,13 +234,33 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task<string> DownloadVerifiedAsync(HttpClient http, ManifestFileDto file, string destinationPath)
+    private bool _aiPhase;
+    private volatile bool _skipAi;
+
+    private void Skip_Click(object sender, RoutedEventArgs e)
+    {
+        _skipAi = true;
+        SkipButton.IsEnabled = false;
+        SkipButton.Content = "Пропускаем…";
+    }
+
+    private void Window_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (e.ButtonState == System.Windows.Input.MouseButtonState.Pressed)
+            DragMove();
+    }
+
+    private async Task<string> DownloadVerifiedAsync(HttpClient http, ManifestFileDto file,
+        string destinationPath, bool isRetry = false)
     {
         var baseUrl = new Uri(new Uri(_manifestUrl), ".");
         var url = new Uri(baseUrl, file.RelativePath);
         var partPath = destinationPath + ".part";
         Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
-        long offset = File.Exists(partPath) ? new FileInfo(partPath).Length : 0;
+        // Докачка валидна только для того же релиза: чужой .part склеит
+        // байты двух версий. При повторе стартуем с нуля.
+        long offset = !isRetry && File.Exists(partPath) ? new FileInfo(partPath).Length : 0;
+        if (isRetry && File.Exists(partPath)) File.Delete(partPath);
 
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         if (offset > 0)
@@ -165,7 +280,10 @@ public partial class MainWindow : Window
             received += read;
             Dispatcher.Invoke(() =>
             {
-                if (total > 0) Progress.Value = received * 100.0 / total;
+                // Кастомная полоса: ширина заливки в пикселях по факту окна.
+                if (total > 0 && ActualWidth > 0)
+                    ProgressFill.Width = (ActualWidth - 80) * Math.Clamp(
+                        received * 1.0 / total, 0, 1);
                 DetailText.Text = $"{file.Purpose}: {received / 1024 / 1024} / {total / 1024 / 1024} МБ";
             });
         }
@@ -175,7 +293,14 @@ public partial class MainWindow : Window
         if (!hash.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
         {
             File.Delete(partPath);
-            throw new InvalidOperationException($"Хеш не совпал: {file.RelativePath}. Файл удалён, повторите установку.");
+            // Склеенный чужой .part или обрыв: одна чистая попытка с нуля.
+            if (!isRetry)
+            {
+                Log($"Хеш не сошёлся ({file.RelativePath}), повтор с нуля…");
+                return await DownloadVerifiedAsync(http, file, destinationPath, isRetry: true);
+            }
+            throw new InvalidOperationException(
+                $"Хеш не совпал: {file.RelativePath}. Файл удалён, повторите установку.");
         }
         File.Move(partPath, destinationPath, overwrite: true);
         Log($"✓ {file.RelativePath}");
@@ -284,11 +409,13 @@ public partial class MainWindow : Window
         }
     }
 
-    private void Status(string text) => Dispatcher.Invoke(() => StatusText.Text = text);
+    private void Status(string text) => Dispatcher.Invoke(() =>
+    {
+        StatusText.Text = text;
+        PhaseText.Text = text;
+    });
     private void Log(string line) => Dispatcher.Invoke(() =>
     {
-        LogBox.AppendText(line + Environment.NewLine);
-        LogBox.ScrollToEnd();
         try
         {
             File.AppendAllText(Path.Combine(Path.GetTempPath(), "nexus-setup.log"),
