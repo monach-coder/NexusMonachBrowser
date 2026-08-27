@@ -41,10 +41,10 @@ internal static class ReleaseManifestTool
     [
         ("nexus-core.zip", "core", "ядро браузера",
             relative => !relative.StartsWith("AI/", StringComparison.OrdinalIgnoreCase)),
-        ("nexus-ai-runtime.zip", "ai", "среда нейросетей",
+        ("nexus-ai-runtime.zip", "ai", "среда нейросетей и голоса",
             relative => relative.StartsWith("AI/", StringComparison.OrdinalIgnoreCase) &&
                         relative.Split('/').Skip(1).First() is "node" or "node_modules" or "ffmpeg"
-                            or "adapters" or "whisper" or "dictionaries" or "llama"),
+                            or "adapters" or "whisper" or "dictionaries" or "llama" or "voice"),
         ("nexus-ai-models.zip", "ai", "модели перевода и голоса",
             relative => relative.StartsWith("AI/models/", StringComparison.OrdinalIgnoreCase) &&
                         relative.Split('/').Skip(2).First() is "translation" or "voice" or "whisper"

@@ -302,6 +302,7 @@ public static class WhisperService
                          ?? throw new InvalidOperationException("Не удалось запустить встроенный whisper-server.");
             state.Server = server;
             state.InferenceEndpoint = new Uri($"http://127.0.0.1:{port}{inferencePath}");
+            ProcessNursery.Adopt(server);
             LocalAiLoopbackTransport.EnsureAllowedEndpoint(state.InferenceEndpoint);
             _ = DrainAsync(server.StandardOutput);
             _ = DrainAsync(server.StandardError);

@@ -143,8 +143,11 @@ public sealed class BrowserSettings
     /// модели не подтягиваются (полностью офлайн-режим).
     /// </summary>
     public string AiPackManifestUrl { get; set; } = string.Empty;
-    /// <summary>Порт-щит: автозакрытие утекающих портов на сессию при запуске.</summary>
-    public PortShieldMode PortShieldMode { get; set; } = PortShieldMode.Auto;
+    /// <summary>
+    /// Порт-щит. По умолчанию — тихие уведомления: автозакрытие требует UAC
+    /// и на первом запуске пугает; включается осознанно в настройках.
+    /// </summary>
+    public PortShieldMode PortShieldMode { get; set; } = PortShieldMode.NotifyOnly;
     /// <summary>Релейный мост Tor: эта копия браузера помогает цензурным пользователям.</summary>
     public bool TorRelayEnabled { get; set; } = true;
     public string TorRelayNickname { get; set; } = string.Empty;

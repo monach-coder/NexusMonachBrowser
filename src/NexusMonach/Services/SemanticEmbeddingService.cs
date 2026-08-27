@@ -51,6 +51,7 @@ public static class SemanticEmbeddingService
         start.ArgumentList.Add(AiModelCatalog.SemanticRoot);
         _process = Process.Start(start) ?? throw new InvalidOperationException("Не удалось запустить Nexus Semantics.");
         _ = _process.StandardError.ReadToEndAsync();
+        ProcessNursery.Adopt(_process);
     }
 
     public static void Stop()

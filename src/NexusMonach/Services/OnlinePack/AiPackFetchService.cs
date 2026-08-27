@@ -14,6 +14,29 @@ namespace NexusMonach.Services.OnlinePack;
 public static class AiPackFetchService
 {
     private static int _running;
+    private static Action? _onPacksReady;
+    private static bool _fetchPending;
+
+    /// <summary>
+    /// Регистрирует прогрев конвейеров на момент готовности пакетов.
+    /// Возвращает true, если поставка ещё не приехала (прогрев отложен),
+    /// false — когда греть можно сразу.
+    /// </summary>
+    public static bool WarmUpAfterFetch(Action warmUp)
+    {
+        _onPacksReady = warmUp;
+        _fetchPending = !string.IsNullOrWhiteSpace(
+            SettingsService.Current.AiPackManifestUrl);
+        return _fetchPending;
+    }
+
+    private static void RaisePacksReady()
+    {
+        var warmUp = _onPacksReady;
+        _onPacksReady = null;
+        _fetchPending = false;
+        warmUp?.Invoke();
+    }
 
     /// <summary>
     /// Запускает фоновую синхронизацию моделей. URL манифеста берётся из
@@ -70,10 +93,13 @@ public static class AiPackFetchService
                 System.IO.Compression.ZipFile.ExtractToDirectory(stagedZip, root, overwriteFiles: true);
                 try { File.Delete(stagedZip); } catch { }
                 CrashReportService.AddBreadcrumb("ai-pack", "pack-extracted");
-                Ui.Post(() => VoiceAssistantService.Announce(
-                    "Нейросети загружены. Перевод, голос и распознавание доступны.",
-                    VoiceAnnouncementPriority.Important));
             }
+
+            // Все пакеты на месте — конвейеры можно греть.
+            RaisePacksReady();
+            Ui.Post(() => VoiceAssistantService.Announce(
+                "Нейросети загружены. Перевод, голос и распознавание доступны.",
+                VoiceAnnouncementPriority.Important));
         }
         catch (Exception ex)
         {

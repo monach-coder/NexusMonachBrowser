@@ -98,6 +98,7 @@ internal static class LocalTextModelServer
             _process = Process.Start(start) ?? throw new InvalidOperationException("Не удалось запустить llama-server.exe.");
             _process.OutputDataReceived += (_, _) => { };
             _process.ErrorDataReceived += (_, _) => { };
+            ProcessNursery.Adopt(_process);
             _process.BeginOutputReadLine();
             _process.BeginErrorReadLine();
             _endpoint = new Uri($"http://127.0.0.1:{port}/");

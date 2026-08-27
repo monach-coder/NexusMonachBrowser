@@ -268,9 +268,25 @@ public partial class App : Application
                         : VoiceAnnouncementPriority.Important);
                 if (!GuardianRuntime.IsSafeMode)
                 {
-                    WhisperService.PrepareInBackground();
-                    TranslationService.WarmUpInBackground();
-                    LocalAiService.WarmUpInBackground();
+                    // Первый запуск с сетевой поставкой: не греем конвейеры,
+                    // пока модели не приехали — иначе старт задыхается на
+                    // скачке, распаковке и холодных стартах одновременно.
+                    if (Services.OnlinePack.AiPackFetchService.WarmUpAfterFetch(
+                            () =>
+                            {
+                                WhisperService.PrepareInBackground();
+                                TranslationService.WarmUpInBackground();
+                                LocalAiService.WarmUpInBackground();
+                            }))
+                    {
+                        CrashReportService.AddBreadcrumb("startup", "ai-warmup-deferred-until-fetch");
+                    }
+                    else
+                    {
+                        WhisperService.PrepareInBackground();
+                        TranslationService.WarmUpInBackground();
+                        LocalAiService.WarmUpInBackground();
+                    }
                     _ = Task.Run(RussianStressDictionary.WarmUp);
                     // Осторожный режим: пробуем вернуть полный режим сами.
                     GpuRecoveryService.StartIfCautiousMode();

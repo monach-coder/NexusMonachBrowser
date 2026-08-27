@@ -308,6 +308,7 @@ public static class NeuralVoiceService
             state.Worker = process;
             state.WorkerExecutable = executable;
             state.WorkerModel = model;
+            ProcessNursery.Adopt(process);
             var workerGeneration = ++state.WorkerGeneration;
             state.WorkerStderrTail.Clear();
             _ = Task.Run(async () =>
@@ -432,6 +433,7 @@ public static class NeuralVoiceService
 
         using var process = Process.Start(start)
             ?? throw new InvalidOperationException("Не удалось запустить локальный Piper.");
+        ProcessNursery.Adopt(process);
         lock (state.WorkerSync)
         {
             state.Worker = process;

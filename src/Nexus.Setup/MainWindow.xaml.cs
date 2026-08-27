@@ -106,11 +106,24 @@ public partial class MainWindow : Window
             CreateShortcuts();
             Log("Протокол nexus://, запись удаления и ярлыки созданы.");
 
-            Status("Готово! Nexus Monach установлен.");
+            Status("Готово! Браузер запускается, нейросети доедут сами.");
+            Log("Ядро установлено. Нейросети докачает сам браузер в фоне.");
             Progress.Value = 100;
-            LaunchButton.Visibility = Visibility.Visible;
-            AiButton.Visibility = Visibility.Visible;
-            InstallButton.Visibility = Visibility.Collapsed;
+            // Одна кнопка — один поток: запуск и тихий выход. Порт-щит
+            // сработает беззвучно: уведомительный режим по умолчанию.
+            try
+            {
+                var guardian = Path.Combine(InstallRoot, "NexusMonach.exe");
+                if (File.Exists(guardian))
+                    using (System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(guardian)
+                    {
+                        UseShellExecute = true,
+                        WorkingDirectory = InstallRoot
+                    })) { }
+            }
+            catch { /* Браузер запустят ярлыком. */ }
+            await Task.Delay(1500);
+            Close();
         }
         catch (Exception ex)
         {
@@ -124,46 +137,6 @@ public partial class MainWindow : Window
             catch { }
             InstallButton.IsEnabled = true;
         }
-    }
-
-    private async void Ai_Click(object sender, RoutedEventArgs e)
-    {
-        AiButton.IsEnabled = false;
-        try
-        {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-            var aiFiles = (_manifest?.Files ?? []).Where(f => f.Group == "ai").ToList();
-            foreach (var file in aiFiles)
-            {
-                Status("AI-модели: " + file.Purpose + "…");
-                var stagedZip = Path.Combine(Path.GetTempPath(), file.RelativePath);
-                await DownloadVerifiedAsync(http, file, stagedZip);
-                // Архив содержит дерево AI/ — распаковываем в корень установки.
-                ZipFile.ExtractToDirectory(stagedZip, InstallRoot, overwriteFiles: true);
-                try { File.Delete(stagedZip); } catch { }
-                Log("Распаковано в " + InstallRoot);
-            }
-            Status("AI-модели загружены — перевод, голос и поиск доступны.");
-        }
-        catch (Exception ex)
-        {
-            Status("AI-модели: " + ex.Message + " (браузер продолжает работать)");
-            Log("AI: " + ex);
-        }
-    }
-
-    private void Launch_Click(object sender, RoutedEventArgs e)
-    {
-        var guardian = Path.Combine(InstallRoot, "NexusMonach.exe");
-        if (File.Exists(guardian))
-        {
-            using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(guardian)
-            {
-                UseShellExecute = true,
-                WorkingDirectory = InstallRoot
-            });
-        }
-        Close();
     }
 
     private async Task<string> DownloadVerifiedAsync(HttpClient http, ManifestFileDto file, string destinationPath)

@@ -31,13 +31,9 @@
                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" />
 
         <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
-            <Button x:Name="InstallButton" Content="Установить" Width="130" Padding="0,9"
+            <Button x:Name="InstallButton" Content="Установить" Width="220" Padding="0,10"
                     Background="{StaticResource Accent}" Foreground="White" BorderThickness="0"
                     Cursor="Hand" Click="Install_Click" />
-            <Button x:Name="LaunchButton" Content="Запустить браузер" Width="150" Padding="0,9" Margin="10,0,0,0"
-                    Visibility="Collapsed" Cursor="Hand" Click="Launch_Click" />
-            <Button x:Name="AiButton" Content="Загрузить AI-модели" Width="160" Padding="0,9" Margin="10,0,0,0"
-                    Visibility="Collapsed" Cursor="Hand" Click="Ai_Click" />
         </StackPanel>
     </Grid>
 </Window>
