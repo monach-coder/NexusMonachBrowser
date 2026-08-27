@@ -52,8 +52,9 @@ public sealed class PortShieldTests
             PortShieldService.AutoClosedLeaks.ToList(), add: false);
         Assert.DoesNotContain("New-NetFirewallRule", script);
         Assert.Contains("Remove-NetFirewallRule", script);
+        // По два удаления на порт: входящее и исходящее правила.
         Assert.Equal(
-            PortShieldService.AutoClosedLeaks.Length,
+            PortShieldService.AutoClosedLeaks.Length * 2,
             CountOccurrences(script, "Remove-NetFirewallRule"));
     }
 

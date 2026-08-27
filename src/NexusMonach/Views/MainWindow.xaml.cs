@@ -388,7 +388,6 @@ public partial class MainWindow : Window
         // Сетевой Дозор запускается один раз и ловит сканеров.
         if (SettingsService.Current.TrailModeEnabled)
         {
-            StartTrailTorOnce();
             if (_networkWatchdog is null)
             {
                 _networkWatchdog = new Services.Tor.NetworkWatchdog();
@@ -433,16 +432,19 @@ public partial class MainWindow : Window
         return Task.CompletedTask;
     }
 
-    private static int _trailTorStarted;
+    private static int _torRelayStarted;
 
     /// <summary>
-    /// Автостарт Tor при Режиме След — один раз на сессию: Tor поднимается
-    /// с мостами пользователя и релейным мостом, если он включён.
+    /// Автостарт Tor один раз на сессию — с мостами пользователя и релейным
+    /// мостом. Вызывается и в Режиме Следа, и при просто включённом релее:
+    /// мост помогает цензурным пользователям независимо от маршрута
+    /// собственного трафика.
     /// </summary>
-    private static void StartTrailTorOnce()
+    internal static void StartTorAndRelayOnce()
     {
-        if (Interlocked.Exchange(ref _trailTorStarted, 1) != 0) return;
-        if (Services.Tor.TorService.IsRunning) return;
+        if (Interlocked.Exchange(ref _torRelayStarted, 1) != 0) return;
+        if (Services.Tor.TorService.IsRunning)
+            return; // Уже поднят общесессионным автостартом из App.
         _ = Task.Run(async () =>
         {
             try
@@ -454,18 +456,19 @@ public partial class MainWindow : Window
                     await SettingsService.SaveAsync(settings);
                 }
                 var state = await Services.Tor.TorBridgeManager.RestartWithBridgesAsync(settings);
-                CrashReportService.AddBreadcrumb("tor", "trail-autostart-" + state);
-                if (state == Services.Tor.TorState.Connected && settings.TorRelayEnabled)
-                    Services.Ui.Post(() => Services.VoiceAssistantService.Announce(
-                        "Режим След активен. Ваш браузер работает мостом Тор для цензурных пользователей.",
+                CrashReportService.AddBreadcrumb("tor", "relay-autostart-" + state);
+                if (state != Services.Tor.TorState.Failed && settings.TorRelayEnabled)
+                    Ui.Post(() => Services.VoiceAssistantService.Announce(
+                        "Релейный мост Тора запущен. Ваш браузер помогает пользователям цензурных сетей.",
                         Services.VoiceAnnouncementPriority.Important));
             }
             catch (Exception ex)
             {
-                CrashReportService.RecordNonFatal("tor", "trail-autostart", ex);
+                CrashReportService.RecordNonFatal("tor", "relay-autostart", ex);
             }
         });
     }
+
 
     private void BeginPendingSiteResearch(BrowserTab tab, string query, string trigger, string surface)
     {

@@ -6,7 +6,7 @@ namespace NexusMonach.Services;
 /// <summary>Режим автоматической защиты портов при запуске браузера.</summary>
 public enum PortShieldMode
 {
-    /// <summary>Сканировать и закрывать утечки файрволом на сессию (один запрос UAC).</summary>
+    /// <summary>Сканировать и закрывать утечки файрволом на время сессии.</summary>
     Auto,
     /// <summary>Сканировать и сообщать голосом/в Дозоре, ничего не закрывать.</summary>
     NotifyOnly,
@@ -15,13 +15,14 @@ public enum PortShieldMode
 }
 
 /// <summary>
-/// Порт-щит: при запуске браузера сканирует машину и закрывает «утекающие»
+/// Порт-щит: при старте браузера сканирует машину и закрывает «утекающие»
 /// порты локальной сети — mDNS, SSDP/UPnP и NetBIOS — правилами файрвола
-/// Windows на время сессии (один запрос повышения прав), снимая их при
-/// выходе. Эти порты сливают топологию сети и имя машины всем в локальном
-/// сегменте; в анонимном режиме это прямая угроза, а полезной функции у них
-/// для браузера нет. Порты пользовательских служб (RDP, SMB, VNC) щит НЕ
-/// трогает — о них он только сообщает: закрывать чужие сервисы молча нельзя.
+/// Windows НА ВРЕМЯ СЕССИИ, снимая их при выходе. Консольное окно не
+/// появляется никогда: скрипт выполняется через conhost --headless.
+/// Если браузер аварийно умер и правила остались — следующий старт видит
+/// их (чтение правил не требует прав администратора) и просто принимает
+/// владение, не спрашивая повторного подтверждения. Порты пользовательских
+/// служб (RDP, SMB, VNC) щит НЕ трогает.
 /// </summary>
 public static class PortShieldService
 {
@@ -41,10 +42,11 @@ public static class PortShieldService
         "NexusMonach", "Guardian", "port-shield.json");
 
     private static int _applying;
+    private static volatile bool _ownsSessionRules;
 
     /// <summary>
-    /// Запускается при старте браузера: скан + (в режиме Auto) закрытие
-    /// утечек на сессию. Никогда не бросает исключений и не блокирует запуск.
+    /// Запускается при старте браузера: скан + (в режиме Auto) закрытие утечек
+    /// на сессию. Никогда не бросает исключений и не блокирует запуск.
     /// </summary>
     public static void StartAsync(BrowserSettings settings)
     {
@@ -69,11 +71,26 @@ public static class PortShieldService
                     CrashReportService.AddBreadcrumb("port-shield", "notify:" + leaks.Count);
                     return;
                 }
-                var applied = await ApplySessionShieldAsync(leaks);
+
+                // Правила уже стоят (прошлая сессия без чистого выхода) —
+                // принимаем владение молча, без повторного запроса.
+                if (await AreRulesAppliedAsync())
+                {
+                    _ownsSessionRules = true;
+                    CrashReportService.AddBreadcrumb("port-shield", "adopted-existing");
+                    Ui.Post(() => VoiceAssistantService.Announce(
+                        "Порт-щит активен. Закрыты: " + names + ".",
+                        VoiceAnnouncementPriority.Important));
+                    return;
+                }
+                var applied = await ApplySessionShieldAsync();
                 if (applied)
+                {
+                    _ownsSessionRules = true;
                     Ui.Post(() => VoiceAssistantService.Announce(
                         "Порт-щит активен. Закрыты на сессию: " + names + ".",
                         VoiceAnnouncementPriority.Important));
+                }
             }
             catch (Exception ex)
             {
@@ -100,47 +117,74 @@ public static class PortShieldService
         return result;
     }
 
-    /// <summary>
-    /// Добавляет блокирующие правила файрвола через один повышенный вызов
-    /// PowerShell (скрипт-файл без строковых команд). Возвращает true при успехе.
-    /// </summary>
-    private static async Task<bool> ApplySessionShieldAsync(
-        List<(int Port, string Protocol, string Name)> leaks)
+    /// <summary>Снятие правил при выходе: только если эта сессия ими владеет.</summary>
+    public static void RemoveSessionShield()
     {
-        var script = BuildRuleScript(leaks, add: true);
-        var ok = await RunElevatedAsync(script);
+        if (!_ownsSessionRules) return;
+        _ownsSessionRules = false;
+        try
+        {
+            _ = RunElevatedHiddenAsync(BuildRuleScript(AutoClosedLeaks.ToList(), add: false));
+            try { File.Delete(StatePath); } catch { }
+            CrashReportService.AddBreadcrumb("port-shield", "session-removed");
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("port-shield", "remove", ex);
+        }
+    }
+
+    /// <summary>
+    /// Чтение правила файрвола не требует прав администратора: тихая
+    /// проверка «правила уже стоят?» одним вызовом netsh.
+    /// </summary>
+    private static async Task<bool> AreRulesAppliedAsync()
+    {
+        try
+        {
+            var info = new ProcessStartInfo("netsh.exe")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true
+            };
+            info.ArgumentList.Add("advfirewall");
+            info.ArgumentList.Add("firewall");
+            info.ArgumentList.Add("show");
+            info.ArgumentList.Add("rule");
+            info.ArgumentList.Add("name=" + RuleName(AutoClosedLeaks[0]));
+            using var process = Process.Start(info);
+            if (process is null) return false;
+            var output = await process.StandardOutput.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            return output.Contains("Enabled:", StringComparison.Ordinal) ||
+                   output.Contains("Включено:", StringComparison.Ordinal);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Применяет правила на сессию одним скрытым повышенным вызовом.</summary>
+    private static async Task<bool> ApplySessionShieldAsync()
+    {
+        var ok = await RunElevatedHiddenAsync(BuildRuleScript(AutoClosedLeaks.ToList(), add: true));
         if (ok)
         {
             await File.WriteAllTextAsync(StatePath,
                 System.Text.Json.JsonSerializer.Serialize(new
                 {
                     appliedUtc = DateTimeOffset.UtcNow,
-                    rules = leaks.Select(l => RuleName(l)).ToArray()
+                    mode = "session"
                 }));
-            CrashReportService.AddBreadcrumb("port-shield", "applied:" + leaks.Count);
+            CrashReportService.AddBreadcrumb("port-shield", "applied");
         }
         else
         {
             CrashReportService.AddBreadcrumb("port-shield", "apply-declined");
         }
         return ok;
-    }
-
-    /// <summary>Снимает правила сессии при выходе браузера (fire-and-forget UAC).</summary>
-    public static void RemoveSessionShield()
-    {
-        try
-        {
-            if (!File.Exists(StatePath)) return;
-            var leaks = AutoClosedLeaks.ToList();
-            _ = RunElevatedAsync(BuildRuleScript(leaks, add: false), waitForExit: true);
-            try { File.Delete(StatePath); } catch { }
-            CrashReportService.AddBreadcrumb("port-shield", "removed");
-        }
-        catch (Exception ex)
-        {
-            CrashReportService.RecordNonFatal("port-shield", "remove", ex);
-        }
     }
 
     internal static string RuleName((int Port, string Protocol, string Name) leak) =>
@@ -159,6 +203,7 @@ public static class PortShieldService
         {
             var name = RuleName(leak);
             builder.AppendLine($"Remove-NetFirewallRule -DisplayName '{name}'");
+            builder.AppendLine($"Remove-NetFirewallRule -DisplayName '{name} (out)'");
             if (add)
             {
                 builder.AppendLine(
@@ -172,36 +217,42 @@ public static class PortShieldService
         return builder.ToString();
     }
 
-    /// <summary>Повышенный запуск PowerShell со скриптом-файлом (один UAC).</summary>
-    private static Task<bool> RunElevatedAsync(string script, bool waitForExit = false)
+    /// <summary>
+    /// Повышенный запуск PowerShell без окна: conhost --headless запрещает
+    /// создание консольного окна физически. Виден только диалог UAC —
+    /// это системное разрешение на изменение файрвола, и оно честно.
+    /// </summary>
+    private static async Task<bool> RunElevatedHiddenAsync(string script)
     {
         var scriptPath = Path.Combine(Path.GetTempPath(),
             "nexus-port-shield-" + Guid.NewGuid().ToString("N") + ".ps1");
-        File.WriteAllText(scriptPath, script);
-        var info = new ProcessStartInfo("powershell.exe")
+        await File.WriteAllTextAsync(scriptPath, script);
+        var conhost = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System), "conhost.exe");
+        var info = new ProcessStartInfo(File.Exists(conhost) ? conhost : "powershell.exe")
         {
             UseShellExecute = true,
             Verb = "runas",
-            CreateNoWindow = true,
             WindowStyle = ProcessWindowStyle.Hidden
         };
+        if (File.Exists(conhost))
+        {
+            info.ArgumentList.Add("--headless");
+            info.ArgumentList.Add("powershell.exe");
+        }
         info.ArgumentList.Add("-NoProfile");
         info.ArgumentList.Add("-ExecutionPolicy");
         info.ArgumentList.Add("Bypass");
         info.ArgumentList.Add("-File");
         info.ArgumentList.Add(scriptPath);
         var process = Process.Start(info);
-        if (process is null) return Task.FromResult(false);
-        if (waitForExit) return Task.Run(() =>
+        if (process is null) return false;
+        return await Task.Run(() =>
         {
-            if (!process.WaitForExit(20_000)) return false;
+            if (!process.WaitForExit(30_000)) return false;
             TryDelete(scriptPath);
             return process.ExitCode == 0;
         });
-        // Запуск без ожидания: браузер не должен стоять из-за UAC.
-        process.EnableRaisingEvents = true;
-        process.Exited += (_, _) => TryDelete(scriptPath);
-        return Task.FromResult(true);
     }
 
     private static void TryDelete(string path)

@@ -294,6 +294,14 @@ public partial class App : Application
                     Services.OnlinePack.AiPackFetchService.StartBackgroundFetch();
                     // Порт-щит: скан и автозакрытие утекающих портов на сессию.
                     Services.PortShieldService.StartAsync(SettingsService.Current);
+                    // Скан VPN на машине: Tor в Режиме Следа оборачивается в
+                    // найденный туннель; результат слышен и виден в логах.
+                    _ = Task.Run(ReportVpnState);
+                    // Релейный мост Tor: работает всегда, когда включён в
+                    // настройках, — не только в Режиме Следа.
+                    if (SettingsService.Current.TorRelayEnabled ||
+                        SettingsService.Current.TrailModeEnabled)
+                        _ = Task.Run(Views.MainWindow.StartTorAndRelayOnce);
                 }
             }
             if (smokeSelfTest)
@@ -363,6 +371,29 @@ public partial class App : Application
         Services.PortShieldService.RemoveSessionShield();
         CrashReportService.MarkCleanExit();
         base.OnExit(e);
+    }
+
+    /// <summary>
+    /// Видимый стартовый скан VPN: озвучивает результат и оставляет след
+    /// в breadcrumbs. Tor в Режиме Следа оборачивается в найденный туннель.
+    /// </summary>
+    private static void ReportVpnState()
+    {
+        try
+        {
+            var vpn = Services.Tor.VpnDetector.Detect();
+            CrashReportService.AddBreadcrumb("vpn-scan",
+                vpn.VpnActive ? "active:" + vpn.AdapterName : "not-found");
+            Ui.Post(() => Services.VoiceAssistantService.Announce(
+                vpn.VpnActive
+                    ? $"Обнаружен VPN: {vpn.AdapterName}. Тор будет работать через него."
+                    : "VPN на машине не обнаружен.",
+                Services.VoiceAnnouncementPriority.Important));
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("vpn-scan", "startup", ex);
+        }
     }
 
     private static async Task ProcessCrashQueueAsync(Window owner)
