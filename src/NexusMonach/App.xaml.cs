@@ -221,6 +221,11 @@ public partial class App : Application
                     firstRunSettings.Theme = themePicker.ResultTheme;
                     firstRunSettings.ThemeMode = themePicker.ResultMode;
                     firstRunSettings.NeuralVoiceProfile = themePicker.ResultVoice;
+                    // Мастер безопасности: порт-щит, Дозор, релейный мост.
+                    firstRunSettings.PortShieldMode = themePicker.ResultPortShield;
+                    firstRunSettings.NetworkWatchdogEnabled = themePicker.ResultWatchdog;
+                    firstRunSettings.TorRelayEnabled = themePicker.ResultRelay;
+                    firstRunSettings.TorRelayAcknowledged = themePicker.ResultRelay;
                     firstRunSettings.ThemeSelectionCompleted = true;
                     await SettingsService.SaveAsync(firstRunSettings);
                     splash.Show();

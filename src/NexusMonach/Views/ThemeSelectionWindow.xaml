@@ -145,6 +145,20 @@
             </StackPanel>
         </StackPanel>
 
+        <StackPanel Grid.Row="2" Margin="0,20,0,0">
+            <TextBlock Text="Защита при запуске" FontSize="16" FontWeight="SemiBold" />
+            <TextBlock Text="Всё это можно изменить в настройках позже."
+                       Margin="0,4,0,8" Foreground="{StaticResource MutedTextBrush}" FontSize="12" />
+            <CheckBox x:Name="ShieldPortCheck" IsChecked="True" Margin="0,0,0,6" FontSize="13"
+                      Content="Порт-щит: закрывать утекающие порты (mDNS, SSDP, NetBIOS) на сессию — один запрос прав при запуске" />
+            <CheckBox x:Name="ShieldWatchdogCheck" IsChecked="True" Margin="0,0,0,6" FontSize="13"
+                      Content="Сетевой Дозор: ловушки для сканеров и ARP-страж, голосовые оповещения об атаках" />
+            <CheckBox x:Name="ShieldRelayCheck">
+                <TextBlock TextWrapping="Wrap" FontSize="13"
+                           Text="Релейный мост Tor: помогать цензурным пользователям (нужен проброс портов 9101–9102 на роутере; провайдер увидит Tor-трафик; выходным узлом вы не бываете)" />
+            </CheckBox>
+        </StackPanel>
+
         <Button Grid.Row="4" Content="Продолжить" HorizontalAlignment="Right" Margin="0,16,0,0"
                 Style="{StaticResource ContinueButton}" Click="Continue_Click" />
     </Grid>

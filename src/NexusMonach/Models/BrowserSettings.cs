@@ -150,6 +150,8 @@ public sealed class BrowserSettings
     public PortShieldMode PortShieldMode { get; set; } = PortShieldMode.NotifyOnly;
     /// <summary>Релейный мост Tor: эта копия браузера помогает цензурным пользователям.</summary>
     public bool TorRelayEnabled { get; set; } = true;
+    /// <summary>Пользователь видел предупреждение о мосте и подтвердил осознанно.</summary>
+    public bool TorRelayAcknowledged { get; set; }
     /// <summary>Сетевой Дозор: ловушки, обман сканеров и стражи ARP/DNS при старте.</summary>
     public bool NetworkWatchdogEnabled { get; set; } = true;
     public string TorRelayNickname { get; set; } = string.Empty;
@@ -205,6 +207,7 @@ public sealed class BrowserSettings
         AiPackManifestUrl = AiPackManifestUrl,
         PortShieldMode = PortShieldMode,
         TorRelayEnabled = TorRelayEnabled,
+        TorRelayAcknowledged = TorRelayAcknowledged,
         NetworkWatchdogEnabled = NetworkWatchdogEnabled,
         TorRelayNickname = TorRelayNickname,
         TorRelayOrPort = TorRelayOrPort,

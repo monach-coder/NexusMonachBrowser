@@ -159,6 +159,15 @@ public partial class SettingsWindow : Window
         HttpsFirstCheck.IsChecked = settings.HttpsFirstEnabled;
         PrivacyMonitorCheck.IsChecked = settings.ShowPrivacyMonitor;
         PreventWebRtcLeakCheck.IsChecked = settings.PreventWebRtcIpLeak;
+        PortShieldModeCombo.ItemsSource = new[]
+        {
+            new Choice<Services.PortShieldMode>("Авто — закрывать утечки на сессию (один UAC)", Services.PortShieldMode.Auto),
+            new Choice<Services.PortShieldMode>("Только уведомлять голосом", Services.PortShieldMode.NotifyOnly),
+            new Choice<Services.PortShieldMode>("Выключить", Services.PortShieldMode.Off)
+        };
+        PortShieldModeCombo.SelectedItem = PortShieldModeCombo.ItemsSource
+            .Cast<Choice<Services.PortShieldMode>>()
+            .FirstOrDefault(c => c.Value == settings.PortShieldMode);
         CrashReportEndpointBox.Text = settings.CrashReportEndpoint;
         GitHubRepositoryBox.Text = settings.GitHubRepository;
         GitHubTokenStatusText.Text = WindowsCredentialStore.HasGitHubAccessToken()
@@ -175,6 +184,34 @@ public partial class SettingsWindow : Window
             ShowSection(section);
             if (section == "Network") UpdateTorStatus();
         }
+    }
+
+    private void PortShieldModeCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+    }
+
+    /// <summary>
+    /// Прозрачность UAC: показываем ровно тот скрипт, который выполнит
+    /// порт-щит при повышении прав, с пояснением каждой строки.
+    /// </summary>
+    private void PreviewShieldScript_Click(object sender, RoutedEventArgs e)
+    {
+        var script = Services.PortShieldService.BuildRuleScript(
+            Services.PortShieldService.AutoClosedLeaks.ToList(), add: true);
+        var explained = string.Join(Environment.NewLine, script.TrimEnd().Split('\n')
+            .Select(line => line.TrimStart())
+            .Select(line => line.StartsWith("New-NetFirewallRule", StringComparison.Ordinal)
+                ? line + "   ← создать правило блокировки"
+                : line.StartsWith("Remove-NetFirewallRule", StringComparison.Ordinal)
+                    ? line + "   ← снять предыдущее правило (идемпотентность)"
+                    : line));
+        GlassDialogWindow.Show(this,
+            "Этот скрипт выполняется при включённом режиме «Авто» — один раз за сессию, скрыто (conhost --headless), виден только стандартный диалог UAC:\n\n" +
+            explained +
+            "\n\nПорты: 5353 mDNS, 1900 SSDP, 137–139 NetBIOS — утечки локальной сети. " +
+            "Пользовательские службы (RDP, SMB, VNC) скрипт не трогает.",
+            "Порт-щит · предпросмотр скрипта UAC",
+            MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private void UpdateRelayStatus(BrowserSettings settings)
@@ -343,6 +380,30 @@ public partial class SettingsWindow : Window
         _settings.TrailModeEnabled = TrailModeCheck.IsChecked == true;
         _settings.TorCustomBridges = TorBridgesBox.Text.Trim();
         _settings.TorRelayEnabled = TorRelayCheck.IsChecked == true;
+        // Включение моста — осознанное решение: человек должен понимать,
+        // что увидит провайдер и когда мост реально полезен.
+        if (_settings.TorRelayEnabled &&
+            !SettingsService.Current.TorRelayEnabled &&
+            !SettingsService.Current.TorRelayAcknowledged)
+        {
+            var answer = GlassDialogWindow.Show(this,
+                "Вы включаете релейный мост Tor — эта копия браузера станет точкой входа в сеть Tor для людей из цензурных сетей.\n\n" +
+                "Что нужно знать:\n" +
+                "• Провайдер увидит Tor-трафик с вашей машины (вы НЕ выходной узел — чужой трафик через вас не проходит наружу).\n" +
+                "• Без проброса портов 9101–9102 на роутере мост бесполезен для других, но трафик виден. Порт-проброс делается в админке роутера.\n" +
+                "• В отдельных странах сам факт работы моста — серая зона. Решайте сами.\n\n" +
+                "Включить мост?",
+                "Релейный мост Tor", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (answer != MessageBoxResult.Yes)
+            {
+                _settings.TorRelayEnabled = false;
+                TorRelayCheck.IsChecked = false;
+            }
+            else
+            {
+                _settings.TorRelayAcknowledged = true;
+            }
+        }
         if (string.IsNullOrWhiteSpace(_settings.TorRelayNickname))
             _settings.TorRelayNickname = Services.Tor.TorRelayService.DefaultNickname();
         if (_settings.TrailModeEnabled)
@@ -357,6 +418,8 @@ public partial class SettingsWindow : Window
         _settings.SecureDnsProvider = SecureDnsProviderCombo.SelectedItem is Choice<SecureDnsProvider> dnsProvider
             ? dnsProvider.Value : SecureDnsProvider.Cloudflare;
         _settings.ShowPrivacyMonitor = PrivacyMonitorCheck.IsChecked == true;
+        _settings.PortShieldMode = PortShieldModeCombo.SelectedItem is Choice<Services.PortShieldMode> shieldMode
+            ? shieldMode.Value : Services.PortShieldMode.NotifyOnly;
         _settings.PreventWebRtcIpLeak = PreventWebRtcLeakCheck.IsChecked == true;
         _settings.CrashReportMode = CrashReportModeCombo.SelectedItem is Choice<CrashReportMode> crashMode
             ? crashMode.Value : CrashReportMode.LocalOnly;

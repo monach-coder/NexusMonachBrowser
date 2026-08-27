@@ -9,6 +9,10 @@ public partial class ThemeSelectionWindow : Window
     public BrowserTheme ResultTheme { get; private set; }
     public BrowserThemeMode ResultMode { get; private set; }
     public NeuralVoiceProfile ResultVoice { get; private set; }
+    /// <summary>Выбор порт-щита из мастера: Auto или NotifyOnly.</summary>
+    public PortShieldMode ResultPortShield { get; private set; } = PortShieldMode.Auto;
+    public bool ResultWatchdog { get; private set; } = true;
+    public bool ResultRelay { get; private set; }
 
     public ThemeSelectionWindow(BrowserTheme current, BrowserThemeMode mode)
     {
@@ -39,6 +43,11 @@ public partial class ThemeSelectionWindow : Window
         ResultVoice = VoiceEugeneChoice.IsChecked == true
             ? NeuralVoiceProfile.Eugene
             : NeuralVoiceProfile.Natasha;
+        ResultPortShield = ShieldPortCheck.IsChecked == true
+            ? PortShieldMode.Auto
+            : PortShieldMode.NotifyOnly;
+        ResultWatchdog = ShieldWatchdogCheck.IsChecked == true;
+        ResultRelay = ShieldRelayCheck.IsChecked == true;
         ThemeService.Apply(ResultTheme, ResultMode);
         DialogResult = true;
     }

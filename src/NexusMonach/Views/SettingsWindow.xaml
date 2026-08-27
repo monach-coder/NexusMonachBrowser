@@ -328,9 +328,16 @@
                               VerticalScrollBarVisibility="Auto">
                     <Border Style="{StaticResource SettingsCard}">
                         <StackPanel>
-                            <TextBlock Text="Локальный монитор приватности"
+                            <TextBlock Text="Порт-щит · локальный монитор приватности"
                                        FontSize="15" FontWeight="SemiBold" />
-                            <CheckBox x:Name="PrivacyMonitorCheck" Margin="0,12,0,0"
+                            <TextBlock Text="Порт-щит сканирует машину при каждом запуске и закрывает утекающие порты локальной сети (mDNS, SSDP, NetBIOS) правилами файрвола на время сессии. Пользовательские службы (RDP, SMB, VNC) не трогаются."
+                                       TextWrapping="Wrap" Margin="0,8,0,10" FontSize="11"
+                                       Foreground="{StaticResource MutedTextBrush}" />
+                            <ComboBox x:Name="PortShieldModeCombo" SelectionChanged="PortShieldModeCombo_SelectionChanged" Margin="0,0,0,8" />
+                            <Button Content="Показать скрипт закрытия портов (UAC)"
+                                    Style="{StaticResource ActionButton}" HorizontalAlignment="Left"
+                                    Click="PreviewShieldScript_Click" />
+                            <CheckBox x:Name="PrivacyMonitorCheck" Margin="0,14,0,0"
                                       Content="Показывать нижнюю панель Privacy Dock при запуске браузера" />
                             <CheckBox x:Name="PreventWebRtcLeakCheck"
                                       Content="Запрещать WebRTC обходить прокси и раскрывать другой IP (требуется перезапуск)" />

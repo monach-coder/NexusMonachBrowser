@@ -199,11 +199,10 @@ public static class PortShieldService
     internal static string RuleName((int Port, string Protocol, string Name) leak) =>
         $"{RulePrefix} — {leak.Protocol} {leak.Port}";
 
-    /// <summary>
-    /// Скрипт правил: имена детерминированы, повторный запуск идемпотентен
-    /// (существующие правила с тем же именем сначала удаляются).
-    /// </summary>
-    internal static string BuildRuleScript(
+    /// <summary>Скрипт правил: имена детерминированы, повторный запуск идемпотентен
+    /// (существующие правила с тем же именем сначала удаляются). Публичен для
+    /// предпросмотра в настройках — прозрачность UAC.</summary>
+    public static string BuildRuleScript(
         List<(int Port, string Protocol, string Name)> leaks, bool add)
     {
         var builder = new System.Text.StringBuilder();

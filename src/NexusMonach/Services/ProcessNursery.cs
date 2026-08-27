@@ -28,14 +28,28 @@ public static class ProcessNursery
                     {
                         BasicLimitInformation = new JobObjectBasicLimitInformation
                         {
-                            LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-                        }
+                            LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
+                                         JOB_OBJECT_LIMIT_PROCESSMEMORY
+                        },
+                        // Потолок памяти на один AI-процесс: зависшая модель
+                        // не съедает машину — её убивает система, браузер жив.
+                        ProcessMemoryLimit = MaxProcessMemoryBytes
                     };
                     if (!SetInformationJobObject(_job, JobObjectInfoClass.ExtendedLimitInformation,
                             ref info, System.Runtime.CompilerServices.Unsafe.SizeOf<JobObjectExtendedLimitInformation>()))
                     {
-                        // Без флага детская бессмысленна — не adopting'аем вслепую.
-                        return;
+                        // Без лимитов детская всё ещё гарантирует kill-on-close —
+                        // пересоздаём с одним флагом.
+                        var fallback = new JobObjectExtendedLimitInformation
+                        {
+                            BasicLimitInformation = new JobObjectBasicLimitInformation
+                            {
+                                LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                            }
+                        };
+                        if (!SetInformationJobObject(_job, JobObjectInfoClass.ExtendedLimitInformation,
+                                ref fallback, System.Runtime.CompilerServices.Unsafe.SizeOf<JobObjectExtendedLimitInformation>()))
+                            return;
                     }
                 }
                 AssignProcessToJobObject(_job, process.Handle);
@@ -48,7 +62,11 @@ public static class ProcessNursery
         }
     }
 
+    /// <summary>Потолок памяти AI-процесса: 3 ГБ (модели + инференс).</summary>
+    internal static readonly UIntPtr MaxProcessMemoryBytes = (UIntPtr)3L * 1024 * 1024 * 1024;
+
     private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
+    private const uint JOB_OBJECT_LIMIT_PROCESSMEMORY = 0x100;
 
     private enum JobObjectInfoClass
     {
