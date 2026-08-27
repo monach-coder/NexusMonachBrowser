@@ -40,7 +40,9 @@ git commit -m "Release $Version" --quiet
 Write-Host "Version bumped to $Version" -ForegroundColor Cyan
 
 # 2. Официальная портативная сборка с подписью манифеста.
-& (Join-Path $PSScriptRoot "Build-Portable.ps1") -OfficialGuardianBuild -PrivateKeyPath $PrivateKeyPath
+# SkipArchive: полный zip не входит в релиз (пакеты поставки собирает
+# New-ReleaseManifest), а его сжатие съедает гигабайты на C:.
+& (Join-Path $PSScriptRoot "Build-Portable.ps1") -OfficialGuardianBuild -PrivateKeyPath $PrivateKeyPath -SkipArchive
 if ($LASTEXITCODE -ne 0) { throw "Build-Portable failed" }
 
 # 3. Подписанные пакеты сетевой поставки + ключ доверия установщика.
