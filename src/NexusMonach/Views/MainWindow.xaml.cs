@@ -383,17 +383,14 @@ public partial class MainWindow : Window
             }
             finally { TabLoadingOverlay.Visibility = Visibility.Collapsed; }
         }
+        // Сетевой Дозор — по умолчанию на каждой сессии: ловушки-приманки,
+        // обман сканеров, ARP- и DNS-стражи. О запуске обязательно
+        // сообщается голосом: защита видима, а не тайная.
+        StartWatchdogOnce();
         // «Режим След»: на каждую вкладку накладывается порт-страж —
         // WebRTC блокируется, DNS идёт через Tor, mDNS/SSDP отключены.
-        // Сетевой Дозор запускается один раз и ловит сканеров.
         if (SettingsService.Current.TrailModeEnabled)
         {
-            if (_networkWatchdog is null)
-            {
-                _networkWatchdog = new Services.Tor.NetworkWatchdog();
-                _networkWatchdog.ThreatDetected += OnWatchdogThreat;
-                _networkWatchdog.Start();
-            }
             try
             {
                 var (ok, message) = Services.Tor.TrailMode.ProtectTab(tab);
@@ -407,6 +404,29 @@ public partial class MainWindow : Window
         }
         SyncUi();
         LocalAiDock.UpdateTab(tab);
+    }
+
+    private static int _watchdogStarted;
+
+    private void StartWatchdogOnce()
+    {
+        if (!SettingsService.Current.NetworkWatchdogEnabled) return;
+        if (Interlocked.Exchange(ref _watchdogStarted, 1) != 0) return;
+        if (_networkWatchdog is not null) return;
+        try
+        {
+            _networkWatchdog = new Services.Tor.NetworkWatchdog();
+            _networkWatchdog.ThreatDetected += OnWatchdogThreat;
+            _networkWatchdog.Start();
+            CrashReportService.AddBreadcrumb("watchdog", "started-default");
+            Services.VoiceAssistantService.Announce(
+                "Сетевой Дозор активен. Ловушки на портах и защита от сканирования работают.",
+                Services.VoiceAnnouncementPriority.Important);
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("watchdog", "autostart", ex);
+        }
     }
 
     private void NavigateActive(string input)
