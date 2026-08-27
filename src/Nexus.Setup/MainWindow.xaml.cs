@@ -77,7 +77,21 @@ public partial class MainWindow : Window
         _publicKeyPem = LoadEmbeddedPublicKey();
         InstallDirBox.Text = _installRoot;
         UpdateDirHint();
+        // Сцена кнопки: чистая установка, обновление или переустановка.
+        // Версию из сети узнаем позже (манифест), тут — по установленной копии.
+        var installedNow = GetInstalledVersion(_installRoot);
+        if (installedNow is { } v)
+            InstallButton.Content = $"Обновить (установлена {v})";
         Log("Установщик Nexus Monach готов.");
+        InstallDirBox.TextChanged += (_, _) =>
+        {
+            _installRoot = InstallDirBox.Text.Trim();
+            UpdateDirHint();
+            var existing = GetInstalledVersion(_installRoot);
+            InstallButton.Content = existing is { } ve
+                ? $"Обновить (установлена {ve})"
+                : "Установить";
+        };
     }
 
     private string InstallRoot => _installRoot;
@@ -143,6 +157,23 @@ public partial class MainWindow : Window
                         throw new InvalidOperationException("Манифест повреждён.");
             Log($"Манифест принят: версия {_manifest.Version}, файлов {_manifest.Files.Count}.");
 
+            // 1b. Проверка обновлений на стадии установки: манифест всегда
+            // указывает на latest-релиз, поэтому даже старый установщик
+            // ставит самую свежую версию — и честно говорит об этом.
+            var available = ParseVersion(_manifest.Version);
+            var installed = GetInstalledVersion(InstallRoot);
+            if (installed is { } have)
+            {
+                Status(available > have
+                    ? $"Обновление: {have} → {available}. Скачиваю ядро…"
+                    : $"Установлена актуальная версия {have}. Будет переустановлена {available}.");
+                Log(installed is null ? "" : $"Найдена установка {have}, доступна {available}.");
+            }
+            else
+            {
+                Status($"Проверка обновлений: актуальная версия {available}. Скачиваю ядро…");
+            }
+
             // 2. Ядро браузера.
             var core = _manifest.Files.FirstOrDefault(f => f.Group == "core") ??
                        throw new InvalidOperationException("В манифесте нет ядра браузера.");
@@ -150,11 +181,20 @@ public partial class MainWindow : Window
             _downloadedCoreZip = await DownloadVerifiedAsync(http, core,
                 Path.Combine(Path.GetTempPath(), core.RelativePath));
 
-            // 3. Распаковка per-user, без прав администратора.
+            // 3. Распаковка per-user, без прав администратора. Профиль Data
+            // пользователя неприкосновенен: выносим, обновляем, возвращаем.
             Status("Распаковка…");
-            if (Directory.Exists(InstallRoot))
-                Directory.Delete(InstallRoot, recursive: true);
-            ZipFile.ExtractToDirectory(_downloadedCoreZip, InstallRoot);
+            var dataPreserved = PreserveData();
+            try
+            {
+                if (Directory.Exists(InstallRoot))
+                    Directory.Delete(InstallRoot, recursive: true);
+                ZipFile.ExtractToDirectory(_downloadedCoreZip, InstallRoot);
+            }
+            finally
+            {
+                RestoreData(dataPreserved);
+            }
             Log("Установлено в " + InstallRoot);
 
             // Предпосев настроек: установленный браузер знает, откуда докачивать
@@ -236,6 +276,57 @@ public partial class MainWindow : Window
 
     private bool _aiPhase;
     private volatile bool _skipAi;
+
+    /// <summary>Версия установленной копии в выбранной папке, если она есть.</summary>
+    internal static Version? GetInstalledVersion(string installRoot)
+    {
+        try
+        {
+            var browser = Path.Combine(installRoot, "NexusMonach.Browser.exe");
+            if (!File.Exists(browser)) return null;
+            var text = System.Diagnostics.FileVersionInfo.GetVersionInfo(browser).ProductVersion;
+            return text is null ? null : ParseVersion(text);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>«2.9.8+abc…» → 2.9.8; мусор → 0.0.0.</summary>
+    internal static Version ParseVersion(string value)
+    {
+        var digits = new string(value.TakeWhile(c => char.IsDigit(c) || c == '.').ToArray());
+        return Version.TryParse(digits, out var version) ? version : new Version(0, 0, 0);
+    }
+
+    /// <summary>Выносим профиль пользователя перед обновлением ядра.</summary>
+    private string? PreserveData()
+    {
+        var data = Path.Combine(InstallRoot, "Data");
+        if (!Directory.Exists(data)) return null;
+        var backup = Path.Combine(Path.GetTempPath(),
+            "nexus-data-" + Guid.NewGuid().ToString("N"));
+        Directory.Move(data, backup);
+        return backup;
+    }
+
+    private void RestoreData(string? backup)
+    {
+        if (backup is null || !Directory.Exists(backup)) return;
+        var destination = Path.Combine(InstallRoot, "Data");
+        try
+        {
+            if (Directory.Exists(destination))
+                Directory.Delete(destination, recursive: true);
+            Directory.Move(backup, destination);
+        }
+        catch
+        {
+            // Профиль дороже чистоты: оставляем бэкап и кричим в лог.
+            Log("Не удалось вернуть профиль Data из " + backup);
+        }
+    }
 
     private void Skip_Click(object sender, RoutedEventArgs e)
     {
