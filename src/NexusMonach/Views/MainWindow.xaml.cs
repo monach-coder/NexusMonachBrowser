@@ -1349,12 +1349,22 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Озвучивает угрозу голосом и показывает всплывающее уведомление.
-    /// Подписывается на ThreatDetected при старте Дозора.
+    /// Подписывается на ThreatDetected при старте Дозора. Голосом и
+    /// всплывающей карточкой оповещает ОДИН раз на тип+источник за сессию:
+    /// повторные обнаружения того же атакующего идут только в журнал Дозора.
     /// </summary>
+    private readonly HashSet<string> _announcedThreats = new(StringComparer.Ordinal);
+
     private void OnWatchdogThreat(Services.Tor.ThreatEvent threat)
     {
         Dispatcher.BeginInvoke(() =>
         {
+            if (!_announcedThreats.Add(threat.Type + "|" + threat.Source))
+            {
+                // Уже сообщили об этом источнике — журнал в Дозоре молча
+                // продолжает накапливать факты.
+                return;
+            }
             // Голосовое уведомление — что произошло и что сделано.
             var spokenText = threat.Type switch
             {
@@ -1365,8 +1375,8 @@ public partial class MainWindow : Window
                     $"Тревога! Сканер подключился к ловушке на порту. " +
                     $"Атакующий IP: {threat.Source}. Заблокирован и обманут.",
                 Services.Tor.ThreatType.ArpSpoofing =>
-                    "Критическая угроза! Обнаружен ARP-спуфинг. " +
-                    "Шлюз подменён — возможен перехват трафика. Проверьте сеть!",
+                    "Критическая угроза! Обнаружен ARP-спуфинг: шлюз подменён. " +
+                    "Статическая запись закреплена, перехват нейтрализован. Подробности в Дозоре.",
                 Services.Tor.ThreatType.DnsLeak =>
                     $"Предупреждение! Обнаружена утечка DNS на {threat.Source}. " +
                     "Запрос шёл мимо Tor. Заблокировано.",

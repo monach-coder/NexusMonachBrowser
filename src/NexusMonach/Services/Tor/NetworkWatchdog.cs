@@ -45,7 +45,6 @@ public sealed class NetworkWatchdog : IDisposable
     private readonly CancellationTokenSource _cts = new();
     private Timer? _monitorTimer;
     private Timer? _arpTimer;
-    private string? _lastGatewayMac;
     private bool _disposed;
 
     /// <summary>Новые угрозы — UI подписывается для живых уведомлений.</summary>
@@ -242,8 +241,10 @@ public sealed class NetworkWatchdog : IDisposable
     // ═══════════════════════════════════════════
 
     /// <summary>
-    /// Следит за MAC-адресом шлюза: если он меняется без причины,
-    /// это ARP-спуфинг (атакующий вставился между тобой и роутером).
+    /// Следит за MAC-адресом шлюза через настоящую ARP-таблицу ядра
+    /// (GetIpNetTable). Смена MAC у одного и того же интерфейса —
+    /// ARP-спуфинг: страж собирает доказательства, закрепляет шлюз
+    /// статической записью и сообщает один раз на факт.
     /// </summary>
     private void StartArpWatch()
     {
@@ -251,58 +252,13 @@ public sealed class NetworkWatchdog : IDisposable
         {
             try
             {
-                var interfaces = NetworkInterface.GetAllNetworkInterfaces()
-                    .Where(ni => ni.OperationalStatus == OperationalStatus.Up &&
-                                ni.NetworkInterfaceType != NetworkInterfaceType.Loopback);
-
-                foreach (var ni in interfaces)
-                {
-                    var gateway = ni.GetIPProperties().GatewayAddresses.FirstOrDefault();
-                    if (gateway is null) continue;
-
-                    var gatewayIp = gateway.Address.ToString();
-                    var currentMac = ResolveMac(gatewayIp);
-                    if (currentMac is null) continue;
-
-                    if (_lastGatewayMac is not null && _lastGatewayMac != currentMac)
-                    {
-                        var threat = new ThreatEvent(
-                            ThreatType.ArpSpoofing,
-                            gatewayIp,
-                            $"MAC шлюза изменился: {_lastGatewayMac} → {currentMac}. " +
-                            "Возможна MITM-атака (атакующий перехватывает трафик).",
-                            DateTimeOffset.Now,
-                            "Рекомендуется проверить сеть и перезапустить роутер");
-                        _threats.Add(threat);
-                        ThreatDetected?.Invoke(threat);
-                    }
-                    _lastGatewayMac = currentMac;
-                }
+                var threat = ArpGuard.Check();
+                if (threat is null) return;
+                _threats.Add(threat);
+                ThreatDetected?.Invoke(threat);
             }
             catch { }
         }, null, TimeSpan.Zero, TimeSpan.FromSeconds(5));
-    }
-
-    private static string? ResolveMac(string ipAddress)
-    {
-        // Читаем ARP-таблицу через in-process API.
-        try
-        {
-            var interfaces = NetworkInterface.GetAllNetworkInterfaces();
-            foreach (var ni in interfaces)
-            {
-                var arpTable = ni.GetIPProperties().UnicastAddresses;
-                // .NET не даёт прямого доступа к ARP-таблице без P/Invoke.
-                // Используем физический адрес интерфейса как fallback.
-                if (ni.GetIPProperties().GatewayAddresses.Any(
-                        g => g.Address.ToString() == ipAddress))
-                {
-                    return ni.GetPhysicalAddress().ToString();
-                }
-            }
-        }
-        catch { }
-        return null;
     }
 
     // ═══════════════════════════════════════════

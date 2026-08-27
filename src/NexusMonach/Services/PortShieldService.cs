@@ -124,7 +124,7 @@ public static class PortShieldService
         _ownsSessionRules = false;
         try
         {
-            _ = RunElevatedHiddenAsync(BuildRuleScript(AutoClosedLeaks.ToList(), add: false));
+            _ = RunElevatedHiddenAsync(BuildRuleScript(AutoClosedLeaks.ToList(), add: false), "nexus-port-shield");
             try { File.Delete(StatePath); } catch { }
             CrashReportService.AddBreadcrumb("port-shield", "session-removed");
         }
@@ -169,7 +169,7 @@ public static class PortShieldService
     /// <summary>Применяет правила на сессию одним скрытым повышенным вызовом.</summary>
     private static async Task<bool> ApplySessionShieldAsync()
     {
-        var ok = await RunElevatedHiddenAsync(BuildRuleScript(AutoClosedLeaks.ToList(), add: true));
+        var ok = await RunElevatedHiddenAsync(BuildRuleScript(AutoClosedLeaks.ToList(), add: true), "nexus-port-shield");
         if (ok)
         {
             await File.WriteAllTextAsync(StatePath,
@@ -218,14 +218,22 @@ public static class PortShieldService
     }
 
     /// <summary>
+    /// Единый скрытый повышенный запуск скрипта (conhost --headless, файл со
+    /// случайным именем). Используется порт-щитом и ARP-стражем: один
+    /// проверенный механизм на все защитные действия.
+    /// </summary>
+    internal static Task<bool> RunElevatedScript(string script, string namePrefix) =>
+        RunElevatedHiddenAsync(script, namePrefix);
+
+    /// <summary>
     /// Повышенный запуск PowerShell без окна: conhost --headless запрещает
     /// создание консольного окна физически. Виден только диалог UAC —
     /// это системное разрешение на изменение файрвола, и оно честно.
     /// </summary>
-    private static async Task<bool> RunElevatedHiddenAsync(string script)
+    private static async Task<bool> RunElevatedHiddenAsync(string script, string namePrefix)
     {
         var scriptPath = Path.Combine(Path.GetTempPath(),
-            "nexus-port-shield-" + Guid.NewGuid().ToString("N") + ".ps1");
+            namePrefix + "-" + Guid.NewGuid().ToString("N") + ".ps1");
         await File.WriteAllTextAsync(scriptPath, script);
         var conhost = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.System), "conhost.exe");
