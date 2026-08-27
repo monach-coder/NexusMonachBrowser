@@ -178,8 +178,33 @@ internal static class Program
                 "Nexus Guardian", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
+        // Обновление при запуске: до открытия окна проверяем latest-релиз,
+        // скачиваем и ставим новую версию — пользователь сразу работает
+        // на актуальном браузере. Медленная сеть не тормозит надолго:
+        // бюджет времени, при превышении стартует текущая версия.
         if (integrity.State == IntegrityState.Verified && IntegrityVerifier.UsesEmbeddedTrust)
+        {
+            var updateSplash = new GuardianSplash();
+            updateSplash.SetStatus("Проверяю обновления Nexus…");
+            updateSplash.Show();
+            try
+            {
+                var applied = SilentUpdateCoordinator.StartupUpdate(
+                    root, GuardianRoot, updateSplash.SetStatus, TimeSpan.FromSeconds(150));
+                if (applied)
+                {
+                    // Апликатор ждёт нашего выхода, применяет файлы и сам
+                    // перезапускает обновлённый браузер.
+                    return 0;
+                }
+            }
+            finally
+            {
+                updateSplash.Close();
+                updateSplash.Dispose();
+            }
             SilentUpdateCoordinator.StartBackgroundCheck(root, GuardianRoot);
+        }
 
         Directory.CreateDirectory(Path.Combine(GuardianRoot, "Sessions"));
         var sessionId = Guid.NewGuid().ToString("N");

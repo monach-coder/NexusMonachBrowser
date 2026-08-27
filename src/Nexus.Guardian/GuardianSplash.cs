@@ -14,6 +14,7 @@ internal sealed class GuardianSplash : Form
     private const int RunnerWidth = 34;
     private readonly System.Windows.Forms.Timer _animation = new();
     private readonly Label _runner = new();
+    private Label _statusReference = new();
     private int _runnerPosition;
     private int _runnerDirection = 1;
 
@@ -44,6 +45,7 @@ internal sealed class GuardianSplash : Form
             TextAlign = ContentAlignment.MiddleCenter,
             Bounds = new Rectangle(0, 70, 420, 24)
         };
+        _statusReference = status;
         var track = new Label
         {
             BackColor = Color.FromArgb(28, 38, 52),
@@ -72,6 +74,18 @@ internal sealed class GuardianSplash : Form
         ResumeLayout();
 
         Paint += DrawFrame;
+    }
+
+    /// <summary>Обновляет строку состояния сплэша (потокобезопасно).</summary>
+    public void SetStatus(string text)
+    {
+        if (IsDisposed) return;
+        if (InvokeRequired)
+        {
+            BeginInvoke(() => SetStatus(text));
+            return;
+        }
+        _statusReference.Text = text;
     }
 
     protected override void OnShown(EventArgs e)

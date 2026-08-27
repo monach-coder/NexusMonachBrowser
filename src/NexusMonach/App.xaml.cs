@@ -255,6 +255,14 @@ public partial class App : Application
             VoiceAssistantService.Initialize();
             if (!smokeSelfTest)
             {
+                // Только что встало обновление — говорим об этом явно.
+                if (GuardianRuntime.UpdatedToVersion is { Length: > 0 } updated)
+                {
+                    CrashReportService.AddBreadcrumb("startup", "updated-to-" + updated);
+                    VoiceAssistantService.Announce(
+                        $"Nexus обновлён до версии {updated}.",
+                        VoiceAnnouncementPriority.Important);
+                }
                 VoiceAssistantService.Announce(
                     GuardianRuntime.IsSafeMode
                         ? "Nexus запущен в безопасном режиме."

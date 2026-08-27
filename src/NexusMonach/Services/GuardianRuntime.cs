@@ -13,5 +13,9 @@ public static class GuardianRuntime
     public static bool DisableGpuOnly { get; } =
         Environment.GetEnvironmentVariable("NEXUS_DISABLE_GPU") == "1";
 
+    /// <summary>Версия, до которой Guardian только что обновил браузер.</summary>
+    public static string? UpdatedToVersion =>
+        Environment.GetEnvironmentVariable("NEXUS_UPDATED_VERSION");
+
     public static bool IsGuardianLaunch => !string.IsNullOrWhiteSpace(SessionId);
 }

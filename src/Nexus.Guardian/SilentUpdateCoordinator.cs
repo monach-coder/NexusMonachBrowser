@@ -29,6 +29,53 @@ internal static class SilentUpdateCoordinator
     internal static string PendingPath(string guardianRoot) =>
         Path.Combine(guardianRoot, "Updates", "pending-update.json");
 
+    /// <summary>
+    /// Проверка и установка обновления ПРИ ЗАПУСКЕ установленного браузера:
+    /// лаунчер до старта окна проверяет latest-релиз, при наличии новой
+    /// версии скачивает её (сплэш показывает ход), применяет безопасным
+    /// путём (заменённые файлы ставятся после выхода лаунчера) и
+    /// перезапускает уже обновлённый браузер. Возвращает true, когда
+    /// лаунчер обязан немедленно завершиться — апликатор сделал всё сам.
+    /// Бюджет по времени: медленная сеть — стартуем текущую версию,
+    /// фоновое обновление догонит как раньше.
+    /// </summary>
+    public static bool StartupUpdate(
+        string applicationRoot, string guardianRoot,
+        Action<string>? progress, TimeSpan budget)
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(budget);
+            var update = Task.Run(() => StartupUpdateAsync(
+                applicationRoot, guardianRoot, progress, cts.Token));
+            var elapsed = Stopwatch.StartNew();
+            while (!update.Wait(40))
+            {
+                Application.DoEvents();
+                if (elapsed.Elapsed > budget + TimeSpan.FromSeconds(10)) break;
+            }
+            return update.IsCompletedSuccessfully && update.Result;
+        }
+        catch
+        {
+            return false; // Обновление не должно мешать запуску браузера.
+        }
+    }
+
+    private static async Task<bool> StartupUpdateAsync(
+        string applicationRoot, string guardianRoot,
+        Action<string>? progress, CancellationToken cancellationToken)
+    {
+        applicationRoot = NormalizeDirectory(applicationRoot);
+        if (TryReadPending(guardianRoot, out _)) return false; // применится обычным путём
+        progress?.Invoke("Проверяю обновления…");
+        await CheckAndStageAsync(applicationRoot, guardianRoot, cancellationToken);
+        if (!TryReadPending(guardianRoot, out var pending) || pending is null)
+            return false; // версия актуальна
+        progress?.Invoke($"Устанавливаю версию {pending.Version}…");
+        return TryLaunchPendingApply(applicationRoot, guardianRoot, relaunch: true);
+    }
+
     public static void StartBackgroundCheck(string applicationRoot, string guardianRoot)
     {
         try
@@ -185,11 +232,17 @@ internal static class SilentUpdateCoordinator
             // Каталог staging больше не нужен: обновление применено и проверено.
             try { Directory.Delete(staging, recursive: true); } catch { }
             if (relaunch)
-                Process.Start(new ProcessStartInfo(Path.Combine(target, "NexusMonach.exe"))
+            {
+                // Перезапуск с меткой версии: браузер голосом сообщит
+                // пользователю, что обновление встало.
+                var relaunchInfo = new ProcessStartInfo(Path.Combine(target, "NexusMonach.exe"))
                 {
                     UseShellExecute = false,
                     WorkingDirectory = target
-                })?.Dispose();
+                };
+                relaunchInfo.Environment["NEXUS_UPDATED_VERSION"] = pending.Version;
+                Process.Start(relaunchInfo)?.Dispose();
+            }
             return 0;
         }
         catch (Exception ex)
