@@ -82,7 +82,7 @@ async function transcribe(pcmSamples) {
     let state1 = new ort.Tensor('float32', new Float32Array(2 * predHidden), [2, 1, predHidden]);
     let state2 = new ort.Tensor('float32', new Float32Array(2 * predHidden), [2, 1, predHidden]);
 
-    for (let frameIdx = 0; frameIdx < seqLen; frameIdx++) {
+    for (let frameIdx = 0; frameIdx < seqLen;) {
         // Извлекаем кадр: [1, hidden, 1] — один тайм-степ по каналам
         const frameData = new Float32Array(encDims[1]);
         for (let ch = 0; ch < encDims[1]; ch++) {
@@ -106,12 +106,28 @@ async function transcribe(pcmSamples) {
         state1 = decResult.output_states_1;
         state2 = decResult.output_states_2;
 
-        // Логиты → argmax (только словарные индексы, не длительность)
+        // TDT-выход: логиты токенов + длительность.
+        // Формат: [batch, vocab_size + num_durations] — NeMo TDT
+        // предсказывает токен И сколько кадров пропустить (1–8).
         const logitData = decResult.outputs.data;
-        const vocabLimit = Math.min(logitData.length, idToToken.size);
+        const totalOutputs = logitData.length;
+        const vocabLimit = Math.min(totalOutputs, idToToken.size);
+
+        // Argmax по словарной части
         let bestId = 0, bestVal = -Infinity;
         for (let i = 0; i < vocabLimit; i++) {
             if (logitData[i] > bestVal) { bestVal = logitData[i]; bestId = i; }
+        }
+
+        // Длительность: argmax по хвосту (если есть элементы за словарём).
+        // NeMo TDT 0.6B: durations = [1, 2, 3, 4, 5, 6, 7, 8]
+        let duration = 1;
+        if (totalOutputs > vocabLimit) {
+            let durBest = vocabLimit, durVal = -Infinity;
+            for (let i = vocabLimit; i < totalOutputs; i++) {
+                if (logitData[i] > durVal) { durVal = logitData[i]; durBest = i; }
+            }
+            duration = durBest - vocabLimit + 1; // индекс → длительность
         }
 
         if (bestId !== BLANK_ID && bestId !== 0) {
@@ -119,6 +135,10 @@ async function transcribe(pcmSamples) {
             timestamps.push(frameIdx * FRAME_SECONDS);
         }
         prevToken = bestId;
+
+        // TDT-прыжок: пропускаем предсказанное число кадров —
+        // это и есть источник скорости (blank → большой прыжок).
+        frameIdx += duration;
 
         if (tokens.length > 2000) break;
     }
