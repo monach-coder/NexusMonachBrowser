@@ -62,9 +62,15 @@ $assets = @(
     "dist\release\nexus-core.zip",
     "dist\release\nexus-ai-runtime.zip",
     "dist\release\nexus-ai-models.zip",
-    "dist\release\nexus-ai-vlm.zip"
+    "dist\release\nexus-ai-vlm.zip",
+    "dist\release\nexus-net-xray.zip"
 ) | Where-Object { Test-Path $_ }
 if ($assets.Count -lt 4) { throw "Release assets are missing (found $($assets.Count))" }
+# Транспортный пак обязателен: без него включение сервера не сможет
+# скачать модуль по манифесту.
+if ($assets -notcontains "dist\release\nexus-net-xray.zip") {
+    throw "nexus-net-xray.zip is missing - the server transport pack must ship"
+}
 
 if (-not $Notes) {
     $Notes = "Nexus Monach $Version.`n`nУстановка - NexusMonach-Setup.exe (~68 MB): ядро за секунды, нейросети подтягиваются по сети. Существующие установки обновятся автоматически при следующем запуске браузера."
