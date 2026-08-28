@@ -310,11 +310,9 @@ public partial class App : Application
                     // Скан VPN на машине: Tor в Режиме Следа оборачивается в
                     // найденный туннель; результат слышен и виден в логах.
                     _ = Task.Run(ReportVpnState);
-                    // Релейный мост Tor: работает всегда, когда включён в
-                    // настройках, — не только в Режиме Следа.
-                    if (SettingsService.Current.TorRelayEnabled ||
-                        SettingsService.Current.TrailModeEnabled)
-                        _ = Task.Run(Views.MainWindow.StartTorAndRelayOnce);
+                    // Сетевая цепочка: сначала транспорт (Xray), потом Тор —
+                    // torrc генерируется уже с обёрткой в поднятый сервер.
+                    _ = Task.Run(StartNetworkChainAsync);
                 }
             }
             if (smokeSelfTest)
@@ -407,6 +405,55 @@ public partial class App : Application
         {
             CrashReportService.RecordNonFatal("vpn-scan", "startup", ex);
         }
+    }
+
+    /// <summary>
+    /// Поднимает сетевую цепочку сессии: транспорт сервера (если включён),
+    /// затем Тор (если он в цепочке, включён релей или Режим Следа).
+    /// Падение транспорта перестраивает Тора без мёртвого прокси.
+    /// </summary>
+    private static async Task StartNetworkChainAsync()
+    {
+        var settings = SettingsService.Current;
+        try
+        {
+            if (settings.VlessEnabled &&
+                Services.Vless.VlessProfile.TryParse(settings.VlessProfileUri,
+                    out var profile, out _) && profile is not null)
+            {
+                var state = await Services.Vless.VlessRuntime.EnsureRunningAsync(profile);
+                CrashReportService.AddBreadcrumb("startup", "vless-" + state);
+            }
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("vless", "startup", ex);
+        }
+
+        // Транспорт упал по ходу сессии — Тор перегенерирует torrc без
+        // мёртвого Socks5Proxy и продолжит через VPN или в ожидании.
+        Services.Vless.VlessRuntime.TransportLost += () =>
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var current = SettingsService.Current;
+                    if (current.TorInChain || current.TorRelayEnabled || current.TrailModeEnabled)
+                    {
+                        await Services.Tor.TorBridgeManager.RestartWithBridgesAsync(current);
+                        Ui.Post(() => Services.VoiceAssistantService.Announce(
+                            "Транспорт сервера упал. Тор переключился на прямой туннель или ждёт.",
+                            Services.VoiceAnnouncementPriority.Important));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    CrashReportService.RecordNonFatal("vless", "transport-lost-rewrap", ex);
+                }
+            });
+
+        if (settings.TorInChain || settings.TorRelayEnabled || settings.TrailModeEnabled)
+            await Views.MainWindow.StartTorAndRelayOnceAsync();
     }
 
     private static async Task ProcessCrashQueueAsync(Window owner)

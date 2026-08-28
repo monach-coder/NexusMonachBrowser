@@ -153,6 +153,10 @@ public partial class SettingsWindow : Window
         ProxyBypassBox.Text = settings.ProxyBypassList;
         TrailModeCheck.IsChecked = settings.TrailModeEnabled;
         TorRelayCheck.IsChecked = settings.TorRelayEnabled;
+        VlessUriBox.Text = settings.VlessProfileUri;
+        VlessEnabledCheck.IsChecked = settings.VlessEnabled;
+        TorInChainCheck.IsChecked = settings.TorInChain;
+        UpdateVlessStatus();
         UpdateRelayStatus(settings);
         TorBridgesBox.Text = settings.TorCustomBridges;
         UpdateTorStatus();
@@ -254,14 +258,55 @@ public partial class SettingsWindow : Window
     {
         if (TorStatusLabel is null) return;
         var (ready, status) = Services.Tor.TrailMode.CheckTorStatus();
-        var vpn = Services.Tor.VpnDetector.Detect();
-        var vpnText = vpn.VpnActive
+        var vpn = Services.Tor.VpnDetector.Detect();        var vpnText = vpn.VpnActive
             ? $"\nVPN: {vpn.AdapterName} ({vpn.AdapterType})"
             : "\nVPN: не найден";
         var portsText = vpn.OpenPorts.Count > 0
             ? $"\nОткрытые порты: {string.Join(", ", vpn.OpenPorts)}"
             : "";
         TorStatusLabel.Text = status + vpnText + portsText;
+    }
+
+    private void UpdateVlessStatus()
+    {
+        if (VlessStatusLabel is null) return;
+        var snapshot = Services.NetworkChainService.Snapshot();
+        var profile = Services.Vless.VlessProfile.TryParse(
+            SettingsService.Current.VlessProfileUri, out _, out _) ? "" : "Ссылка не заполнена. ";
+        VlessStatusLabel.Text = profile + snapshot.StatusText +
+            (snapshot.VlessRunning ? $" (SOCKS {Services.Vless.VlessRuntime.SocksPort})" : "");
+    }
+
+    private async void VlessConnectButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (VlessConnectButton is null) return;
+        VlessConnectButton.IsEnabled = false;
+        VlessConnectButton.Content = "Подключаю…";
+        try
+        {
+            var settings = SettingsService.Current;
+            settings.VlessProfileUri = VlessUriBox.Text.Trim();
+            if (!Services.Vless.VlessProfile.TryParse(settings.VlessProfileUri, out _, out var error))
+            {
+                VlessStatusLabel.Text = "Ссылка не принята: " + error;
+                return;
+            }
+            await SettingsService.SaveAsync(settings);
+            var snapshot = await Services.NetworkChainService.EnsureVlessAsync();
+            VlessEnabledCheck.IsChecked = SettingsService.Current.VlessEnabled;
+            VlessStatusLabel.Text = snapshot.StatusText +
+                (snapshot.VlessRunning ? $" (SOCKS {Services.Vless.VlessRuntime.SocksPort})" : "");
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("vless", "connect-from-settings", ex);
+            VlessStatusLabel.Text = "Ошибка подключения: " + ex.Message;
+        }
+        finally
+        {
+            VlessConnectButton.IsEnabled = true;
+            VlessConnectButton.Content = "Проверить и подключить";
+        }
     }
 
     private void ShowSection(string section)
@@ -380,6 +425,12 @@ public partial class SettingsWindow : Window
         _settings.TrailModeEnabled = TrailModeCheck.IsChecked == true;
         _settings.TorCustomBridges = TorBridgesBox.Text.Trim();
         _settings.TorRelayEnabled = TorRelayCheck.IsChecked == true;
+        // Сервер и цепочка: ссылка могла быть только что подключена кнопкой —
+        // берём фактическое состояние служб, а не только чекбоксы.
+        _settings.VlessProfileUri = VlessUriBox.Text.Trim();
+        _settings.VlessEnabled = VlessEnabledCheck.IsChecked == true ||
+                                 Services.Vless.VlessRuntime.IsRunning;
+        _settings.TorInChain = TorInChainCheck.IsChecked == true;
         // Включение моста — осознанное решение: человек должен понимать,
         // что увидит провайдер и когда мост реально полезен.
         if (_settings.TorRelayEnabled &&

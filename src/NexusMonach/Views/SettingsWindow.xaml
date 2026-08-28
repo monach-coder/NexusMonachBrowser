@@ -321,6 +321,33 @@
                                            Margin="0,4,0,0" />
                             </StackPanel>
                         </Border>
+                        <Border Style="{StaticResource SettingsCard}">
+                            <StackPanel>
+                                <TextBlock Text="Собственный сервер · VLESS" FontSize="15" FontWeight="SemiBold" />
+                                <TextBlock Text="Трафик направляется на ваш сервер с маскировкой Reality. Прямого выхода у Тора нет — при включённом сервере весь его трафик заворачивается в него; без сервера Тор оборачивается системным VPN или ждёт туннель."
+                                           TextWrapping="Wrap" Margin="0,6,0,10" FontSize="11"
+                                           Foreground="{StaticResource MutedTextBrush}" />
+                                <TextBlock Text="Ссылка профиля (vless://…)" Margin="0,0,0,5" />
+                                <TextBox x:Name="VlessUriBox" Padding="9,7"
+                                         ToolTip="vless://uuid@host:port?type=tcp&amp;security=reality&amp;pbk=…&amp;sni=…#Имя" />
+                                <Button x:Name="VlessConnectButton" Content="Проверить и подключить"
+                                        Style="{StaticResource NexusButton}" Padding="16,7"
+                                        HorizontalAlignment="Left" Margin="0,10,0,8"
+                                        Click="VlessConnectButton_Click" />
+                                <TextBlock x:Name="VlessStatusLabel" Text="Сервер не настроен"
+                                           FontSize="12" Foreground="{StaticResource MutedTextBrush}"
+                                           TextWrapping="Wrap" Margin="0,0,0,8" />
+                                <CheckBox x:Name="VlessEnabledCheck" Margin="0,0,0,6"
+                                          Content="Направлять трафик браузера через сервер" />
+                                <CheckBox x:Name="TorInChainCheck" Margin="0,0,0,6">
+                                    <TextBlock TextWrapping="Wrap"
+                                               Text="Тор — часть цепочки (браузер → Тор → сервер/VPN). Выключите для скорости: вкладки пойдут напрямую через сервер или VPN." />
+                                </CheckBox>
+                                <TextBlock Text="Транспортный модуль (~50 МБ) браузер скачает сам при первом подключении — по подписанному манифесту, с проверкой хеша. Тумблеры цепочки продублированы на стартовой странице."
+                                           TextWrapping="Wrap" Margin="0,4,0,0" FontSize="11"
+                                           Foreground="{StaticResource MutedTextBrush}" />
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
                 </ScrollViewer>
 

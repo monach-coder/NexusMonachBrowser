@@ -455,38 +455,49 @@ public partial class MainWindow : Window
     private static int _torRelayStarted;
 
     /// <summary>
-    /// Автостарт Tor один раз на сессию — с мостами пользователя и релейным
-    /// мостом. Вызывается и в Режиме Следа, и при просто включённом релее:
-    /// мост помогает цензурным пользователям независимо от маршрута
-    /// собственного трафика.
+    /// Автостарт Тора один раз на сессию — с обёрткой (транспорт или VPN),
+    /// мостами пользователя и релейным мостом. Вызывается из сетевой цепочки
+    /// App после подъёма транспорта: torrc генерируется под фактическое
+    /// состояние туннеля.
     /// </summary>
-    internal static void StartTorAndRelayOnce()
+    internal static async Task StartTorAndRelayOnceAsync()
     {
         if (Interlocked.Exchange(ref _torRelayStarted, 1) != 0) return;
         if (Services.Tor.TorService.IsRunning)
             return; // Уже поднят общесессионным автостартом из App.
-        _ = Task.Run(async () =>
+        try
         {
-            try
+            var settings = SettingsService.Current;
+            if (string.IsNullOrWhiteSpace(settings.TorRelayNickname))
             {
-                var settings = SettingsService.Current;
-                if (string.IsNullOrWhiteSpace(settings.TorRelayNickname))
-                {
-                    settings.TorRelayNickname = Services.Tor.TorRelayService.DefaultNickname();
-                    await SettingsService.SaveAsync(settings);
-                }
-                var state = await Services.Tor.TorBridgeManager.RestartWithBridgesAsync(settings);
-                CrashReportService.AddBreadcrumb("tor", "relay-autostart-" + state);
-                if (state != Services.Tor.TorState.Failed && settings.TorRelayEnabled)
-                    Ui.Post(() => Services.VoiceAssistantService.Announce(
-                        "Релейный мост Тора запущен. Ваш браузер помогает пользователям цензурных сетей.",
-                        Services.VoiceAnnouncementPriority.Important));
+                settings.TorRelayNickname = Services.Tor.TorRelayService.DefaultNickname();
+                await SettingsService.SaveAsync(settings);
             }
-            catch (Exception ex)
-            {
-                CrashReportService.RecordNonFatal("tor", "relay-autostart", ex);
-            }
-        });
+            var state = await Services.Tor.TorBridgeManager.RestartWithBridgesAsync(settings);
+            CrashReportService.AddBreadcrumb("tor", "chain-autostart-" + state);
+            if (state == Services.Tor.TorState.Failed) return;
+
+            var chain = Services.NetworkChainService.Snapshot();
+            if (chain.TorInChain && chain.TorWrapped)
+                Ui.Post(() => Services.VoiceAssistantService.Announce(
+                    chain.VlessRunning
+                        ? "Тор в цепочке, обёрнут вашим сервером."
+                        : "Тор в цепочке, обёрнут VPN.",
+                    Services.VoiceAnnouncementPriority.Important));
+            else if (chain.TorInChain)
+                Ui.Post(() => Services.VoiceAssistantService.Announce(
+                    "Тор ждёт туннель: сервер или VPN. Браузер работает с максимальной защитой, но IP реальный.",
+                    Services.VoiceAnnouncementPriority.Important));
+
+            if (settings.TorRelayEnabled)
+                Ui.Post(() => Services.VoiceAssistantService.Announce(
+                    "Релейный мост Тора запущен. Ваш браузер помогает пользователям цензурных сетей.",
+                    Services.VoiceAnnouncementPriority.Important));
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("tor", "chain-autostart", ex);
+        }
     }
 
 

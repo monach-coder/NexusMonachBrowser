@@ -132,6 +132,17 @@ public sealed class BrowserSettings
     public string ProxyHost { get; set; } = "127.0.0.1";
     public int ProxyPort { get; set; } = 9050;
     public string ProxyBypassList { get; set; } = string.Empty;
+    /// <summary>Собственный сервер (VLESS): направлять трафик через транспорт пользователя.</summary>
+    public bool VlessEnabled { get; set; }
+    /// <summary>Ссылка профиля vless:// — выдаёт администратор сервера.</summary>
+    public string VlessProfileUri { get; set; } = string.Empty;
+    /// <summary>
+    /// Тор — часть цепочки вкладок: браузер → Тор → (Xray или VPN) → интернет.
+    /// Прямого выхода у Тора нет — он всегда оборачивается транспортом.
+    /// Выключение исключает Тор из маршрута вкладок ради скорости: трафик
+    /// идёт напрямую через Xray или системный VPN.
+    /// </summary>
+    public bool TorInChain { get; set; } = true;
     public string HomePage { get; set; } = "app://newtab";
     public CrashReportMode CrashReportMode { get; set; } = CrashReportMode.LocalOnly;
     public CrashReportDestination CrashReportDestination { get; set; } = CrashReportDestination.HttpsCollector;
@@ -148,8 +159,9 @@ public sealed class BrowserSettings
     /// и на первом запуске пугает; включается осознанно в настройках.
     /// </summary>
     public PortShieldMode PortShieldMode { get; set; } = PortShieldMode.NotifyOnly;
-    /// <summary>Релейный мост Tor: эта копия браузера помогает цензурным пользователям.</summary>
-    public bool TorRelayEnabled { get; set; } = true;
+    /// <summary>Релейный мост Tor: эта копия браузера помогает цензурным пользователям.
+    /// По умолчанию выключен — включение осознанное, в настройках или мастере первого запуска.</summary>
+    public bool TorRelayEnabled { get; set; }
     /// <summary>Пользователь видел предупреждение о мосте и подтвердил осознанно.</summary>
     public bool TorRelayAcknowledged { get; set; }
     /// <summary>Сетевой Дозор: ловушки, обман сканеров и стражи ARP/DNS при старте.</summary>
@@ -199,6 +211,9 @@ public sealed class BrowserSettings
         ProxyHost = ProxyHost,
         ProxyPort = ProxyPort,
         ProxyBypassList = ProxyBypassList,
+        VlessEnabled = VlessEnabled,
+        VlessProfileUri = VlessProfileUri,
+        TorInChain = TorInChain,
         HomePage = HomePage,
         CrashReportMode = CrashReportMode,
         CrashReportDestination = CrashReportDestination,

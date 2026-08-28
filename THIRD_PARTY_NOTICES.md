@@ -5,6 +5,13 @@ Nexus Monach использует или распространяет компо
 NAudio, llama.cpp, whisper.cpp, Node.js, Transformers.js и автономные модели
 Qwen, Whisper, multilingual-e5, SmolVLM и OPUS-MT.
 
+Транспортный модуль собственного сервера — Xray-core (XTLS Project),
+распространяемый по Mozilla Public License 2.0. Неизменённые бинари
+`xray.exe` и гео-базы входят в подписанный релизный пак `nexus-net-xray.zip`
+как Larger Work; полный текст лицензии приложен файлом
+`xray/LICENSE-Xray-MPL-2.0.txt`, исходный код доступен на
+github.com/XTLS/Xray-core. Исходники Xray проектом не модифицируются.
+
 Автономный голосовой комплект использует Windows C++ runtime Piper 2023.11.14-2
 проекта Rhasspy, опубликованный по MIT License, и русскую модель Irina Medium.
 Открытый Python worker совместим с Piper 1.4.2 проекта Open Home Foundation,

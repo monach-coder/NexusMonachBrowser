@@ -36,6 +36,8 @@
     <Content Include="Assets\Web\**\*" CopyToOutputDirectory="PreserveNewest" />
     <None Remove="AI\**\*" />
     <Content Include="AI\**\*" Exclude="AI\**\.*" CopyToOutputDirectory="PreserveNewest" />
+    <None Remove="xray\**\*" />
+    <Content Include="xray\**\*" Exclude="xray\**\.*;xray\config.generated.json;xray\vless-xray.log" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup Condition="Exists('..\..\security\crash-report-public-key.pem')">

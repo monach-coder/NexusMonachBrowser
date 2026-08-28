@@ -19,6 +19,30 @@ public sealed record VpnDetectionResult(
 /// </summary>
 public static class VpnDetector
 {
+    private static VpnDetectionResult? _cached;
+    private static DateTime _cachedAt;
+    private static readonly object Gate = new();
+
+    /// <summary>
+    /// Детект с кэшем на 30 секунд: полный скан (включая порты) слишком
+    /// тяжёл, чтобы гонять его на каждый пересбор аргументов браузера.
+    /// </summary>
+    public static VpnDetectionResult DetectCached()
+    {
+        lock (Gate)
+        {
+            if (_cached is not null && DateTime.UtcNow - _cachedAt < TimeSpan.FromSeconds(30))
+                return _cached;
+        }
+        var fresh = Detect();
+        lock (Gate)
+        {
+            _cached = fresh;
+            _cachedAt = DateTime.UtcNow;
+        }
+        return fresh;
+    }
+
     /// <summary>
     /// Сканирует сетевые интерфейсы на активные VPN-подключения.
     /// Работает без прав администратора (только чтение).

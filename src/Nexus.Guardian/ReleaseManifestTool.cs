@@ -40,7 +40,8 @@ internal static class ReleaseManifestTool
     private static readonly (string FileName, string Group, string Purpose, Func<string, bool> Contains)[] Packs =
     [
         ("nexus-core.zip", "core", "ядро браузера",
-            relative => !relative.StartsWith("AI/", StringComparison.OrdinalIgnoreCase)),
+            relative => !relative.StartsWith("AI/", StringComparison.OrdinalIgnoreCase) &&
+                        !relative.StartsWith("xray/", StringComparison.OrdinalIgnoreCase)),
         ("nexus-ai-runtime.zip", "ai", "среда нейросетей и голоса",
             relative => relative.StartsWith("AI/", StringComparison.OrdinalIgnoreCase) &&
                         relative.Split('/').Skip(1).First() is "node" or "node_modules" or "ffmpeg"
@@ -52,6 +53,12 @@ internal static class ReleaseManifestTool
         ("nexus-ai-vlm.zip", "ai", "описание страниц (опционально)",
             relative => relative.StartsWith("AI/models/", StringComparison.OrdinalIgnoreCase) &&
                         relative.Split('/').Skip(2).First() is "qwen3-0.6b" or "smolvlm-500m"),
+        // Транспорт собственного сервера (VLESS/Xray): ставится только по
+        // требованию — при первом подключении сервера, из настроек.
+        ("nexus-net-xray.zip", "xray", "транспорт собственного сервера (опционально)",
+            relative => relative.StartsWith("xray/", StringComparison.OrdinalIgnoreCase) &&
+                        !relative.EndsWith(".log", StringComparison.OrdinalIgnoreCase) &&
+                        !relative.Equals("xray/config.json", StringComparison.OrdinalIgnoreCase)),
     ];
 
     /// <summary>

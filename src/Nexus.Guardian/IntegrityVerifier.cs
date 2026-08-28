@@ -207,10 +207,12 @@ internal static class IntegrityVerifier
             Sha256 = ComputeSha256(path),
             Critical = critical,
             Large = info.Length >= 64L * 1024 * 1024 || largeModelBlob,
-            // Вариант манифеста для лёгкой установки: AI помечается как
-            // «приедет по сети» — допустимо отсутствовать до доставки.
+            // Вариант манифеста для лёгкой установки: AI и транспорт
+            // собственного сервера помечаются как «приедет по сети» —
+            // допустимо отсутствовать до доставки.
             Pending = markAiPending &&
-                      relative.StartsWith("AI/", StringComparison.OrdinalIgnoreCase)
+                      (relative.StartsWith("AI/", StringComparison.OrdinalIgnoreCase) ||
+                       relative.StartsWith("xray/", StringComparison.OrdinalIgnoreCase))
         };
     }
 

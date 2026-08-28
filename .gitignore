@@ -20,6 +20,14 @@ src/NexusMonach/AI/models/
 src/NexusMonach/AI/node_modules/
 src/NexusMonach/AI/**/*.dll
 
+# Транспорт VLESS (Xray, MPL-2.0): бинари и гео-базы едут только в
+# подписанных релизных паках — в git не принимаются, как и веса моделей.
+# Воспроизводимая загрузка: scripts/Get-Xray.ps1
+src/NexusMonach/xray/*.exe
+src/NexusMonach/xray/*.dat
+src/NexusMonach/xray/config.json
+src/NexusMonach/xray/*.log
+
 # Сертификаты подписи и приватные ключи никогда не хранятся в Git.
 *.pfx
 *.p12

@@ -208,11 +208,13 @@ public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
             return;
 
         var settings = SettingsService.Current;
+        var network = Services.NetworkChainService.Snapshot();
         var configuration = JsonSerializer.Serialize(new
         {
             showSetup = !settings.InitialProtectionSetupShown,
             theme = settings.Theme.ToString(),
-            mode = settings.ThemeMode.ToString()
+            mode = settings.ThemeMode.ToString(),
+            network = JsonSerializer.Deserialize<JsonElement>(network.ToJson())
         });
         try
         {
@@ -642,10 +644,39 @@ public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
             {
                 SettingsRequested?.Invoke(this, EventArgs.Empty);
             }
+            else if (type is "toggle-vless" or "toggle-tor" or "toggle-proxy")
+            {
+                // Тумблеры цепочки на стартовой странице: сервер, Тор, прокси.
+                _ = Task.Run(async () =>
+                {
+                    var snapshot = type switch
+                    {
+                        "toggle-vless" => await Services.NetworkChainService.ToggleVlessAsync(),
+                        "toggle-tor" => await Services.NetworkChainService.ToggleTorAsync(),
+                        _ => await Services.NetworkChainService.ToggleProxyAsync()
+                    };
+                    await PushNetworkStateAsync(snapshot);
+                });
+            }
         }
         catch (JsonException)
         {
             // Сообщения неизвестного формата отбрасываются.
+        }
+    }
+
+    /// <summary>Проталкивает состояние цепочки в открытую стартовую страницу.</summary>
+    private async Task PushNetworkStateAsync(Services.NetworkChainSnapshot snapshot)
+    {
+        try
+        {
+            if (Core is null || !CurrentUrl.Equals(UrlService.NewTabUrl, StringComparison.OrdinalIgnoreCase))
+                return;
+            await Core.ExecuteScriptAsync($"window.nexusNetworkState?.({snapshot.ToJson()});");
+        }
+        catch (InvalidOperationException swallowed)
+        {
+            Services.SwallowLog.Log("browser-tab", "PushNetworkStateAsync", swallowed);
         }
     }
 
@@ -665,7 +696,7 @@ public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
 
     private static bool IsAllowedInternalMessage(string page, string? type) =>
         page.Equals("/start.html", StringComparison.OrdinalIgnoreCase)
-            ? type is "navigate" or "settings"
+            ? type is "navigate" or "settings" or "toggle-vless" or "toggle-tor" or "toggle-proxy"
             : page.Equals("/search.html", StringComparison.OrdinalIgnoreCase) && type == "result-open";
 
     private void HandleDownload(CoreWebView2DownloadStartingEventArgs e)

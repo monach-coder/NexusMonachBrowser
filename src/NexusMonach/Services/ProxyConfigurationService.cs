@@ -12,6 +12,29 @@ public static partial class ProxyConfigurationService
         if (settings.PreventWebRtcIpLeak)
             arguments.Add("--force-webrtc-ip-handling-policy=disable_non_proxied_udp");
 
+        // Цепочка маршрута вкладок. Тор не имеет прямого выхода в сеть —
+        // он всегда оборачивается транспортом (Xray) или системным VPN.
+        // Через Тор вкладки идут только когда Тор в цепочке И обёрнут;
+        // без обёртки браузер продолжает работать с максимальной защитой
+        // Режима Следа, но с реальным IP — до появления туннеля.
+        var transportUp = settings.VlessEnabled && Services.Vless.VlessRuntime.IsRunning;
+        var torWrapped = Services.Tor.TorService.IsRunning &&
+                         (transportUp || Services.Tor.VpnDetector.DetectCached().VpnActive);
+        if (settings.TorInChain && torWrapped)
+        {
+            arguments.Add($"--proxy-server=\"socks5://127.0.0.1:{Services.Tor.TorService.SocksPort}\"");
+            arguments.Add($"--proxy-bypass-list=\"{BuildBypassList(settings.ProxyBypassList)}\"");
+            return string.Join(' ', arguments);
+        }
+
+        // Тор исключён из цепочки (или ждёт туннель): напрямую через сервер.
+        if (transportUp)
+        {
+            arguments.Add($"--proxy-server=\"socks5://127.0.0.1:{Services.Vless.VlessRuntime.SocksPort}\"");
+            arguments.Add($"--proxy-bypass-list=\"{BuildBypassList(settings.ProxyBypassList)}\"");
+            return string.Join(' ', arguments);
+        }
+
         if (!settings.EnableCustomProxy)
             return string.Join(' ', arguments);
 
