@@ -111,13 +111,14 @@ public static class WhisperService
     {
         if (wav.Length < 1_000) return new WhisperTranscript(string.Empty, string.Empty);
 
-        // Parakeet TDT: быстрее и точнее whisper — приоритетный путь,
-        // если модель доставлена. Фолбэк на whisper при любой ошибке.
-        if (lane == WhisperLane.Dubbing && ParakeetService.IsAvailable)
-        {
-            var parakeet = await TryParakeetAsync(wav, cancellationToken);
-            if (parakeet is not null) return parakeet;
-        }
+        // Parakeet TDT: экспериментальный путь — 0 сегментов и OutOfMemory
+        // на 622 МБ энкодере. Отключён до отладки TDT-декодирования;
+        // код и модель остаются в дереве для следующей итерации.
+        // if (lane == WhisperLane.Dubbing && ParakeetService.IsAvailable)
+        // {
+        //     var parakeet = await TryParakeetAsync(wav, cancellationToken);
+        //     if (parakeet is not null) return parakeet;
+        // }
 
         await EnsureInstalledAsync(cancellationToken: cancellationToken);
         var state = GetLane(lane);
