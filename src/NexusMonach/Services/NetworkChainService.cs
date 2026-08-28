@@ -102,7 +102,7 @@ public static class NetworkChainService
         await SettingsService.SaveAsync(settings);
         if (!wasEnabled)
         {
-            Announce("Сервер подключён. Тор оборачивается в него."
+            Announce("Сервер подключён. Анонимный слой оборачивается в него."
                 + RouteChangeNote(settings));
             await RewrapTorAsync(settings);
         }
@@ -124,14 +124,14 @@ public static class NetworkChainService
             await Tor.TorBridgeManager.RestartWithBridgesAsync(settings);
             var snapshot = Snapshot();
             Announce(snapshot.TorWrapped
-                ? "Тор в цепочке и обёрнут туннелем." + RouteChangeNote(settings)
-                : "Тор ждёт туннель: сервер или VPN. Браузер работает с максимальной защитой, но IP реальный.");
+                ? "Анонимный слой в цепочке и обёрнут туннелем." + RouteChangeNote(settings)
+                : "Анонимный слой ждёт туннель: сервер или системный туннель. Браузер работает с максимальной защитой, но IP реальный.");
             return Snapshot();
         }
 
         settings.TorInChain = false;
         await SettingsService.SaveAsync(settings);
-        Announce("Тор исключён из цепочки вкладок — скорость выше." + RouteChangeNote(settings));
+        Announce("Анонимный слой исключён из цепочки вкладок — скорость выше." + RouteChangeNote(settings));
         return Snapshot();
     }
 
@@ -166,9 +166,9 @@ public static class NetworkChainService
     private static string Describe(BrowserSettings settings, bool vlessRunning, bool wrapped)
     {
         if (settings.TorInChain && wrapped)
-            return vlessRunning ? "Тор обёрнут сервером" : "Тор обёрнут VPN";
+            return vlessRunning ? "Слой обёрнут сервером" : "Слой обёрнут туннелем";
         if (settings.TorInChain)
-            return "Тор ждёт туннель (сервер или VPN); IP реальный";
+            return "Слой ждёт туннель (сервер или системный); IP реальный";
         return vlessRunning ? "Напрямую через сервер" : "Прямое соединение";
     }
 

@@ -14,7 +14,7 @@ public static class PortGuard
     /// </summary>
     public static readonly (int Port, string Reason)[] GuardedPorts =
     {
-        (53,   "DNS — принудительно через Tor SOCKS"),
+        (53,   "DNS — принудительно через SOCKS маршрута"),
         (5353, "mDNS — отключён в WebView2"),
         (1900, "SSDP/UPnP — отключён в WebView2"),
         (137,  "NetBIOS — отключён в WebView2"),

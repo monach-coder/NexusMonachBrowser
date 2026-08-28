@@ -41,7 +41,7 @@ public static class TrailMode
     {
         var vpn = VpnDetector.Detect();
         var guard = PortGuard.Protect(tab);
-        var vpnText = vpn.VpnActive ? $" VPN: {vpn.AdapterName}." : "";
+        var vpnText = vpn.VpnActive ? $" Туннель: {vpn.AdapterName}." : "";
         return (guard.Success, guard.Message + vpnText);
     }
 
@@ -56,8 +56,8 @@ public static class TrailMode
         if (TorService.IsRunning)
         {
             var source = TorService.IsManaged ? "браузерный" : "внешний";
-            return (true, $"Tor подключён ({source}, порт {TorService.SocksPort})");
+            return (true, $"Маршрут подключён ({source}, порт {TorService.SocksPort})");
         }
-        return (false, "Tor не запущен — включите Tor или запустите через браузер");
+        return (false, "Маршрут не запущен — включите Режим Следа или запустите через браузер");
     }
 }

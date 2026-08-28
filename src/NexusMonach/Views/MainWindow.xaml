@@ -325,7 +325,7 @@
                 <Button Grid.Column="2" Style="{StaticResource TopologyNodeButton}" Click="SystemRouteNode_Click">
                     <StackPanel>
                         <TextBlock Text="СИСТЕМНЫЙ МАРШРУТ" FontSize="7.8" Foreground="{StaticResource MutedTextBrush}" />
-                        <TextBlock Text="Windows / VPN" FontSize="9.5" HorizontalAlignment="Center" />
+                        <TextBlock Text="Windows / Туннель" FontSize="9.5" HorizontalAlignment="Center" />
                     </StackPanel>
                 </Button>
                 <Border Grid.Column="3" Height="2" Margin="6,0" Background="{StaticResource BorderBrush}" VerticalAlignment="Center" />

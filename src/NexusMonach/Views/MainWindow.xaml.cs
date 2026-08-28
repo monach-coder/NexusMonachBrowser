@@ -481,17 +481,17 @@ public partial class MainWindow : Window
             if (chain.TorInChain && chain.TorWrapped)
                 Ui.Post(() => Services.VoiceAssistantService.Announce(
                     chain.VlessRunning
-                        ? "Тор в цепочке, обёрнут вашим сервером."
-                        : "Тор в цепочке, обёрнут VPN.",
+                        ? "Анонимный слой в цепочке, обёрнут вашим сервером."
+                        : "Анонимный слой в цепочке, обёрнут системным туннелем.",
                     Services.VoiceAnnouncementPriority.Important));
             else if (chain.TorInChain)
                 Ui.Post(() => Services.VoiceAssistantService.Announce(
-                    "Тор ждёт туннель: сервер или VPN. Браузер работает с максимальной защитой, но IP реальный.",
+                    "Анонимный слой ждёт туннель: сервер или системный туннель. Браузер работает с максимальной защитой, но IP реальный.",
                     Services.VoiceAnnouncementPriority.Important));
 
             if (settings.TorRelayEnabled)
                 Ui.Post(() => Services.VoiceAssistantService.Announce(
-                    "Релейный мост Тора запущен. Ваш браузер помогает пользователям цензурных сетей.",
+                    "Релейный мост запущен. Ваш браузер помогает пользователям цензурных сетей.",
                     Services.VoiceAnnouncementPriority.Important));
         }
         catch (Exception ex)

@@ -87,12 +87,12 @@ public sealed record VlessProfile
         var publicKey = Param("pbk");
         if (security == "reality" && publicKey.Length == 0)
         {
-            error = "Reality-профиль без публичного ключа (pbk) — ссылка неполная";
+            error = "Профиль сервера без публичного ключа (pbk) — ссылка неполная";
             return false;
         }
         if (security == "reality" && sni.Length == 0)
         {
-            error = "Reality-профиль без имени сайта маскировки (sni) — ссылка неполная";
+            error = "Профиль сервера без имени сайта маскировки (sni) — ссылка неполная";
             return false;
         }
 

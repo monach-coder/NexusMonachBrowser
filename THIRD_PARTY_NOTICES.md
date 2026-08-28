@@ -7,7 +7,7 @@ Qwen, Whisper, multilingual-e5, SmolVLM и OPUS-MT.
 
 Транспортный модуль собственного сервера — Xray-core (XTLS Project),
 распространяемый по Mozilla Public License 2.0. Неизменённые бинари
-`xray.exe` и гео-базы входят в подписанный релизный пак `nexus-net-xray.zip`
+`xray.exe` и гео-базы входят в подписанный релизный транспортный пак
 как Larger Work; полный текст лицензии приложен файлом
 `xray/LICENSE-Xray-MPL-2.0.txt`, исходный код доступен на
 github.com/XTLS/Xray-core. Исходники Xray проектом не модифицируются.

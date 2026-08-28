@@ -59,12 +59,12 @@ public class LocalPortScannerTests
     }
 
     [Fact]
-    public void Classify_TorSocksPort_IsFriendly()
+    public void Classify_TrailSocksPort_IsFriendly()
     {
         var entry = LocalPortScanner.Classify(
             new LocalPortInfo("TCP", "127.0.0.1", 9051, 7, "tor"));
         Assert.Equal(0, entry.Severity);
-        Assert.Equal("Tor", entry.Risk);
+        Assert.Equal("След", entry.Risk);
     }
 
     [Fact]

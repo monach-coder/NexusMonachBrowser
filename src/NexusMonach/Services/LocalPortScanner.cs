@@ -67,11 +67,11 @@ public static class LocalPortScanner
         if (info.Protocol == "TCP" && info.Port is 9050 or 9051 &&
             info.ProcessName.StartsWith("tor", StringComparison.OrdinalIgnoreCase))
             return new LocalPortEntry(info.Protocol, info.Port, info.Address, info.ProcessName,
-                "Tor", "Прокси-порт режима След", 0);
+                "След", "Прокси-порт режима След", 0);
 
         var (risk, note, severity) = (info.Protocol, info.Port) switch
         {
-            (_, 53) => ("DNS", "Может обходить Tor — проверьте стража DNS", 1),
+            (_, 53) => ("DNS", "Может обходить маршрут — проверьте стража DNS", 1),
             ("UDP", 5353) => ("mDNS", "Утечка имён локальной сети", 1),
             (_, 1900) => ("SSDP/UPnP", "Утечка топологии сети", 1),
             (_, 137 or 138 or 139) => ("NetBIOS", "Раздаёт имена машины в сеть", 1),
@@ -82,7 +82,7 @@ public static class LocalPortScanner
             (_, 3389) => ("RDP", "Удалённый рабочий стол: порт-щит не трогает — отключите, если не пользуетесь", 2),
             (_, 5900) => ("VNC", "Удалённое управление: порт-щит не трогает — отключите, если не пользуетесь", 2),
             (_, 22 or 23) => ("Telnet/SSH", "Удалённый терминал: порт-щит не трогает — отключите, если не пользуетесь", 2),
-            (_, 1080 or 8118) => ("Прокси", "Может конфликтовать с Tor", 1),
+            (_, 1080 or 8118) => ("Прокси", "Может конфликтовать с маршрутом", 1),
             _ => ("Открыт", IsLoopback(info.Address) ? "Локальный слушатель" : "Слушатель машины", 0)
         };
 

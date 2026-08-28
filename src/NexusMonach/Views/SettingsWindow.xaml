@@ -291,16 +291,16 @@
                         </Border>
                         <Border Style="{StaticResource SettingsCard}">
                             <StackPanel>
-                                <TextBlock Text="Tor · Режим След" FontSize="15" FontWeight="SemiBold" />
-                                <TextBlock Text="Весь трафик браузера идёт через Tor-сеть. Если на машине активен VPN — Tor маршрутизируется через него, и цензор видит только VPN."
+                                <TextBlock Text="Анонимный маршрут · Режим След" FontSize="15" FontWeight="SemiBold" />
+                                <TextBlock Text="Весь трафик браузера идёт через многослойную анонимную сеть. Если на машине активен туннель — маршрут работает через него, и цензор видит только туннель."
                                            TextWrapping="Wrap" Margin="0,6,0,10" FontSize="11"
                                            Foreground="{StaticResource MutedTextBrush}" />
                                 <CheckBox x:Name="TrailModeCheck" Margin="0,0,0,8"
-                                          Content="Включить Режим След (Tor + строгая приватность)" />
-                                <TextBlock x:Name="TorStatusLabel" Text="Tor не запущен"
+                                          Content="Включить Режим След (анонимный маршрут + строгая приватность)" />
+                                <TextBlock x:Name="TorStatusLabel" Text="Маршрут не запущен"
                                            FontSize="12" Foreground="{StaticResource MutedTextBrush}"
                                            Margin="0,4,0,10" />
-                                <Button x:Name="TorStartButton" Content="Запустить Tor"
+                                <Button x:Name="TorStartButton" Content="Запустить маршрут"
                                         Style="{StaticResource NexusButton}" Padding="16,7"
                                         HorizontalAlignment="Left" Margin="0,0,0,12"
                                         Click="TorStartButton_Click" />
@@ -314,7 +314,7 @@
                                            Foreground="{StaticResource MutedTextBrush}" />
                                 <CheckBox x:Name="TorRelayCheck" Margin="0,14,0,6">
                                     <TextBlock TextWrapping="Wrap"
-                                               Text="Работать мостом Tor — помогать пользователям цензурных сетей. Браузер никогда не становится выходным узлом; для работы извне нужен проброс портов 9101–9102 на роутере." />
+                                               Text="Работать транспортным мостом — помогать пользователям цензурных сетей. Браузер никогда не становится выходным узлом; для работы извне нужен проброс портов 9101–9102 на роутере." />
                                 </CheckBox>
                                 <TextBlock x:Name="TorRelayStatusText" FontSize="11"
                                            Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap"
@@ -323,8 +323,8 @@
                         </Border>
                         <Border Style="{StaticResource SettingsCard}">
                             <StackPanel>
-                                <TextBlock Text="Собственный сервер · VLESS" FontSize="15" FontWeight="SemiBold" />
-                                <TextBlock Text="Трафик направляется на ваш сервер с маскировкой Reality. Прямого выхода у Тора нет — при включённом сервере весь его трафик заворачивается в него; без сервера Тор оборачивается системным VPN или ждёт туннель."
+                                <TextBlock Text="Собственный сервер" FontSize="15" FontWeight="SemiBold" />
+                                <TextBlock Text="Трафик направляется на ваш сервер с маскировкой под обычный TLS. Прямого выхода у анонимного слоя нет — при включённом сервере весь его трафик заворачивается в него; без сервера он оборачивается системным туннелем или ждёт."
                                            TextWrapping="Wrap" Margin="0,6,0,10" FontSize="11"
                                            Foreground="{StaticResource MutedTextBrush}" />
                                 <TextBlock Text="Ссылка профиля (vless://…)" Margin="0,0,0,5" />
@@ -341,7 +341,7 @@
                                           Content="Направлять трафик браузера через сервер" />
                                 <CheckBox x:Name="TorInChainCheck" Margin="0,0,0,6">
                                     <TextBlock TextWrapping="Wrap"
-                                               Text="Тор — часть цепочки (браузер → Тор → сервер/VPN). Выключите для скорости: вкладки пойдут напрямую через сервер или VPN." />
+                                               Text="Анонимный слой — часть цепочки (браузер → анонимный слой → сервер/туннель). Выключите для скорости: вкладки пойдут напрямую через сервер или туннель." />
                                 </CheckBox>
                                 <TextBlock Text="Транспортный модуль (~50 МБ) браузер скачает сам при первом подключении — по подписанному манифесту, с проверкой хеша. Тумблеры цепочки продублированы на стартовой странице."
                                            TextWrapping="Wrap" Margin="0,4,0,0" FontSize="11"

@@ -34,7 +34,7 @@
             <Border Grid.Column="3" Background="{StaticResource BorderBrush}" />
 
             <StackPanel Grid.Column="4" Margin="10,0">
-                <TextBlock x:Name="FlagsText" FontSize="11" TextWrapping="Wrap" Text="VPN — · Proxy —" />
+                <TextBlock x:Name="FlagsText" FontSize="11" TextWrapping="Wrap" Text="Туннель — · Proxy —" />
                 <TextBlock x:Name="WebRtcText" Margin="0,4,0,0" FontSize="10.5"
                            TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Text="WebRTC: —" />
             </StackPanel>

@@ -63,13 +63,13 @@ $assets = @(
     "dist\release\nexus-ai-runtime.zip",
     "dist\release\nexus-ai-models.zip",
     "dist\release\nexus-ai-vlm.zip",
-    "dist\release\nexus-net-xray.zip"
+    "dist\release\nexus-net-transport.zip"
 ) | Where-Object { Test-Path $_ }
 if ($assets.Count -lt 4) { throw "Release assets are missing (found $($assets.Count))" }
 # Транспортный пак обязателен: без него включение сервера не сможет
 # скачать модуль по манифесту.
-if ($assets -notcontains "dist\release\nexus-net-xray.zip") {
-    throw "nexus-net-xray.zip is missing - the server transport pack must ship"
+if ($assets -notcontains "dist\release\nexus-net-transport.zip") {
+    throw "nexus-net-transport.zip is missing - the transport pack must ship"
 }
 
 if (-not $Notes) {

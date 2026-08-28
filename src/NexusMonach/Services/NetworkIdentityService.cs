@@ -48,7 +48,7 @@ public static class NetworkIdentityService
         }
         else if (vpn)
         {
-            route = "VPN-интерфейс · маршрут Windows";
+            route = "Туннельный интерфейс · маршрут Windows";
             protectedRoute = true;
         }
 

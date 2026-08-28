@@ -231,7 +231,7 @@ public partial class SettingsWindow : Window
     {
         if (TorStartButton is null) return;
         TorStartButton.IsEnabled = false;
-        TorStartButton.Content = "Запускаю Tor…";
+        TorStartButton.Content = "Запускаю маршрут…";
         try
         {
             var settings = SettingsService.Current.Clone();
@@ -240,8 +240,8 @@ public partial class SettingsWindow : Window
             UpdateTorStatus();
             if (state == Services.Tor.TorState.Failed)
                 GlassDialogWindow.Show(this,
-                    "Tor не смог запуститься. Проверьте, что tor.exe установлен (C:\\Tor) и мосты указаны верно.",
-                    "Tor", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    "Маршрут не смог запуститься. Проверьте, что компонент анонимной сети установлен (C:\\Tor) и мосты указаны верно.",
+                    "Маршрут", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         catch (Exception ex)
         {
@@ -250,7 +250,7 @@ public partial class SettingsWindow : Window
         finally
         {
             TorStartButton.IsEnabled = true;
-            TorStartButton.Content = "Запустить Tor";
+            TorStartButton.Content = "Запустить маршрут";
         }
     }
 

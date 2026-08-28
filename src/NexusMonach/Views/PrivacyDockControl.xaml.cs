@@ -123,7 +123,7 @@ public partial class PrivacyDockControl : UserControl
         BrowserIpText.Text = "Локальный IP: " + Dash(string.Join(", ", network.LocalAddresses.Take(3)));
         DirectIpText.Text = "Маршрут: " + Dash(network.PrimaryInterface);
         LocationText.Text = "Среда: " + network.LocalRegion + " · " + browser.Timezone;
-        FlagsText.Text = $"VPN-интерфейс {Mark(network.HasVpnInterface)} · Proxy {Mark(network.HasCustomProxy)} · Tor-порт {Mark(network.HasTorEndpoint)}";
+        FlagsText.Text = $"Туннель {Mark(network.HasVpnInterface)} · Proxy {Mark(network.HasCustomProxy)} · Порт маршрута {Mark(network.HasTorEndpoint)}";
 
         var candidates = browser.Candidates.Select(ParseCandidate).Where(x => x is not null).Cast<Ice>().ToArray();
         var publicCandidates = candidates.Where(x => IsPublicAddress(x.Address)).Select(x => x.Address)

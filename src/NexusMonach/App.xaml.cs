@@ -397,8 +397,8 @@ public partial class App : Application
                 vpn.VpnActive ? "active:" + vpn.AdapterName : "not-found");
             Ui.Post(() => Services.VoiceAssistantService.Announce(
                 vpn.VpnActive
-                    ? $"Обнаружен VPN: {vpn.AdapterName}. Тор будет работать через него."
-                    : "VPN на машине не обнаружен.",
+                    ? $"Обнаружен системный туннель: {vpn.AdapterName}. Маршрут будет работать через него."
+                    : "Системный туннель на машине не обнаружен.",
                 Services.VoiceAnnouncementPriority.Important));
         }
         catch (Exception ex)
@@ -442,7 +442,7 @@ public partial class App : Application
                     {
                         await Services.Tor.TorBridgeManager.RestartWithBridgesAsync(current);
                         Ui.Post(() => Services.VoiceAssistantService.Announce(
-                            "Транспорт сервера упал. Тор переключился на прямой туннель или ждёт.",
+                            "Транспорт сервера упал. Маршрут переключился на системный туннель или ждёт.",
                             Services.VoiceAnnouncementPriority.Important));
                     }
                 }

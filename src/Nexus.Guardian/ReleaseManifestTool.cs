@@ -55,7 +55,7 @@ internal static class ReleaseManifestTool
                         relative.Split('/').Skip(2).First() is "qwen3-0.6b" or "smolvlm-500m"),
         // Транспорт собственного сервера (VLESS/Xray): ставится только по
         // требованию — при первом подключении сервера, из настроек.
-        ("nexus-net-xray.zip", "xray", "транспорт собственного сервера (опционально)",
+        ("nexus-net-transport.zip", "xray", "транспортный модуль сети (опционально)",
             relative => relative.StartsWith("xray/", StringComparison.OrdinalIgnoreCase) &&
                         !relative.EndsWith(".log", StringComparison.OrdinalIgnoreCase) &&
                         !relative.Equals("xray/config.json", StringComparison.OrdinalIgnoreCase)),
