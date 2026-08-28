@@ -97,7 +97,7 @@ public static class AiPackFetchService
                 {
                     System.IO.Compression.ZipFile.ExtractToDirectory(stagedZip, root, overwriteFiles: true);
                 }
-                catch (System.IO.IOException locked)
+                catch (System.IO.IOException)
                 {
                     CrashReportService.AddBreadcrumb("ai-pack", "extract-skip-locked");
                 }
