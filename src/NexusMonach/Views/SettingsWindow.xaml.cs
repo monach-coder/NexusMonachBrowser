@@ -59,11 +59,6 @@ public partial class SettingsWindow : Window
             new Choice<BrowserThemeMode>("Тёмный — тёмный фон и светлый текст", BrowserThemeMode.Dark),
             new Choice<BrowserThemeMode>("Светлый — светлый фон и тёмный текст", BrowserThemeMode.Light)
         };
-        var proxyChoices = new[]
-        {
-            new Choice<ProxyKind>("SOCKS5 — подходит для Tor и локальных туннелей", ProxyKind.Socks5),
-            new Choice<ProxyKind>("HTTP / HTTPS proxy", ProxyKind.Http)
-        };
         var secureDnsModeChoices = new[]
         {
             new Choice<SecureDnsMode>("Строгий DoH — без незашифрованного fallback (рекомендуется)",
@@ -113,7 +108,6 @@ public partial class SettingsWindow : Window
         PrivacyLevelCombo.ItemsSource = privacyChoices;
         ThemeCombo.ItemsSource = themeChoices;
         ThemeModeCombo.ItemsSource = themeModeChoices;
-        ProxyTypeCombo.ItemsSource = proxyChoices;
         SecureDnsModeCombo.ItemsSource = secureDnsModeChoices;
         SecureDnsProviderCombo.ItemsSource = secureDnsProviderChoices;
         CrashReportModeCombo.ItemsSource = crashChoices;
@@ -125,7 +119,6 @@ public partial class SettingsWindow : Window
         PrivacyLevelCombo.SelectedItem = privacyChoices.First(x => x.Value == settings.PrivacyLevel);
         ThemeCombo.SelectedItem = themeChoices.First(x => x.Value == settings.Theme);
         ThemeModeCombo.SelectedItem = themeModeChoices.First(x => x.Value == settings.ThemeMode);
-        ProxyTypeCombo.SelectedItem = proxyChoices.First(x => x.Value == settings.ProxyKind);
         SecureDnsModeCombo.SelectedItem = secureDnsModeChoices.First(x => x.Value == settings.SecureDnsMode);
         SecureDnsProviderCombo.SelectedItem = secureDnsProviderChoices.First(x => x.Value == settings.SecureDnsProvider);
         CrashReportModeCombo.SelectedItem = crashChoices.First(x => x.Value == settings.CrashReportMode);
@@ -147,31 +140,8 @@ public partial class SettingsWindow : Window
         AutofillCheck.IsChecked = settings.EnableGeneralAutofill;
         VoiceStartupCheck.IsChecked = settings.VoiceSpeakAtStartup;
         VoiceHandsFreeCheck.IsChecked = settings.VoiceHandsFreeEnabled;
-        CustomProxyCheck.IsChecked = settings.EnableCustomProxy;
-        ProxyHostBox.Text = settings.ProxyHost;
-        ProxyPortBox.Text = settings.ProxyPort.ToString();
-        ProxyBypassBox.Text = settings.ProxyBypassList;
-        TrailModeCheck.IsChecked = settings.TrailModeEnabled;
-        TorRelayCheck.IsChecked = settings.TorRelayEnabled;
-        VlessUriBox.Text = settings.VlessProfileUri;
-        VlessEnabledCheck.IsChecked = settings.VlessEnabled;
-        TorInChainCheck.IsChecked = settings.TorInChain;
-        UpdateVlessStatus();
-        UpdateRelayStatus(settings);
-        TorBridgesBox.Text = settings.TorCustomBridges;
-        UpdateTorStatus();
         HttpsFirstCheck.IsChecked = settings.HttpsFirstEnabled;
-        PrivacyMonitorCheck.IsChecked = settings.ShowPrivacyMonitor;
-        PreventWebRtcLeakCheck.IsChecked = settings.PreventWebRtcIpLeak;
-        PortShieldModeCombo.ItemsSource = new[]
-        {
-            new Choice<Services.PortShieldMode>("Авто — закрывать утечки на сессию (один UAC)", Services.PortShieldMode.Auto),
-            new Choice<Services.PortShieldMode>("Только уведомлять голосом", Services.PortShieldMode.NotifyOnly),
-            new Choice<Services.PortShieldMode>("Выключить", Services.PortShieldMode.Off)
-        };
-        PortShieldModeCombo.SelectedItem = PortShieldModeCombo.ItemsSource
-            .Cast<Choice<Services.PortShieldMode>>()
-            .FirstOrDefault(c => c.Value == settings.PortShieldMode);
+        PrivacyDockCheck.IsChecked = settings.ShowPrivacyMonitor;
         CrashReportEndpointBox.Text = settings.CrashReportEndpoint;
         GitHubRepositoryBox.Text = settings.GitHubRepository;
         GitHubTokenStatusText.Text = WindowsCredentialStore.HasGitHubAccessToken()
@@ -186,18 +156,24 @@ public partial class SettingsWindow : Window
         if (e.NewValue is TreeViewItem { Tag: string section })
         {
             ShowSection(section);
-            if (section == "Network") UpdateTorStatus();
         }
-    }
-
-    private void PortShieldModeCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
-    {
     }
 
     /// <summary>
     /// Прозрачность UAC: показываем ровно тот скрипт, который выполнит
     /// порт-щит при повышении прав, с пояснением каждой строки.
     /// </summary>
+    /// <summary>Галка панели «Приватность и защита»: применяется сразу,
+    /// без сохранения остальной формы.</summary>
+    private async void PrivacyDockToggle_Changed(object sender, RoutedEventArgs e)
+    {
+        if (PrivacyDockCheck is null) return;
+        var settings = SettingsService.Current;
+        settings.ShowPrivacyMonitor = PrivacyDockCheck.IsChecked == true;
+        await SettingsService.SaveAsync(settings);
+        Views.MainWindow.ApplyPrivacyDockVisibility(settings.ShowPrivacyMonitor);
+    }
+
     private void PreviewShieldScript_Click(object sender, RoutedEventArgs e)
     {
         var script = Services.PortShieldService.BuildRuleScript(
@@ -218,96 +194,15 @@ public partial class SettingsWindow : Window
             MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
-    private void UpdateRelayStatus(BrowserSettings settings)
-    {
-        if (TorRelayStatusText is null) return;
-        var state = Services.Tor.TorRelayService.GetState(
-            settings.TorRelayEnabled, settings.TorRelayOrPort, settings.TorRelayObfs4Port);
-        TorRelayStatusText.Text = Services.Tor.TorRelayService.Describe(
-            state, settings.TorRelayOrPort, settings.TorRelayObfs4Port);
-    }
 
-    private async void TorStartButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (TorStartButton is null) return;
-        TorStartButton.IsEnabled = false;
-        TorStartButton.Content = "Запускаю маршрут…";
-        try
-        {
-            var settings = SettingsService.Current.Clone();
-            settings.TorCustomBridges = TorBridgesBox.Text.Trim();
-            var state = await Services.Tor.TorBridgeManager.RestartWithBridgesAsync(settings);
-            UpdateTorStatus();
-            if (state == Services.Tor.TorState.Failed)
-                GlassDialogWindow.Show(this,
-                    "Маршрут не смог запуститься. Проверьте, что компонент анонимной сети установлен (C:\\Tor) и мосты указаны верно.",
-                    "Маршрут", MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-        catch (Exception ex)
-        {
-            CrashReportService.RecordNonFatal("tor", "start-from-settings", ex);
-        }
-        finally
-        {
-            TorStartButton.IsEnabled = true;
-            TorStartButton.Content = "Запустить маршрут";
-        }
-    }
 
-    private void UpdateTorStatus()
-    {
-        if (TorStatusLabel is null) return;
-        var (ready, status) = Services.Tor.TrailMode.CheckTorStatus();
-        var vpn = Services.Tor.VpnDetector.Detect();        var vpnText = vpn.VpnActive
-            ? $"\nVPN: {vpn.AdapterName} ({vpn.AdapterType})"
-            : "\nVPN: не найден";
-        var portsText = vpn.OpenPorts.Count > 0
-            ? $"\nОткрытые порты: {string.Join(", ", vpn.OpenPorts)}"
-            : "";
-        TorStatusLabel.Text = status + vpnText + portsText;
-    }
 
-    private void UpdateVlessStatus()
-    {
-        if (VlessStatusLabel is null) return;
-        var snapshot = Services.NetworkChainService.Snapshot();
-        var profile = Services.Vless.VlessProfile.TryParse(
-            SettingsService.Current.VlessProfileUri, out _, out _) ? "" : "Ссылка не заполнена. ";
-        VlessStatusLabel.Text = profile + snapshot.StatusText +
-            (snapshot.VlessRunning ? $" (SOCKS {Services.Vless.VlessRuntime.SocksPort})" : "");
-    }
 
-    private async void VlessConnectButton_Click(object sender, RoutedEventArgs e)
-    {
-        if (VlessConnectButton is null) return;
-        VlessConnectButton.IsEnabled = false;
-        VlessConnectButton.Content = "Подключаю…";
-        try
-        {
-            var settings = SettingsService.Current;
-            settings.VlessProfileUri = VlessUriBox.Text.Trim();
-            if (!Services.Vless.VlessProfile.TryParse(settings.VlessProfileUri, out _, out var error))
-            {
-                VlessStatusLabel.Text = "Ссылка не принята: " + error;
-                return;
-            }
-            await SettingsService.SaveAsync(settings);
-            var snapshot = await Services.NetworkChainService.EnsureVlessAsync();
-            VlessEnabledCheck.IsChecked = SettingsService.Current.VlessEnabled;
-            VlessStatusLabel.Text = snapshot.StatusText +
-                (snapshot.VlessRunning ? $" (SOCKS {Services.Vless.VlessRuntime.SocksPort})" : "");
-        }
-        catch (Exception ex)
-        {
-            CrashReportService.RecordNonFatal("vless", "connect-from-settings", ex);
-            VlessStatusLabel.Text = "Ошибка подключения: " + ex.Message;
-        }
-        finally
-        {
-            VlessConnectButton.IsEnabled = true;
-            VlessConnectButton.Content = "Проверить и подключить";
-        }
-    }
+
+
+
+
+
 
     private void ShowSection(string section)
     {
@@ -361,27 +256,6 @@ public partial class SettingsWindow : Window
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
-        var proxyEnabled = CustomProxyCheck.IsChecked == true;
-        if (!int.TryParse(ProxyPortBox.Text.Trim(), out var proxyPort))
-        {
-            if (!proxyEnabled) proxyPort = 9050;
-            else
-            {
-            GlassDialogWindow.Show(this, "Порт прокси должен быть целым числом.", "Настройки прокси",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            ProxyPortBox.Focus();
-            return;
-            }
-        }
-        if (proxyEnabled &&
-            !ProxyConfigurationService.TryValidate(ProxyHostBox.Text, proxyPort, out var proxyError))
-        {
-            GlassDialogWindow.Show(this, proxyError, "Настройки прокси",
-                MessageBoxButton.OK, MessageBoxImage.Warning);
-            ProxyHostBox.Focus();
-            return;
-        }
-
         _settings.SearchEngine = SearchEngineCombo.SelectedItem is SearchChoice search
             ? search.Value : SearchEngineKind.DuckDuckGo;
         _settings.PrivacyLevel = PrivacyLevelCombo.SelectedItem is Choice<PrivacyLevel> level
@@ -416,48 +290,7 @@ public partial class SettingsWindow : Window
         _settings.VoiceSpeakAtStartup = VoiceStartupCheck.IsChecked == true;
         _settings.VoiceHandsFreeEnabled = VoiceHandsFreeCheck.IsChecked == true &&
                                           _settings.VoiceAssistantMode != VoiceAssistantMode.Off;
-        _settings.EnableCustomProxy = proxyEnabled;
-        _settings.ProxyKind = ProxyTypeCombo.SelectedItem is Choice<ProxyKind> proxy
-            ? proxy.Value : ProxyKind.Socks5;
-        _settings.ProxyHost = ProxyHostBox.Text.Trim();
-        _settings.ProxyPort = proxyPort;
-        _settings.ProxyBypassList = ProxyBypassBox.Text.Trim();
-        _settings.TrailModeEnabled = TrailModeCheck.IsChecked == true;
-        _settings.TorCustomBridges = TorBridgesBox.Text.Trim();
-        _settings.TorRelayEnabled = TorRelayCheck.IsChecked == true;
-        // Сервер и цепочка: ссылка могла быть только что подключена кнопкой —
-        // берём фактическое состояние служб, а не только чекбоксы.
-        _settings.VlessProfileUri = VlessUriBox.Text.Trim();
-        _settings.VlessEnabled = VlessEnabledCheck.IsChecked == true ||
-                                 Services.Vless.VlessRuntime.IsRunning;
-        _settings.TorInChain = TorInChainCheck.IsChecked == true;
-        // Включение моста — осознанное решение: человек должен понимать,
-        // что увидит провайдер и когда мост реально полезен.
-        if (_settings.TorRelayEnabled &&
-            !SettingsService.Current.TorRelayEnabled &&
-            !SettingsService.Current.TorRelayAcknowledged)
-        {
-            var answer = GlassDialogWindow.Show(this,
-                "Вы включаете релейный мост Tor — эта копия браузера станет точкой входа в сеть Tor для людей из цензурных сетей.\n\n" +
-                "Что нужно знать:\n" +
-                "• Провайдер увидит Tor-трафик с вашей машины (вы НЕ выходной узел — чужой трафик через вас не проходит наружу).\n" +
-                "• Без проброса портов 9101–9102 на роутере мост бесполезен для других, но трафик виден. Порт-проброс делается в админке роутера.\n" +
-                "• В отдельных странах сам факт работы моста — серая зона. Решайте сами.\n\n" +
-                "Включить мост?",
-                "Релейный мост Tor", MessageBoxButton.YesNo, MessageBoxImage.Question);
-            if (answer != MessageBoxResult.Yes)
-            {
-                _settings.TorRelayEnabled = false;
-                TorRelayCheck.IsChecked = false;
-            }
-            else
-            {
-                _settings.TorRelayAcknowledged = true;
-            }
-        }
-        if (string.IsNullOrWhiteSpace(_settings.TorRelayNickname))
-            _settings.TorRelayNickname = Services.Tor.TorRelayService.DefaultNickname();
-        if (_settings.TrailModeEnabled)
+
         {
             // «Режим След» применяет полную анонимную конфигурацию поверх
             // обычных настроек: Tor SOCKS5, строгая приватность, всё выключено.
@@ -468,10 +301,6 @@ public partial class SettingsWindow : Window
             ? dnsMode.Value : SecureDnsMode.Strict;
         _settings.SecureDnsProvider = SecureDnsProviderCombo.SelectedItem is Choice<SecureDnsProvider> dnsProvider
             ? dnsProvider.Value : SecureDnsProvider.Cloudflare;
-        _settings.ShowPrivacyMonitor = PrivacyMonitorCheck.IsChecked == true;
-        _settings.PortShieldMode = PortShieldModeCombo.SelectedItem is Choice<Services.PortShieldMode> shieldMode
-            ? shieldMode.Value : Services.PortShieldMode.NotifyOnly;
-        _settings.PreventWebRtcIpLeak = PreventWebRtcLeakCheck.IsChecked == true;
         _settings.CrashReportMode = CrashReportModeCombo.SelectedItem is Choice<CrashReportMode> crashMode
             ? crashMode.Value : CrashReportMode.LocalOnly;
         _settings.CrashReportDestination = CrashReportDestinationCombo.SelectedItem is Choice<CrashReportDestination> destination

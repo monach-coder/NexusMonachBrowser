@@ -1342,6 +1342,20 @@ public partial class MainWindow : Window
     {
         var show = PrivacyDock.Visibility != Visibility.Visible;
         await PrivacyDock.SetEnabledAsync(show);
+        var settings = SettingsService.Current;
+        settings.ShowPrivacyMonitor = show;
+        await SettingsService.SaveAsync(settings);
+    }
+
+    /// <summary>Применяет видимость панели «Приватность и защита» из настроек.</summary>
+    internal static async void ApplyPrivacyDockVisibility(bool visible)
+    {
+        foreach (Window window in Application.Current.Windows)
+            if (window is MainWindow main)
+            {
+                main.PrivacyDock.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+                await main.PrivacyDock.SetEnabledAsync(visible);
+            }
     }
 
     private void ShowSettings_Click(object sender, RoutedEventArgs e) => ShowSettings();
@@ -1532,6 +1546,10 @@ public partial class MainWindow : Window
     {
         RequestSecureRestart();
     }
+
+    /// <summary>Закрытие браузера кнопкой в титлбаре: обычный Close, чтобы
+    /// отработали сохранение сессии, остановка служб и применение обновлений.</summary>
+    private void CloseWindow_Click(object sender, RoutedEventArgs e) => Close();
 
     public void RequestSecureRestart()
     {

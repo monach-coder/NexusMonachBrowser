@@ -47,6 +47,7 @@
                 <ColumnDefinition Width="38" />
                 <ColumnDefinition Width="38" />
                 <ColumnDefinition Width="38" />
+                <ColumnDefinition Width="38" />
             </Grid.ColumnDefinitions>
             <Grid.Resources>
                 <Style x:Key="TitleButtonStyle" TargetType="Button" BasedOn="{StaticResource IconButton}">
@@ -136,6 +137,8 @@
             <Button Grid.Column="6" Content="&#xE72C;" Style="{StaticResource TitleButtonStyle}"
                     Foreground="{StaticResource AccentBrush}" ToolTip="Перезапустить Nexus Monach"
                     Click="RestartWindow_Click" />
+            <Button Grid.Column="7" Content="&#xE711;" Style="{StaticResource TitleButtonStyle}"
+                    ToolTip="Закрыть браузер" Click="CloseWindow_Click" />
         </Grid>
 
         <Grid Grid.Row="1" Background="{StaticResource ToolbarBrush}" Margin="0">

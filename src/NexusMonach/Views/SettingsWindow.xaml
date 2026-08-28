@@ -246,33 +246,13 @@
                     <StackPanel>
                         <Border Style="{StaticResource SettingsCard}">
                             <StackPanel>
-                                <TextBlock Text="Прокси" FontSize="15" FontWeight="SemiBold" />
-                                <CheckBox x:Name="CustomProxyCheck" Margin="0,12,0,0"
-                                          Content="Использовать собственный прокси для браузера" />
-                                <TextBlock Text="Тип прокси" Margin="0,10,0,5" />
-                                <ComboBox x:Name="ProxyTypeCombo" />
-                                <Grid Margin="0,12,0,0">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="120" />
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel>
-                                        <TextBlock Text="IP-адрес или имя сервера" Margin="0,0,0,5" />
-                                        <TextBox x:Name="ProxyHostBox" Padding="9,7" />
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="1" Margin="12,0,0,0">
-                                        <TextBlock Text="Порт" Margin="0,0,0,5" />
-                                        <TextBox x:Name="ProxyPortBox" Padding="9,7" />
-                                    </StackPanel>
-                                </Grid>
-                                <TextBlock Text="Сайты с прямым подключением — по одному в строке"
-                                           Margin="0,12,0,5" />
-                                <TextBox x:Name="ProxyBypassBox" Padding="9,7" MinHeight="68"
-                                         AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
-                                         TextWrapping="Wrap" />
-                                <TextBlock Text="Изменения прокси вступают в силу после перезапуска браузера."
-                                           TextWrapping="Wrap" Margin="0,6,0,0" FontSize="11"
+                                <TextBlock Text="Сетевая цепочка и защита" FontSize="15" FontWeight="SemiBold" />
+                                <TextBlock Text="Управление сервером, анонимным маршрутом, прокси, Дозором и порт-щитом переехало в панель «Приватность и защита» внизу окна браузера. Здесь остаются только DNS и HTTPS."
+                                           TextWrapping="Wrap" Margin="0,6,0,8" FontSize="11"
                                            Foreground="{StaticResource MutedTextBrush}" />
+                                <CheckBox x:Name="PrivacyDockCheck" Margin="0,4,0,0"
+                                          Content="Показывать панель «Приватность и защита» (низ окна)"
+                                          Checked="PrivacyDockToggle_Changed" Unchecked="PrivacyDockToggle_Changed" />
                             </StackPanel>
                         </Border>
                         <Border Style="{StaticResource SettingsCard}">
@@ -289,65 +269,6 @@
                                            Foreground="{StaticResource MutedTextBrush}" />
                             </StackPanel>
                         </Border>
-                        <Border Style="{StaticResource SettingsCard}">
-                            <StackPanel>
-                                <TextBlock Text="Анонимный маршрут · Режим След" FontSize="15" FontWeight="SemiBold" />
-                                <TextBlock Text="Весь трафик браузера идёт через многослойную анонимную сеть. Если на машине активен туннель — маршрут работает через него, и цензор видит только туннель."
-                                           TextWrapping="Wrap" Margin="0,6,0,10" FontSize="11"
-                                           Foreground="{StaticResource MutedTextBrush}" />
-                                <CheckBox x:Name="TrailModeCheck" Margin="0,0,0,8"
-                                          Content="Включить Режим След (анонимный маршрут + строгая приватность)" />
-                                <TextBlock x:Name="TorStatusLabel" Text="Маршрут не запущен"
-                                           FontSize="12" Foreground="{StaticResource MutedTextBrush}"
-                                           Margin="0,4,0,10" />
-                                <Button x:Name="TorStartButton" Content="Запустить маршрут"
-                                        Style="{StaticResource NexusButton}" Padding="16,7"
-                                        HorizontalAlignment="Left" Margin="0,0,0,12"
-                                        Click="TorStartButton_Click" />
-                                <TextBlock Text="Свои мосты (по одному в строке)" Margin="0,8,0,5" />
-                                <TextBox x:Name="TorBridgesBox" Padding="9,7" MinHeight="80"
-                                         AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
-                                         TextWrapping="Wrap"
-                                         ToolTip="obfs4 IP:ПОРТ ОТПЕЧАТОК cert=... iat-mode=0" />
-                                <TextBlock Text="Публичные мосты блокируют за минуты. Приватный мост на своём VPS ($3/мес) живёт долго."
-                                           TextWrapping="Wrap" Margin="0,6,0,0" FontSize="11"
-                                           Foreground="{StaticResource MutedTextBrush}" />
-                                <CheckBox x:Name="TorRelayCheck" Margin="0,14,0,6">
-                                    <TextBlock TextWrapping="Wrap"
-                                               Text="Работать транспортным мостом — помогать пользователям цензурных сетей. Браузер никогда не становится выходным узлом; для работы извне нужен проброс портов 9101–9102 на роутере." />
-                                </CheckBox>
-                                <TextBlock x:Name="TorRelayStatusText" FontSize="11"
-                                           Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap"
-                                           Margin="0,4,0,0" />
-                            </StackPanel>
-                        </Border>
-                        <Border Style="{StaticResource SettingsCard}">
-                            <StackPanel>
-                                <TextBlock Text="Собственный сервер" FontSize="15" FontWeight="SemiBold" />
-                                <TextBlock Text="Трафик направляется на ваш сервер с маскировкой под обычный TLS. Прямого выхода у анонимного слоя нет — при включённом сервере весь его трафик заворачивается в него; без сервера он оборачивается системным туннелем или ждёт."
-                                           TextWrapping="Wrap" Margin="0,6,0,10" FontSize="11"
-                                           Foreground="{StaticResource MutedTextBrush}" />
-                                <TextBlock Text="Ссылка профиля (vless://…)" Margin="0,0,0,5" />
-                                <TextBox x:Name="VlessUriBox" Padding="9,7"
-                                         ToolTip="vless://uuid@host:port?type=tcp&amp;security=reality&amp;pbk=…&amp;sni=…#Имя" />
-                                <Button x:Name="VlessConnectButton" Content="Проверить и подключить"
-                                        Style="{StaticResource NexusButton}" Padding="16,7"
-                                        HorizontalAlignment="Left" Margin="0,10,0,8"
-                                        Click="VlessConnectButton_Click" />
-                                <TextBlock x:Name="VlessStatusLabel" Text="Сервер не настроен"
-                                           FontSize="12" Foreground="{StaticResource MutedTextBrush}"
-                                           TextWrapping="Wrap" Margin="0,0,0,8" />
-                                <CheckBox x:Name="VlessEnabledCheck" Margin="0,0,0,6"
-                                          Content="Направлять трафик браузера через сервер" />
-                                <CheckBox x:Name="TorInChainCheck" Margin="0,0,0,6">
-                                    <TextBlock TextWrapping="Wrap"
-                                               Text="Анонимный слой — часть цепочки (браузер → анонимный слой → сервер/туннель). Выключите для скорости: вкладки пойдут напрямую через сервер или туннель." />
-                                </CheckBox>
-                                <TextBlock Text="Транспортный модуль (~50 МБ) браузер скачает сам при первом подключении — по подписанному манифесту, с проверкой хеша. Тумблеры цепочки продублированы на стартовой странице."
-                                           TextWrapping="Wrap" Margin="0,4,0,0" FontSize="11"
-                                           Foreground="{StaticResource MutedTextBrush}" />
-                            </StackPanel>
-                        </Border>
                     </StackPanel>
                 </ScrollViewer>
 
@@ -355,22 +276,14 @@
                               VerticalScrollBarVisibility="Auto">
                     <Border Style="{StaticResource SettingsCard}">
                         <StackPanel>
-                            <TextBlock Text="Порт-щит · локальный монитор приватности"
+                            <TextBlock Text="Порт-щит · диагностика"
                                        FontSize="15" FontWeight="SemiBold" />
-                            <TextBlock Text="Порт-щит сканирует машину при каждом запуске и закрывает утекающие порты локальной сети (mDNS, SSDP, NetBIOS) правилами файрвола на время сессии. Пользовательские службы (RDP, SMB, VNC) не трогаются."
+                            <TextBlock Text="Порт-щит сканирует машину при каждом запуске и закрывает утекающие порты локальной сети (mDNS, SSDP, NetBIOS) правилами файрвола на время сессии. Пользовательские службы (RDP, SMB, VNC) не трогаются. Режим порт-щита переключается в панели «Приватность и защита»."
                                        TextWrapping="Wrap" Margin="0,8,0,10" FontSize="11"
                                        Foreground="{StaticResource MutedTextBrush}" />
-                            <ComboBox x:Name="PortShieldModeCombo" SelectionChanged="PortShieldModeCombo_SelectionChanged" Margin="0,0,0,8" />
                             <Button Content="Показать скрипт закрытия портов (UAC)"
                                     Style="{StaticResource ActionButton}" HorizontalAlignment="Left"
                                     Click="PreviewShieldScript_Click" />
-                            <CheckBox x:Name="PrivacyMonitorCheck" Margin="0,14,0,0"
-                                      Content="Показывать нижнюю панель Privacy Dock при запуске браузера" />
-                            <CheckBox x:Name="PreventWebRtcLeakCheck"
-                                      Content="Запрещать WebRTC обходить прокси и раскрывать другой IP (требуется перезапуск)" />
-                            <TextBlock Text="Privacy Dock автоматически обновляется при открытии нового окна и затем каждые пять минут. Диагностика выполняется локально, без фоновых запросов к внешним IP-сервисам."
-                                       TextWrapping="Wrap" Margin="0,9,0,0" FontSize="11"
-                                       Foreground="{StaticResource MutedTextBrush}" />
                         </StackPanel>
                     </Border>
                 </ScrollViewer>

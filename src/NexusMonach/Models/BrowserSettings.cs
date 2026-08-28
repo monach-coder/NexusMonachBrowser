@@ -122,7 +122,9 @@ public sealed class BrowserSettings
     public bool EnablePasswordAutosave { get; set; }
     public bool EnableGeneralAutofill { get; set; }
     public bool MemorySaver { get; set; } = true;
-    public bool ShowPrivacyMonitor { get; set; } = true;
+    /// <summary>Панель «Приватность и защита» внизу окна. По умолчанию скрыта;
+    /// включается галочкой в настройках сети или кнопкой в меню.</summary>
+    public bool ShowPrivacyMonitor { get; set; }
     public bool PreventWebRtcIpLeak { get; set; } = true;
     public bool HttpsFirstEnabled { get; set; } = true;
     public SecureDnsMode SecureDnsMode { get; set; } = SecureDnsMode.Strict;

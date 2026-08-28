@@ -1,270 +1,264 @@
-using System.Globalization;
-using System.Net;
-using System.Net.NetworkInformation;
-using System.Net.Sockets;
-using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media;
 using System.Windows.Threading;
-using Microsoft.Web.WebView2.Core;
+using NexusMonach.Models;
 using NexusMonach.Services;
+using SettingsService = NexusMonach.Services.SettingsService;
 
 namespace NexusMonach.Views;
 
+/// <summary>
+/// Панель «Приватность и защита»: рабочее место управления сетевой цепочкой
+/// (сервер / маршрут / прокси) и защитой (След, Дозор, порт-щит, мост,
+/// страж WebRTC) — всё, что раньше было разбросано по настройкам.
+/// Скрыта по умолчанию; возвращается галочкой в настройках.
+/// </summary>
 public partial class PrivacyDockControl : UserControl
 {
-    // ICE собирается строго без STUN/TURN. Запросы во внешнюю сеть не создаются.
-    private const string ProbeScript = """
-        (async () => {
-          const candidates = [];
-          try {
-            const pc = new RTCPeerConnection({iceServers:[]});
-            pc.createDataChannel('local-probe');
-            pc.onicecandidate = e => { if (e.candidate) candidates.push(e.candidate.candidate); };
-            await pc.setLocalDescription(await pc.createOffer());
-            await new Promise(resolve => setTimeout(resolve, 1200));
-            pc.close();
-          } catch (_) {}
-          let canvasToken = '';
-          try {
-            const c=document.createElement('canvas'); c.width=220; c.height=45;
-            const x=c.getContext('2d'); x.font='16px Segoe UI'; x.fillText('Nexus Monach local',5,20);
-            canvasToken=c.toDataURL();
-          } catch (_) {}
-          const data={language:navigator.language||'',timezone:Intl.DateTimeFormat().resolvedOptions().timeZone||'',candidates};
-          const source=JSON.stringify(data)+canvasToken+navigator.userAgent+screen.width+'x'+screen.height;
-          let hash=2166136261;for(let i=0;i<source.length;i++){hash^=source.charCodeAt(i);hash=Math.imul(hash,16777619);}
-          data.fingerprint=(hash>>>0).toString(16).padStart(8,'0').toUpperCase();return data;
-        })();
-        """;
+    private sealed record Choice<T>(string Label, T Value);
 
-    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
-    private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMinutes(5) };
-    private bool _started;
-    private bool _refreshing;
+    private DispatcherTimer? _refresh;
+    private bool _suppressEvents;
 
     public PrivacyDockControl()
     {
         InitializeComponent();
-        _timer.Tick += Timer_Tick;
     }
 
-    public async Task SetEnabledAsync(bool enabled)
+    /// <summary>Включает/выключает панель (совместимо с вызовами MainWindow).</summary>
+    public Task SetEnabledAsync(bool enabled)
     {
-        Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
-        if (enabled) await StartAsync(); else _timer.Stop();
-    }
-
-    public async Task StartAsync()
-    {
-        if (_started) { _timer.Start(); await RefreshAsync(); return; }
-        _started = true;
-        try
+        if (enabled)
         {
-            var options = BrowserEnvironment.CreateDiagnosticsControllerOptions();
-            await NetworkProbe.EnsureCoreWebView2Async(BrowserEnvironment.Current, options);
-            var core = NetworkProbe.CoreWebView2;
-            core.Settings.AreDevToolsEnabled = false;
-            core.Settings.AreDefaultContextMenusEnabled = false;
-            core.Settings.AreBrowserAcceleratorKeysEnabled = false;
-            core.Settings.IsWebMessageEnabled = false;
-            core.SetVirtualHostNameToFolderMapping("nexus.local", AppPaths.WebAssets,
-                CoreWebView2HostResourceAccessKind.DenyCors);
-            await NavigateLocalAsync();
-            _timer.Start();
-            await RefreshAsync();
-        }
-        catch (Exception ex) { ShowError(ex.Message); }
-    }
-
-    private async void Control_Loaded(object sender, RoutedEventArgs e)
-    {
-        if (SettingsService.Current.ShowPrivacyMonitor) await StartAsync();
-        else Visibility = Visibility.Collapsed;
-    }
-
-    private void Control_Unloaded(object sender, RoutedEventArgs e) => _timer.Stop();
-    private async void Timer_Tick(object? sender, EventArgs e) => await RefreshAsync();
-
-    public void SetCurrentTransport(string? url)
-    {
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || UrlService.IsInternal(url))
-        {
-            TransportText.Text = "Транспорт сайта: локальная страница";
-            TransportText.Foreground = (Brush)FindResource("MutedTextBrush");
-            return;
-        }
-        var secure = uri.Scheme == Uri.UriSchemeHttps;
-        TransportText.Text = secure ? "Транспорт сайта: HTTPS / TLS" : "⚠ Транспорт сайта: HTTP без TLS";
-        TransportText.Foreground = secure ? (Brush)FindResource("AccentBrush") : Brushes.OrangeRed;
-    }
-
-    private async Task RefreshAsync()
-    {
-        if (!_started || NetworkProbe.CoreWebView2 is null || _refreshing) return;
-        _refreshing = true;
-        UpdatedText.Text = "Локальная проверка…";
-        try
-        {
-            if (!NetworkProbe.CoreWebView2.Source.StartsWith("https://nexus.local", StringComparison.OrdinalIgnoreCase))
-                await NavigateLocalAsync();
-            var probeJson = await NetworkProbe.CoreWebView2.ExecuteScriptAsync(ProbeScript);
-            var browser = JsonSerializer.Deserialize<BrowserData>(probeJson, JsonOptions) ?? new BrowserData();
-            Render(GetLocalNetworkData(), browser);
-            UpdatedText.Text = "Локально " + DateTime.Now.ToString("HH:mm:ss") + " · внешних запросов нет";
-        }
-        catch (Exception ex) { ShowError(ex.Message); }
-        finally { _refreshing = false; }
-    }
-
-    private void Render(LocalNetworkData network, BrowserData browser)
-    {
-        BrowserIpText.Text = "Локальный IP: " + Dash(string.Join(", ", network.LocalAddresses.Take(3)));
-        DirectIpText.Text = "Маршрут: " + Dash(network.PrimaryInterface);
-        LocationText.Text = "Среда: " + network.LocalRegion + " · " + browser.Timezone;
-        FlagsText.Text = $"Туннель {Mark(network.HasVpnInterface)} · Proxy {Mark(network.HasCustomProxy)} · Порт маршрута {Mark(network.HasTorEndpoint)}";
-
-        var candidates = browser.Candidates.Select(ParseCandidate).Where(x => x is not null).Cast<Ice>().ToArray();
-        var publicCandidates = candidates.Where(x => IsPublicAddress(x.Address)).Select(x => x.Address)
-            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        var localCandidates = candidates.Select(x => x.Address).Where(x => !x.EndsWith(".local", StringComparison.OrdinalIgnoreCase))
-            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        if (publicCandidates.Length > 0)
-        {
-            WebRtcText.Text = "⚠ WebRTC локально видит публичный адрес: " + string.Join(", ", publicCandidates);
-            WebRtcText.Foreground = Brushes.OrangeRed;
+            LoadState();
+            StartRefresh();
         }
         else
-        {
-            WebRtcText.Text = localCandidates.Length > 0
-                ? "WebRTC: только локальные адреса " + string.Join(", ", localCandidates.Take(2))
-                : "WebRTC: адреса скрыты mDNS / политикой";
-            WebRtcText.Foreground = (Brush)FindResource("MutedTextBrush");
-        }
-
-        MatchText.Text = $"Язык {Dash(browser.Language)} · зона {Dash(browser.Timezone)} · " +
-                         $"отпечаток {Dash(browser.Fingerprint)}";
-        MatchText.Foreground = (Brush)FindResource("AccentBrush");
-        DnsText.Text = SecureNetworkConfigurationService.Describe(SettingsService.Current) +
-                       " · Windows: " + Dash(string.Join(", ", network.Dns.Take(3)));
-
-        if (publicCandidates.Length > 0)
-        {
-            RiskText.Text = "WEBRTC ВИДИТ ПУБЛИЧНЫЙ ИНТЕРФЕЙС";
-            RiskText.Foreground = Brushes.OrangeRed;
-        }
-        else if (network.HasTorEndpoint)
-        {
-            RiskText.Text = "ЛОКАЛЬНЫЙ TOR-ПОРТ ОБНАРУЖЕН";
-            RiskText.Foreground = Brushes.DarkOrange;
-        }
-        else if (network.HasVpnInterface || network.HasCustomProxy)
-        {
-            RiskText.Text = "ЗАЩИЩЁННЫЙ МАРШРУТ ВИДЕН В WINDOWS";
-            RiskText.Foreground = (Brush)FindResource("AccentBrush");
-        }
-        else
-        {
-            RiskText.Text = "ЯВНЫХ ЛОКАЛЬНЫХ УТЕЧЕК НЕ НАЙДЕНО";
-            RiskText.Foreground = (Brush)FindResource("AccentBrush");
-        }
+            _refresh?.Stop();
+        return Task.CompletedTask;
     }
 
-    private async Task NavigateLocalAsync()
+    /// <summary>Совместимость со старым монитором: транспорт сайта больше не показываем.</summary>
+    public void SetCurrentTransport(string _) { }
+
+    private void Control_Loaded(object sender, RoutedEventArgs e)
     {
-        var core = NetworkProbe.CoreWebView2;
-        var source = new TaskCompletionSource<CoreWebView2NavigationCompletedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
-        void Handler(object? _, CoreWebView2NavigationCompletedEventArgs e) => source.TrySetResult(e);
-        core.NavigationCompleted += Handler;
-        try
+        PortShieldCombo.ItemsSource = new Choice<Services.PortShieldMode>[]
         {
-            core.Navigate("https://nexus.local/diagnostics.html");
-            var result = await source.Task.WaitAsync(TimeSpan.FromSeconds(10));
-            if (!result.IsSuccess) throw new InvalidOperationException("Локальная страница диагностики недоступна.");
-        }
-        finally { core.NavigationCompleted -= Handler; }
+            new("Порт-щит: авто (один UAC)", Services.PortShieldMode.Auto),
+            new("Порт-щит: только уведомлять", Services.PortShieldMode.NotifyOnly),
+            new("Порт-щит: выключен", Services.PortShieldMode.Off)
+        };
+        LoadState();
+        StartRefresh();
     }
 
-    private static LocalNetworkData GetLocalNetworkData()
+    private void Control_Unloaded(object sender, RoutedEventArgs e) => _refresh?.Stop();
+
+    private void StartRefresh()
     {
-        var result = new LocalNetworkData();
+        if (_refresh is not null) return;
+        _refresh = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromSeconds(5)
+        };
+        _refresh.Tick += (_, _) => RefreshChain();
+        _refresh.Start();
+    }
+
+    private void LoadState()
+    {
+        _suppressEvents = true;
+        var settings = SettingsService.Current;
+        VlessUriBox.Text = settings.VlessProfileUri;
+        ProxyHostBox.Text = settings.ProxyHost;
+        ProxyPortBox.Text = settings.ProxyPort.ToString();
+        ProxyKindCombo.ItemsSource = new Choice<ProxyKind>[]
+        {
+            new("SOCKS5", ProxyKind.Socks5),
+            new("HTTP", ProxyKind.Http)
+        };
+        ProxyKindCombo.SelectedIndex = settings.ProxyKind == ProxyKind.Http ? 1 : 0;
+        TrailModeCheck.IsChecked = settings.TrailModeEnabled;
+        WatchdogCheck.IsChecked = settings.NetworkWatchdogEnabled;
+        RelayCheck.IsChecked = settings.TorRelayEnabled;
+        WebRtcLeakCheck.IsChecked = settings.PreventWebRtcIpLeak;
+        PortShieldCombo.SelectedIndex = settings.PortShieldMode switch
+        {
+            Services.PortShieldMode.Auto => 0,
+            Services.PortShieldMode.Off => 2,
+            _ => 1
+        };
+        _suppressEvents = false;
+        RefreshChain();
+    }
+
+    /// <summary>Обновляет тумблеры и статус по фактическому снимку цепочки.</summary>
+    private void RefreshChain()
+    {
+        var snapshot = Services.NetworkChainService.Snapshot();
+        ChainStatusText.Text = snapshot.StatusText +
+            (snapshot.VlessRunning ? $" (SOCKS {Services.Vless.VlessRuntime.SocksPort})" : "");
+        VlessToggle.Content = snapshot.VlessRunning
+            ? "Сервер: подключён" : "Сервер: выкл";
+        TorToggle.Content = snapshot.TorInChain
+            ? (snapshot.TorWrapped ? "Маршрут: в цепочке" : "Маршрут: ждёт туннель")
+            : "Маршрут: вне цепочки";
+        ProxyToggle.Content = snapshot.ProxyEnabled ? "Прокси: вкл" : "Прокси: выкл";
+    }
+
+    // ── Тумблеры цепочки ──────────────────────────────────────────
+
+    private async void VlessToggle_Click(object sender, RoutedEventArgs e)
+    {
+        VlessToggle.IsEnabled = false;
         try
         {
-            var active = NetworkInterface.GetAllNetworkInterfaces().Where(x => x.OperationalStatus == OperationalStatus.Up &&
-                x.NetworkInterfaceType != NetworkInterfaceType.Loopback).ToArray();
-            foreach (var adapter in active)
+            if (!string.IsNullOrWhiteSpace(VlessUriBox.Text))
             {
-                var properties = adapter.GetIPProperties();
-                result.LocalAddresses.AddRange(properties.UnicastAddresses.Where(x => x.Address.AddressFamily == AddressFamily.InterNetwork)
-                    .Select(x => x.Address.ToString()));
-                result.Dns.AddRange(properties.DnsAddresses.Select(x => x.ToString()));
-                var descriptor = (adapter.Name + " " + adapter.Description).ToLowerInvariant();
-                if (adapter.NetworkInterfaceType is NetworkInterfaceType.Tunnel or NetworkInterfaceType.Ppp ||
-                    new[] { "vpn", "wireguard", "wintun", "openvpn", "tap", "tailscale", "zerotier", "adguard" }
-                        .Any(descriptor.Contains)) result.HasVpnInterface = true;
-                if (string.IsNullOrWhiteSpace(result.PrimaryInterface) && properties.GatewayAddresses.Any(x =>
-                        !x.Address.Equals(IPAddress.Any) && !x.Address.Equals(IPAddress.IPv6Any)))
-                    result.PrimaryInterface = adapter.Name;
+                var settings = SettingsService.Current;
+                settings.VlessProfileUri = VlessUriBox.Text.Trim();
+                await SettingsService.SaveAsync(settings);
             }
-            result.HasTorEndpoint = IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners()
-                .Any(x => IPAddress.IsLoopback(x.Address) && x.Port is 9050 or 9051 or 9150 or 9151);
+            await Services.NetworkChainService.ToggleVlessAsync();
         }
-        catch { }
-        result.LocalAddresses = result.LocalAddresses.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        result.Dns = result.Dns.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        result.HasCustomProxy = SettingsService.Current.EnableCustomProxy;
-        try { result.LocalRegion = RegionInfo.CurrentRegion.DisplayName + " (Windows)"; }
-        catch { result.LocalRegion = CultureInfo.CurrentCulture.Name + " (Windows)"; }
-        return result;
+        finally { VlessToggle.IsEnabled = true; }
+        RefreshChain();
     }
 
-    private static Ice? ParseCandidate(string value)
+    private async void TorToggle_Click(object sender, RoutedEventArgs e)
     {
-        var parts = value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var typeIndex = Array.IndexOf(parts, "typ");
-        return parts.Length > 5 && typeIndex >= 0 && typeIndex + 1 < parts.Length ? new Ice(parts[4], parts[typeIndex + 1]) : null;
+        TorToggle.IsEnabled = false;
+        try { await Services.NetworkChainService.ToggleTorAsync(); }
+        finally { TorToggle.IsEnabled = true; }
+        RefreshChain();
     }
 
-    private static bool IsPublicAddress(string value)
+    private async void ProxyToggle_Click(object sender, RoutedEventArgs e)
     {
-        if (!IPAddress.TryParse(value, out var ip)) return false;
-        if (IPAddress.IsLoopback(ip) || ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal) return false;
-        var bytes = ip.GetAddressBytes();
-        if (ip.AddressFamily == AddressFamily.InterNetwork)
-            return !(bytes[0] == 10 || bytes[0] == 127 || bytes[0] == 169 && bytes[1] == 254 ||
-                     bytes[0] == 172 && bytes[1] is >= 16 and <= 31 || bytes[0] == 192 && bytes[1] == 168 ||
-                     bytes[0] == 100 && bytes[1] is >= 64 and <= 127);
-        return !ip.Equals(IPAddress.IPv6Loopback) && (bytes[0] & 0xFE) != 0xFC;
+        ProxyToggle.IsEnabled = false;
+        try
+        {
+            // Конфигурация живёт здесь же: сохраняем поля до переключения.
+            var settings = SettingsService.Current;
+            settings.ProxyHost = ProxyHostBox.Text.Trim();
+            if (int.TryParse(ProxyPortBox.Text.Trim(), out var port))
+                settings.ProxyPort = port;
+            settings.ProxyKind = ProxyKindCombo.SelectedItem is Choice<ProxyKind> kind
+                ? kind.Value : ProxyKind.Socks5;
+            await SettingsService.SaveAsync(settings);
+            await Services.NetworkChainService.ToggleProxyAsync();
+        }
+        finally { ProxyToggle.IsEnabled = true; }
+        RefreshChain();
     }
 
-    private void ShowError(string message)
+    private async void VlessConnect_Click(object sender, RoutedEventArgs e)
     {
-        RiskText.Text = "ЛОКАЛЬНАЯ ДИАГНОСТИКА НЕДОСТУПНА";
-        RiskText.Foreground = Brushes.DarkOrange;
-        UpdatedText.Text = message;
+        VlessConnectButton.IsEnabled = false;
+        VlessConnectButton.Content = "Подключаю…";
+        try
+        {
+            var settings = SettingsService.Current;
+            settings.VlessProfileUri = VlessUriBox.Text.Trim();
+            await SettingsService.SaveAsync(settings);
+            await Services.NetworkChainService.EnsureVlessAsync();
+        }
+        finally
+        {
+            VlessConnectButton.IsEnabled = true;
+            VlessConnectButton.Content = "Подключить";
+        }
+        RefreshChain();
     }
 
-    private static string Mark(bool value) => value ? "●" : "○";
-    private static string Dash(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
+    // ── Защита ────────────────────────────────────────────────────
 
-    private sealed class LocalNetworkData
+    private async void TrailMode_Changed(object sender, RoutedEventArgs e)
     {
-        public List<string> LocalAddresses { get; set; } = [];
-        public List<string> Dns { get; set; } = [];
-        public string PrimaryInterface { get; set; } = string.Empty;
-        public string LocalRegion { get; set; } = string.Empty;
-        public bool HasVpnInterface { get; set; }
-        public bool HasCustomProxy { get; set; }
-        public bool HasTorEndpoint { get; set; }
+        if (_suppressEvents) return;
+        var settings = SettingsService.Current;
+        settings.TrailModeEnabled = TrailModeCheck.IsChecked == true;
+        if (settings.TrailModeEnabled)
+            Services.Tor.TrailMode.Apply(settings);
+        await SettingsService.SaveAsync(settings);
+        Services.CrashReportService.AddBreadcrumb("dock", "trail-" + settings.TrailModeEnabled);
     }
 
-    private sealed class BrowserData
+    private async void Watchdog_Changed(object sender, RoutedEventArgs e)
     {
-        public string Language { get; set; } = string.Empty;
-        public string Timezone { get; set; } = string.Empty;
-        public List<string> Candidates { get; set; } = [];
-        public string Fingerprint { get; set; } = string.Empty;
+        if (_suppressEvents) return;
+        var settings = SettingsService.Current;
+        settings.NetworkWatchdogEnabled = WatchdogCheck.IsChecked == true;
+        await SettingsService.SaveAsync(settings);
+        Services.VoiceAssistantService.Announce(
+            settings.NetworkWatchdogEnabled
+                ? "Сетевой Дозор включён. Защита начнётся после перезапуска браузера."
+                : "Сетевой Дозор выключен. До конца сессии ловушки продолжают работать.",
+            Services.VoiceAnnouncementPriority.Important);
     }
-    private sealed record Ice(string Address, string Type);
+
+    private async void Relay_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_suppressEvents) return;
+        var settings = SettingsService.Current;
+        var enable = RelayCheck.IsChecked == true;
+
+        // Включение моста — осознанное решение: человек должен понимать,
+        // что увидит провайдер и когда мост реально полезен.
+        if (enable && !settings.TorRelayAcknowledged)
+        {
+            var answer = GlassDialogWindow.Show(Window.GetWindow(this),
+                "Вы включаете релейный мост — эта копия браузера станет точкой входа в анонимную сеть для людей из цензурных сетей.\n\n" +
+                "Что нужно знать:\n" +
+                "• Провайдер увидит трафик анонимной сети с вашей машины (вы НЕ выходной узел — чужой трафик через вас не проходит наружу).\n" +
+                "• Без проброса портов 9101–9102 на роутере мост бесполезен для других, но трафик виден. Порт-проброс делается в админке роутера.\n" +
+                "• В отдельных странах сам факт работы моста — серая зона. Решайте сами.\n\n" +
+                "Включить мост?",
+                "Релейный мост", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (answer != MessageBoxResult.Yes)
+            {
+                _suppressEvents = true;
+                RelayCheck.IsChecked = false;
+                _suppressEvents = false;
+                return;
+            }
+            settings.TorRelayAcknowledged = true;
+        }
+
+        settings.TorRelayEnabled = enable;
+        if (enable && string.IsNullOrWhiteSpace(settings.TorRelayNickname))
+            settings.TorRelayNickname = Services.Tor.TorRelayService.DefaultNickname();
+        await SettingsService.SaveAsync(settings);
+    }
+
+    private async void WebRtc_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_suppressEvents) return;
+        var settings = SettingsService.Current;
+        settings.PreventWebRtcIpLeak = WebRtcLeakCheck.IsChecked == true;
+        await SettingsService.SaveAsync(settings);
+    }
+
+    private async void PortShield_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressEvents || PortShieldCombo.SelectedItem is not Choice<Services.PortShieldMode> choice)
+            return;
+        var settings = SettingsService.Current;
+        settings.PortShieldMode = choice.Value;
+        await SettingsService.SaveAsync(settings);
+    }
+
+    // ── Сворачивание ──────────────────────────────────────────────
+
+    private async void Collapse_Click(object sender, RoutedEventArgs e)
+    {
+        var settings = SettingsService.Current;
+        settings.ShowPrivacyMonitor = false;
+        await SettingsService.SaveAsync(settings);
+        Visibility = Visibility.Collapsed;
+        Services.VoiceAssistantService.Announce(
+            "Панель приватности скрыта. Вернуть её можно галочкой в настройках.",
+            Services.VoiceAnnouncementPriority.Progress);
+    }
 }
