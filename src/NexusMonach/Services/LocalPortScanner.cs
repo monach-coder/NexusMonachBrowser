@@ -30,8 +30,6 @@ public sealed record LocalPortEntry(
 /// </summary>
 public static class LocalPortScanner
 {
-    private static readonly HashSet<int> HoneypotPorts = [2222, 3000, 5000, 6379, 8080, 8888, 27017];
-
     /// <summary>
     /// Сканирует слушающие порты и возвращает записи, отсортированные
     /// по убыванию опасности, затем по протоколу и номеру порта.
@@ -61,7 +59,10 @@ public static class LocalPortScanner
         var isOwn = info.ProcessName.StartsWith("NexusMonach", StringComparison.OrdinalIgnoreCase);
 
         // Наши ловушки и Tor — ожидаемые слушатели анонимного режима.
-        if (isOwn && info.Protocol == "TCP" && HoneypotPorts.Contains(info.Port))
+        // Порты ловушек случайны на сессию — берём актуальный набор у Дозора.
+        var honeypotPorts = Tor.NetworkWatchdog.ActiveSessionPorts;
+        if (isOwn && info.Protocol == "TCP" &&
+            honeypotPorts is not null && honeypotPorts.Contains(info.Port))
             return new LocalPortEntry(info.Protocol, info.Port, info.Address, info.ProcessName,
                 "Ловушка Дозора", "Приманка для сканеров — это наша защита", 0);
         if (info.Protocol == "TCP" && info.Port is 9050 or 9051 &&

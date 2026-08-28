@@ -44,10 +44,38 @@ public class LocalPortScannerTests
     [Fact]
     public void Classify_OwnHoneypotPort_IsFriendlyTrap()
     {
-        var entry = LocalPortScanner.Classify(
-            new LocalPortInfo("TCP", "0.0.0.0", 6379, 42, "NexusMonach.Browser"));
-        Assert.Equal(0, entry.Severity);
-        Assert.Equal("Ловушка Дозора", entry.Risk);
+        // Порты ловушек случайны на сессию: сканер портов узнаёт их
+        // из реестра Дозора, а не из статичного списка.
+        var previous = NexusMonach.Services.Tor.NetworkWatchdog.ActiveSessionPorts;
+        NexusMonach.Services.Tor.NetworkWatchdog.ActiveSessionPorts = [6379, 2222, 27017];
+        try
+        {
+            var entry = LocalPortScanner.Classify(
+                new LocalPortInfo("TCP", "0.0.0.0", 6379, 42, "NexusMonach.Browser"));
+            Assert.Equal(0, entry.Severity);
+            Assert.Equal("Ловушка Дозора", entry.Risk);
+        }
+        finally
+        {
+            NexusMonach.Services.Tor.NetworkWatchdog.ActiveSessionPorts = previous;
+        }
+    }
+
+    [Fact]
+    public void Classify_OwnPortOutsideSessionSet_IsNotFriendlyTrap()
+    {
+        var previous = NexusMonach.Services.Tor.NetworkWatchdog.ActiveSessionPorts;
+        NexusMonach.Services.Tor.NetworkWatchdog.ActiveSessionPorts = [2222];
+        try
+        {
+            var entry = LocalPortScanner.Classify(
+                new LocalPortInfo("TCP", "0.0.0.0", 6379, 42, "NexusMonach.Browser"));
+            Assert.NotEqual("Ловушка Дозора", entry.Risk);
+        }
+        finally
+        {
+            NexusMonach.Services.Tor.NetworkWatchdog.ActiveSessionPorts = previous;
+        }
     }
 
     [Fact]

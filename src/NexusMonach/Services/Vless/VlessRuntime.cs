@@ -20,7 +20,13 @@ public enum VlessState { NotInstalled, Stopped, Starting, Connected, Failed }
 /// </summary>
 public static class VlessRuntime
 {
-    public const int PreferredSocksPort = 9155;
+    /// <summary>
+    /// Базовый SOCKS-порт транспорта: случайный на сессию, чтобы по одному
+    /// открытому порту нельзя было опознать «браузер Nexus» снаружи.
+    /// Диапазон не пересекается с портами Тора и приманками Дозора.
+    /// </summary>
+    public static int PreferredSocksPort { get; } =
+        System.Security.Cryptography.RandomNumberGenerator.GetInt32(9300, 9700);
     private const int PortAttempts = 20;
     private const string ConfigFileName = "config.json";
 
