@@ -59,6 +59,18 @@ public static class EgressCanaryService
                 _pinnedCertHash = hash;
             }
         }
+        catch (OperationCanceledException)
+        {
+            // Таймаут сокета — рутина проверки, а не сбой браузера: рапорт
+            // не пишем, иначе CrashVault замусоривается каждые 10 минут.
+            CrashReportService.AddBreadcrumb("canary", "probe-timeout");
+        }
+        catch (Exception ex) when (ex is System.Net.Sockets.SocketException or IOException or HttpRequestException)
+        {
+            // Сеть молчит или транспорт не отвечает — норма для этой модели
+            // угроз: канарейка просто повторит проверку через интервал.
+            CrashReportService.AddBreadcrumb("canary", "unreachable");
+        }
         catch (Exception ex)
         {
             CrashReportService.RecordNonFatal("canary", "check", ex);

@@ -17,16 +17,17 @@
     <Grid Loaded="Grid_Loaded">
         <Ellipse x:Name="Glow" Width="322" Height="322" Fill="#5036D7C4" />
         <Ellipse Width="294" Height="294" Fill="#D90B1018" Stroke="#5536D7C4" StrokeThickness="2" />
-        <!-- Кольцо-шкала обновления: aqua-дуга поверх тонкого трека. -->
-        <Ellipse x:Name="ProgressTrack" Width="314" Height="314" Stroke="#2D2634" StrokeThickness="4"
-                 Fill="Transparent" />
-        <Ellipse x:Name="ProgressArc" Width="314" Height="314" Stroke="#36D7C4" StrokeThickness="4"
-                 Fill="Transparent" StrokeDashCap="Round" RenderTransformOrigin="0.5,0.5"
-                 Visibility="Collapsed">
-            <Ellipse.RenderTransform>
-                <RotateTransform Angle="-90" />
-            </Ellipse.RenderTransform>
-        </Ellipse>
+        <!-- Кольцо, разделённое на секторы — по одному на процесс старта:
+             целостность → обновление → загрузка → запуск. В активном секторе
+             бежит полоса заполнения; завершённые мягко подсвечены. -->
+        <Path x:Name="Track0" Stroke="#2D2634" StrokeThickness="6" StrokeDashCap="Round" />
+        <Path x:Name="Track1" Stroke="#2D2634" StrokeThickness="6" StrokeDashCap="Round" />
+        <Path x:Name="Track2" Stroke="#2D2634" StrokeThickness="6" StrokeDashCap="Round" />
+        <Path x:Name="Track3" Stroke="#2D2634" StrokeThickness="6" StrokeDashCap="Round" />
+        <Path x:Name="Fill0" Stroke="#36D7C4" StrokeThickness="6" StrokeDashCap="Round" />
+        <Path x:Name="Fill1" Stroke="#36D7C4" StrokeThickness="6" StrokeDashCap="Round" />
+        <Path x:Name="Fill2" Stroke="#36D7C4" StrokeThickness="6" StrokeDashCap="Round" />
+        <Path x:Name="Fill3" Stroke="#36D7C4" StrokeThickness="6" StrokeDashCap="Round" />
         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
             <Image Width="150" Height="150" Source="/Assets/nexus-monach-512.png"
                    RenderTransformOrigin="0.5,0.5">

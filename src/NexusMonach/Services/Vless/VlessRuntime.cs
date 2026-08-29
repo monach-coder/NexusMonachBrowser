@@ -135,7 +135,12 @@ public static class VlessRuntime
         try
         {
             using var client = new TcpClient();
-            if (!client.ConnectAsync(IPAddress.Loopback, port).Wait(800)) return false;
+            var connect = client.ConnectAsync(IPAddress.Loopback, port);
+            if (!connect.Wait(800))
+            {
+                PortProbeObserver.Observe(connect);
+                return false;
+            }
             var stream = client.GetStream();
             stream.Write(new byte[] { 5, 1, 0 }, 0, 3);
             var answer = new byte[2];

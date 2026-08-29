@@ -77,7 +77,12 @@ public static class TorService
         try
         {
             using var c = new TcpClient();
-            if (!c.ConnectAsync("127.0.0.1", port).Wait(2000)) return false;
+            var connect = c.ConnectAsync("127.0.0.1", port);
+            if (!connect.Wait(2000))
+            {
+                PortProbeObserver.Observe(connect);
+                return false;
+            }
             c.GetStream().Write(new byte[] { 5, 1, 0 }, 0, 3);
             var r = new byte[2];
             c.GetStream().Read(r, 0, 2);

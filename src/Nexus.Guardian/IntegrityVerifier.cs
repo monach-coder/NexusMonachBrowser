@@ -26,7 +26,7 @@ internal static class IntegrityVerifier
     /// </summary>
     internal static bool UsesEmbeddedTrust => HasEmbeddedPublicKey();
 
-    public static IntegrityResult Verify(string root, bool full)
+    public static IntegrityResult Verify(string root, bool full, Action<int>? hashProgress = null)
     {
         var normalizedRoot = Path.GetFullPath(root);
         var rootPrefix = normalizedRoot.EndsWith(Path.DirectorySeparatorChar) ||
@@ -122,8 +122,11 @@ internal static class IntegrityVerifier
 
         // Почти гигабайт критических файлов — это минуты на холодном диске.
         // Хеши независимы, поэтому считаются параллельно; порядок проблем
-        // в отчёте не имеет значения.
+        // в отчёте не имеет значения. Ход (процент файлов) отдаётся
+        // круглому сплэшу Guardian, чтобы проверка была видимой.
         var hashFailures = new ConcurrentBag<(bool Critical, string Message)>();
+        var hashed = 0;
+        var totalToHash = hashPending.Count;
         Parallel.ForEach(
             hashPending,
             new ParallelOptions
@@ -135,7 +138,11 @@ internal static class IntegrityVerifier
                 var actual = ComputeSha256(item.FullPath);
                 if (!actual.Equals(item.Entry.Sha256, StringComparison.OrdinalIgnoreCase))
                     hashFailures.Add((item.Entry.Critical, "Не совпадает SHA-256: " + item.Entry.Path));
+                var done = Interlocked.Increment(ref hashed);
+                if (hashProgress is not null && totalToHash > 0 && done % 4 == 0)
+                    hashProgress(done * 100 / totalToHash);
             });
+        hashProgress?.Invoke(100);
         foreach (var failure in hashFailures)
             (failure.Critical ? criticalProblems : otherProblems).Add(failure.Message);
 

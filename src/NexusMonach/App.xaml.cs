@@ -198,12 +198,13 @@ public partial class App : Application
 
         var splash = new SplashWindow();
         splash.Show();
-        // Единое стартовое окно: Guardian уже проверил целостность молча и
-        // передал статус окружением; скрытая проверка обновления пишет ход
-        // в файл — сплэш рисует кольцо и озвучивает вехи.
+        // Единое стартовое окно: Guardian показал проверку целостности и ход
+        // обновления своим круглым секторным окном; здесь эстафета продолжается.
+        var integrityVerified =
+            GuardianRuntime.IntegrityStatus.Equals("verified", StringComparison.OrdinalIgnoreCase);
         splash.SetStatus("Guardian: целостность " +
-            (GuardianRuntime.IntegrityStatus.Equals("verified", StringComparison.OrdinalIgnoreCase)
-                ? "подтверждена" : GuardianRuntime.IntegrityStatus));
+            (integrityVerified ? "подтверждена" : GuardianRuntime.IntegrityStatus));
+        if (integrityVerified) splash.CompleteSector(0);
         _ = Services.SplashUpdateWatcher.RunAsync(splash);
         Task startupAudio = Task.CompletedTask;
 
@@ -258,6 +259,8 @@ public partial class App : Application
             mainWindow.Opacity = 1;
             mainWindow.Activate();
             CrashReportService.AddBreadcrumb("startup", "main-window-ready");
+            // Сектор «запуск» закрыт: кольцо стартовых процессов пройдено.
+            splash.CompleteSector(3);
             if (GuardianRuntime.IsSafeMode)
             {
                 GlassDialogWindow.Show(mainWindow,

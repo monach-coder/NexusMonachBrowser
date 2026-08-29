@@ -161,88 +161,159 @@ internal static class Program
             SilentUpdateCoordinator.TryLaunchPendingApply(root, GuardianRoot, relaunch: true))
             return 0;
 
-        var integrity = VerifyWithSplash(root, full);
-        WriteIntegrityIncident(integrity);
-        if (!integrity.CanLaunch)
+        GuardianSplash? splash = null;
+        try
         {
-            MessageBox.Show("Запуск заблокирован: нарушена целостность критических файлов.\n\n" +
-                            string.Join("\n", integrity.Problems.Take(8)) +
-                            "\n\nСкачайте официальный архив заново. Guardian не будет запускать изменённый браузер.",
-                "Nexus Guardian", MessageBoxButtons.OK, MessageBoxIcon.Stop);
-            return 3;
-        }
-
-        var safeMode = ShouldUseSafeMode();
-        // Одиночный недавний сбой графики: отключаем только ускорение GPU,
-        // оставляя AI, расширения и голос. Полный безопасный режим — со второго.
-        var disableGpuOnly = !safeMode && CountRecentGraphicsFailures() >= 1;
-        if (integrity.State == IntegrityState.NonCriticalMismatch)
-        {
-            safeMode = true;
-            MessageBox.Show("Некритические файлы или локальные модели изменены. Браузер будет открыт в безопасном режиме без AI и расширений.\n\n" +
-                            string.Join("\n", integrity.Problems.Take(6)), "Nexus Guardian",
-                MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        }
-        else if (integrity.State == IntegrityState.DevelopmentBuild)
-        {
-            MessageBox.Show("Это локальная сборка без подписанного манифеста целостности. Для тестирования запуск разрешён, но статус Guardian будет «не проверено».",
-                "Nexus Guardian", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-
-        // Обновление при запуске: применяем накопленное молча (круглый
-        // сплэш браузера ведёт всю презентацию и озвучку); загрузка нового
-        // ядра уходит в скрытую проверку с прогресс-файлом для сплэша.
-        if (integrity.State == IntegrityState.Verified && IntegrityVerifier.UsesEmbeddedTrust)
-        {
-            var applied = SilentUpdateCoordinator.StartupUpdate(
-                root, GuardianRoot, progress: null, TimeSpan.FromSeconds(150));
-            if (applied)
+            var integrity = VerifyWithSplash(root, full, ref splash);
+            WriteIntegrityIncident(integrity);
+            if (!integrity.CanLaunch)
             {
-                // Апликатор ждёт нашего выхода, применяет файлы и сам
-                // перезапускает обновлённый браузер.
-                return 0;
+                splash?.CloseGraceful();
+                splash = null;
+                MessageBox.Show("Запуск заблокирован: нарушена целостность критических файлов.\n\n" +
+                                string.Join("\n", integrity.Problems.Take(8)) +
+                                "\n\nСкачайте официальный архив заново. Guardian не будет запускать изменённый браузер.",
+                    "Nexus Guardian", MessageBoxButtons.OK, MessageBoxIcon.Stop);
+                return 3;
             }
-            SilentUpdateCoordinator.StartSplashCheck(root, GuardianRoot);
+
+            var safeMode = ShouldUseSafeMode();
+            // Одиночный недавний сбой графики: отключаем только ускорение GPU,
+            // оставляя AI, расширения и голос. Полный безопасный режим — со второго.
+            var disableGpuOnly = !safeMode && CountRecentGraphicsFailures() >= 1;
+            if (integrity.State == IntegrityState.NonCriticalMismatch)
+            {
+                safeMode = true;
+                splash?.CloseGraceful();
+                splash = null;
+                MessageBox.Show("Некритические файлы или локальные модели изменены. Браузер будет открыт в безопасном режиме без AI и расширений.\n\n" +
+                                string.Join("\n", integrity.Problems.Take(6)), "Nexus Guardian",
+                                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            else if (integrity.State == IntegrityState.DevelopmentBuild)
+            {
+                splash?.CloseGraceful();
+                splash = null;
+                MessageBox.Show("Это локальная сборка без подписанного манифеста целостности. Для тестирования запуск разрешён, но статус Guardian будет «не проверено».",
+                    "Nexus Guardian", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+
+            // Обновление при старте идёт в том же круглом окне: сектор
+            // «обновление» (неопределённый ход), затем «загрузка» с процентами
+            // и мегабайтами. Применение накопленного — апликатором после
+            // нашего выхода, перезапуск обновлённого браузера — сам.
+            if (integrity.State == IntegrityState.Verified && IntegrityVerifier.UsesEmbeddedTrust)
+            {
+                splash?.CompleteSector(0);
+                splash?.SetStatus("Целостность подтверждена");
+                splash?.SetDetail(string.Empty);
+                var applied = SilentUpdateCoordinator.StartupUpdate(
+                    root, GuardianRoot, progress: null, TimeSpan.FromSeconds(150),
+                    timeline: update => splash?.ShowUpdateProgress(update));
+                if (applied)
+                {
+                    // Апликатор ждёт нашего выхода, применяет файлы и сам
+                    // перезапускает обновлённый браузер.
+                    splash?.CloseGraceful();
+                    return 0;
+                }
+                SilentUpdateCoordinator.StartSplashCheck(root, GuardianRoot);
+            }
+
+            Directory.CreateDirectory(Path.Combine(GuardianRoot, "Sessions"));
+            var sessionId = Guid.NewGuid().ToString("N");
+            var info = new ProcessStartInfo(browser)
+            {
+                UseShellExecute = false,
+                WorkingDirectory = root
+            };
+            foreach (var arg in forwardedArgs) info.ArgumentList.Add(arg);
+            info.Environment["NEXUS_GUARDIAN_SESSION"] = sessionId;
+            info.Environment["NEXUS_INTEGRITY_STATUS"] = integrity.CompactStatus;
+            info.Environment["NEXUS_SAFE_MODE"] = safeMode ? "1" : "0";
+            info.Environment["NEXUS_DISABLE_GPU"] = disableGpuOnly ? "1" : "0";
+
+            var browserStartedUtc = DateTime.UtcNow;
+            using var process = Process.Start(info) ?? throw new InvalidOperationException("Windows не создал процесс браузера.");
+            // Эстафета без шва: круглое окно Guardian закрывается только когда
+            // круглый сплэш браузера отметил свою готовность.
+            WaitForSplashHandoff(splash, process, browserStartedUtc);
+            splash?.CloseGraceful();
+            splash = null;
+            process.WaitForExit();
+            var clean = ReadCleanSession(sessionId);
+            var normalExit = process.ExitCode == 0 && clean;
+            RecordExit(normalExit);
+            if (!normalExit && !HasManagedFatalReport(sessionId))
+                WriteNativeCrashReport(sessionId, process.ExitCode, integrity.CompactStatus, safeMode);
+            if (normalExit && IntegrityVerifier.UsesEmbeddedTrust)
+                SilentUpdateCoordinator.TryLaunchPendingApply(root, GuardianRoot, relaunch: false);
+            return process.ExitCode;
         }
-
-        Directory.CreateDirectory(Path.Combine(GuardianRoot, "Sessions"));
-        var sessionId = Guid.NewGuid().ToString("N");
-        var info = new ProcessStartInfo(browser)
+        finally
         {
-            UseShellExecute = false,
-            WorkingDirectory = root
-        };
-        foreach (var arg in forwardedArgs) info.ArgumentList.Add(arg);
-        info.Environment["NEXUS_GUARDIAN_SESSION"] = sessionId;
-        info.Environment["NEXUS_INTEGRITY_STATUS"] = integrity.CompactStatus;
-        info.Environment["NEXUS_SAFE_MODE"] = safeMode ? "1" : "0";
-        info.Environment["NEXUS_DISABLE_GPU"] = disableGpuOnly ? "1" : "0";
-
-        using var process = Process.Start(info) ?? throw new InvalidOperationException("Windows не создал процесс браузера.");
-        process.WaitForExit();
-        var clean = ReadCleanSession(sessionId);
-        var normalExit = process.ExitCode == 0 && clean;
-        RecordExit(normalExit);
-        if (!normalExit && !HasManagedFatalReport(sessionId))
-            WriteNativeCrashReport(sessionId, process.ExitCode, integrity.CompactStatus, safeMode);
-        if (normalExit && IntegrityVerifier.UsesEmbeddedTrust)
-            SilentUpdateCoordinator.TryLaunchPendingApply(root, GuardianRoot, relaunch: false);
-        return process.ExitCode;
+            splash?.CloseGraceful();
+        }
     }
 
     /// <summary>
-    /// Проверка целостности идёт до появления любого окна браузера и занимает
-    /// десятки секунд на холодном диске. Сплэш появляется не сразу, чтобы
-    /// тёплый повторный запуск не мигал лишним окном.
+    /// Ждём маркер splash-ready.json: его пишет круглый сплэш браузера в момент
+    /// показа. Пока маркера нет, окно Guardian остаётся на экране — старт
+    /// выглядит одним непрерывным круглым окном, а не миганием двух.
     /// </summary>
+    private static void WaitForSplashHandoff(GuardianSplash? splash, Process browser, DateTime browserStartedUtc)
+    {
+        if (splash is null) return;
+        var marker = Path.Combine(GuardianRoot, "splash-ready.json");
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (DateTime.UtcNow < deadline && !browser.HasExited)
+        {
+            try
+            {
+                if (File.GetLastWriteTimeUtc(marker) >= browserStartedUtc.AddSeconds(-1))
+                    return;
+            }
+            catch { /* маркер ещё не создан */ }
+            Application.DoEvents();
+            Thread.Sleep(50);
+        }
+    }
+
     /// <summary>
-    /// Проверка целостности идёт молча: всю презентацию и озвучку ведёт
-    /// круглый пульсирующий сплэш самого браузера (статус приходит
-    /// переменной окружения NEXUS_INTEGRITY_STATUS). Десятки секунд
-    /// проверки больше не показывают отдельного прямоугольного окна.
+    /// Проверка целостности идёт до запуска браузера и занимает десятки секунд
+    /// на холодном диске. Всё это время работу показывает круглое пульсирующее
+    /// окно Guardian (секторы: целостность → обновление → загрузка → запуск);
+    /// оно же ведёт скрытую проверку обновления при старте, а затем передаёт
+    /// эстафету круглому сплэшу браузера. Появляется не сразу, чтобы тёплый
+    /// повторный запуск не мигал лишним окном.
     /// </summary>
-    private static IntegrityResult VerifyWithSplash(string root, bool full) =>
-        IntegrityVerifier.Verify(root, full);
+    private static IntegrityResult VerifyWithSplash(string root, bool full, ref GuardianSplash? splash)
+    {
+        var hashPercent = -1;
+        var verification = Task.Run(() => IntegrityVerifier.Verify(root, full,
+            percent => Volatile.Write(ref hashPercent, percent)));
+        var elapsed = Stopwatch.StartNew();
+        try
+        {
+            while (!verification.Wait(40))
+            {
+                if (splash is null && elapsed.ElapsedMilliseconds > 700)
+                {
+                    splash = new GuardianSplash(root, () => Volatile.Read(ref hashPercent));
+                    splash.ActivateSector(0, 0);
+                    splash.Show();
+                }
+                Application.DoEvents();
+            }
+            return verification.Result;
+        }
+        catch
+        {
+            splash?.CloseGraceful();
+            splash = null;
+            throw;
+        }
+    }
 
     private static bool ShouldUseSafeMode()
     {

@@ -49,24 +49,26 @@ public partial class NetworkWatchdogWindow : Window
 
     /// <summary>
     /// Сканирует порты этой машины через IP Helper API (без прав админа),
-    /// заполняет таблицу и озвучивает итог голосом помощника. Итог честно
-    /// разделяет: утечки закрыты порт-щитом автоматически, службы —
-    /// сознательно не тронуты.
+    /// заполняет таблицу и озвучивает итог голосом помощника. Скан уходит в
+    /// фон: таблица слушателей бывает большой, а окно обязано отвечать.
+    /// Статус порт-щита читается из памяти сессии — вызов netsh для UI
+    /// запрещён: на захламлённом сторонними WFP-фильтрами стеке он способен
+    /// виснуть минутами и убить окно как «не отвечает».
     /// </summary>
-    private void ScanPorts_Click(object sender, RoutedEventArgs e)
+    private async void ScanPorts_Click(object sender, RoutedEventArgs e)
     {
         ScanPortsButton.IsEnabled = false;
         ScanPortsButton.Content = "Сканирование…";
         ScanSummary.Text = "Опрашиваю таблицу слушателей TCP/UDP…";
         try
         {
-            var results = Services.LocalPortScanner.Scan();
+            var results = await Task.Run(Services.LocalPortScanner.Scan);
             PortResults.ItemsSource = results;
             PortResults.Visibility = Visibility.Visible;
 
             var dangerous = results.Count(r => r.Severity == 2);
             var warnings = results.Count(r => r.Severity == 1);
-            var shieldOn = Services.PortShieldService.AreRulesApplied();
+            var shieldOn = Services.PortShieldService.IsSessionShieldActive;
             var shieldLine = shieldOn
                 ? "Порт-щит: АКТИВЕН — mDNS/SSDP/NetBIOS закрыты файрволом на сессию, IP не утекает."
                 : "Порт-щит: не активен (включите режим «Авто» в настройках — утечки закроются сами).";

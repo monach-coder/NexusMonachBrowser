@@ -1,15 +1,14 @@
 using System.IO;
 using System.Text.Json;
-using System.Windows.Threading;
 
 namespace NexusMonach.Services;
 
 /// <summary>
 /// Наблюдатель скрытой проверки обновления для круглого сплэша: читает
 /// Updates/update-progress.json (его пишет скрытый Guardian-процесс),
-/// рисует кольцо-шкалу, этапы и озвучивает вехи — «нашёл версию, качаю»,
-/// «скачано, применю при перезапуске». Молчит, когда версия актуальна:
-/// пустой болтовни на каждом старте не будет.
+/// закрывает секторы кольца (обновление → загрузка) и озвучивает вехи —
+/// «нашёл версию, качаю», «скачано, применю при перезапуске». Молчит,
+/// когда версия актуальна: пустой болтовни на каждом старте не будет.
 /// </summary>
 public static class SplashUpdateWatcher
 {
@@ -25,15 +24,33 @@ public static class SplashUpdateWatcher
 
         var announcedDownload = false;
         var announcedDone = false;
+        var startedUtc = DateTimeOffset.UtcNow;
+        var lastSeen = string.Empty;
         while (true)
         {
+            // Сплэш закрылся (запуск закончился) или скрытая проверка молчит
+            // дольше трёх минут (файл не меняется, процесс погиб) — тихо
+            // выходим: опрос каждые 400 мс не должен жить всю сессию.
+            // Любое обновление файла сбрасывает счётчик: долгая загрузка
+            // на медленной сети легальна и не должна обрываться.
+            var splashAlive = splash.Dispatcher.CheckAccess()
+                ? splash.IsLoaded
+                : (bool)splash.Dispatcher.Invoke(() => splash.IsLoaded);
+            if (!splashAlive || DateTimeOffset.UtcNow - startedUtc > TimeSpan.FromMinutes(3))
+                return;
             ProgressState? state = null;
+            string? raw = null;
             try
             {
-                state = JsonSerializer.Deserialize<ProgressState>(
-                    await File.ReadAllTextAsync(path));
+                raw = await File.ReadAllTextAsync(path);
+                state = JsonSerializer.Deserialize<ProgressState>(raw);
             }
             catch { /* файл пишется прямо сейчас — попробуем ещё раз */ }
+            if (raw is not null && !string.Equals(raw, lastSeen, StringComparison.Ordinal))
+            {
+                lastSeen = raw;
+                startedUtc = DateTimeOffset.UtcNow;
+            }
             if (state is not null)
             {
                 var stageText = state.Stage switch
@@ -45,16 +62,38 @@ public static class SplashUpdateWatcher
                     _ => state.Stage
                 };
                 splash.SetStatus(stageText);
-                splash.SetProgress(state.Percent, state.Detail);
-                splash.SetStage(state.Stage switch
+                splash.SetDetail(state.Detail);
+                switch (state.Stage)
                 {
-                    "проверяю обновления" => 1,
-                    var s when s.StartsWith("Найдена", StringComparison.Ordinal) ||
-                                      s.StartsWith("Скачиваю", StringComparison.Ordinal) => 2,
-                    "скачано" => 3,
-                    "актуальна" => 4,
-                    _ => 1
-                });
+                    case "проверяю обновления":
+                        splash.ActivateSector(1, -1);
+                        break;
+                    case "актуальна":
+                    case "ошибка проверки":
+                        splash.CompleteSector(1);
+                        break;
+                    case "скачано":
+                        splash.CompleteSector(1);
+                        splash.CompleteSector(2);
+                        break;
+                    default:
+                        if (state.Stage.StartsWith("Найдена", StringComparison.Ordinal))
+                        {
+                            splash.CompleteSector(1);
+                            splash.ActivateSector(2, -1);
+                        }
+                        else if (state.Stage.StartsWith("Скачиваю", StringComparison.Ordinal))
+                        {
+                            splash.CompleteSector(1);
+                            splash.ActivateSector(2, state.Percent);
+                        }
+                        else if (state.Stage.StartsWith("Проверяю подпись", StringComparison.Ordinal))
+                        {
+                            splash.CompleteSector(1);
+                            splash.CompleteSector(2);
+                        }
+                        break;
+                }
 
                 if (!announcedDownload && state.Found && !state.Done)
                 {

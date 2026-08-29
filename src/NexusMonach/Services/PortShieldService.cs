@@ -45,6 +45,13 @@ public static class PortShieldService
     private static volatile bool _ownsSessionRules;
 
     /// <summary>
+    /// Щит активен в этой сессии (правила применены или унаследованы после
+    /// аварийного выхода). Читается окном Дозора вместо netsh-запроса,
+    /// который на захламлённом WFP-стеке способен заморозить интерфейс.
+    /// </summary>
+    public static bool IsSessionShieldActive => _ownsSessionRules;
+
+    /// <summary>
     /// Запускается при старте браузера: скан + (в режиме Auto) закрытие утечек
     /// на сессию. Никогда не бросает исключений и не блокирует запуск.
     /// </summary>
