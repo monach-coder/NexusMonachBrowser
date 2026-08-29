@@ -115,6 +115,81 @@ internal static class SilentUpdateCoordinator
         catch { /* Updates are retried later; browser startup must stay available. */ }
     }
 
+    /// <summary>
+    /// Скрытая проверка обновления для сплэша браузера: Guardian-процесс
+    /// без окна пишет ход в Updates/update-progress.json (этап, проценты,
+    /// мегабайты), круглый сплэш браузера читает файл и озвучивает вехи.
+    /// Троттлинг общий с фоновой проверкой — API не дёргаем чаще раза в 6 часов.
+    /// </summary>
+    public static void StartSplashCheck(string applicationRoot, string guardianRoot)
+    {
+        try
+        {
+            var guardian = Path.Combine(applicationRoot, "NexusMonach.exe");
+            var info = new ProcessStartInfo(guardian)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden,
+                WorkingDirectory = applicationRoot
+            };
+            info.ArgumentList.Add("--splash-update-check");
+            info.ArgumentList.Add(applicationRoot);
+            Process.Start(info)?.Dispose();
+        }
+        catch { /* сплэш переживёт отсутствие проверки */ }
+    }
+
+    /// <summary>Путь прогресс-файла для сплэша браузера.</summary>
+    public static string SplashProgressPath(string guardianRoot) =>
+        Path.Combine(guardianRoot, "Updates", "update-progress.json");
+
+    /// <summary>Запуск скрытой проверки обновления с записью прогресса.</summary>
+    public static async Task<int> RunSplashCheckAsync(string applicationRoot, string guardianRoot)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(guardianRoot, "Updates"));
+            var throttle = Path.Combine(guardianRoot, "Updates", "last-check.utc");
+            if (File.Exists(throttle) &&
+                File.GetLastWriteTimeUtc(throttle) > DateTime.UtcNow.AddHours(-6))
+            {
+                WriteSplashProgress(guardianRoot, "актуальна", -1, string.Empty, done: true, found: false, null);
+                return 0;
+            }
+            File.WriteAllText(throttle, DateTimeOffset.UtcNow.ToString("O"));
+            WriteSplashProgress(guardianRoot, "проверяю обновления", -1, string.Empty, false, false, null);
+            await CheckAndStageAsync(applicationRoot, guardianRoot, CancellationToken.None,
+                progress => WriteSplashProgress(guardianRoot,
+                    progress.Stage, progress.Percent, progress.Detail, false, false, null));
+            var found = TryReadPending(guardianRoot, out var pending) && pending is not null;
+            WriteSplashProgress(guardianRoot, found ? "скачано" : "актуальна", -1,
+                found ? "применю при следующем запуске" : string.Empty,
+                done: true, found, pending?.Version);
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            WriteSplashProgress(guardianRoot, "ошибка проверки", -1, ex.Message, true, false, null);
+            return 5;
+        }
+    }
+
+    private static void WriteSplashProgress(string guardianRoot, string stage, int percent,
+        string detail, bool done, bool found, string? version)
+    {
+        try
+        {
+            File.WriteAllText(SplashProgressPath(guardianRoot),
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    schema = 1, stage, percent, detail, done, found, version,
+                    utc = DateTimeOffset.UtcNow
+                }));
+        }
+        catch { /* прогресс — желательное, не обязательное */ }
+    }
+
     public static async Task<int> CheckAndStageAsync(string applicationRoot, string guardianRoot,
         CancellationToken cancellationToken = default, Action<UpdateProgress>? timeline = null)
     {

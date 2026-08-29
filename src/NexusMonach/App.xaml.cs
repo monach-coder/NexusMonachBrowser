@@ -198,6 +198,13 @@ public partial class App : Application
 
         var splash = new SplashWindow();
         splash.Show();
+        // Единое стартовое окно: Guardian уже проверил целостность молча и
+        // передал статус окружением; скрытая проверка обновления пишет ход
+        // в файл — сплэш рисует кольцо и озвучивает вехи.
+        splash.SetStatus("Guardian: целостность " +
+            (GuardianRuntime.IntegrityStatus.Equals("verified", StringComparison.OrdinalIgnoreCase)
+                ? "подтверждена" : GuardianRuntime.IntegrityStatus));
+        _ = Services.SplashUpdateWatcher.RunAsync(splash);
         Task startupAudio = Task.CompletedTask;
 
         try

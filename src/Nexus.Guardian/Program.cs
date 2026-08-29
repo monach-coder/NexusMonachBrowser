@@ -23,6 +23,7 @@ internal static class Program
              args[0].Equals("--create-release-manifest", StringComparison.OrdinalIgnoreCase) ||
              args[0].Equals("--verify-only", StringComparison.OrdinalIgnoreCase) ||
              args[0].Equals("--background-update-check", StringComparison.OrdinalIgnoreCase) ||
+             args[0].Equals("--splash-update-check", StringComparison.OrdinalIgnoreCase) ||
              args[0].Equals("--apply-pending-update", StringComparison.OrdinalIgnoreCase));
 
         try
@@ -77,6 +78,16 @@ internal static class Program
             {
                 if (!IntegrityVerifier.UsesEmbeddedTrust) return 4;
                 return SilentUpdateCoordinator.CheckAndStageAsync(args[1], GuardianRoot)
+                    .GetAwaiter().GetResult();
+            }
+
+            // Скрытая проверка для сплэша браузера: ход пишется в файл,
+            // круглый сплэш читает и озвучивает.
+            if (args.Length > 1 && args[0].Equals("--splash-update-check",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                if (!IntegrityVerifier.UsesEmbeddedTrust) return 4;
+                return SilentUpdateCoordinator.RunSplashCheckAsync(args[1], GuardianRoot)
                     .GetAwaiter().GetResult();
             }
 
@@ -178,45 +189,20 @@ internal static class Program
                 "Nexus Guardian", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
-        // Обновление при запуске: до открытия окна проверяем latest-релиз,
-        // скачиваем и ставим новую версию — пользователь сразу работает
-        // на актуальном браузере. Медленная сеть не тормозит надолго:
-        // бюджет времени, при превышении стартует текущая версия.
+        // Обновление при запуске: применяем накопленное молча (круглый
+        // сплэш браузера ведёт всю презентацию и озвучку); загрузка нового
+        // ядра уходит в скрытую проверку с прогресс-файлом для сплэша.
         if (integrity.State == IntegrityState.Verified && IntegrityVerifier.UsesEmbeddedTrust)
         {
-            var updateSplash = new GuardianSplash();
-            updateSplash.SetStatus("Проверяю обновления Nexus…");
-            updateSplash.SetStage(1);
-            updateSplash.Show();
-            try
+            var applied = SilentUpdateCoordinator.StartupUpdate(
+                root, GuardianRoot, progress: null, TimeSpan.FromSeconds(150));
+            if (applied)
             {
-                var applied = SilentUpdateCoordinator.StartupUpdate(
-                    root, GuardianRoot, updateSplash.SetStatus, TimeSpan.FromSeconds(150),
-                    timeline: progress =>
-                    {
-                        updateSplash.SetStage(progress.Stage.ToLowerInvariant() switch
-                        {
-                            var s when s.StartsWith("найдена") || s.StartsWith("скачиваю") => 2,
-                            var s when s.StartsWith("проверяю подпись") || s.StartsWith("устанавливаю") => 3,
-                            var s when s.StartsWith("версия актуальна") => 4,
-                            _ => 1
-                        });
-                        updateSplash.SetStatus(progress.Stage);
-                        updateSplash.SetProgress(progress.Percent, progress.Detail);
-                    });
-                if (applied)
-                {
-                    // Апликатор ждёт нашего выхода, применяет файлы и сам
-                    // перезапускает обновлённый браузер.
-                    return 0;
-                }
+                // Апликатор ждёт нашего выхода, применяет файлы и сам
+                // перезапускает обновлённый браузер.
+                return 0;
             }
-            finally
-            {
-                updateSplash.Close();
-                updateSplash.Dispose();
-            }
-            SilentUpdateCoordinator.StartBackgroundCheck(root, GuardianRoot);
+            SilentUpdateCoordinator.StartSplashCheck(root, GuardianRoot);
         }
 
         Directory.CreateDirectory(Path.Combine(GuardianRoot, "Sessions"));
@@ -249,30 +235,14 @@ internal static class Program
     /// десятки секунд на холодном диске. Сплэш появляется не сразу, чтобы
     /// тёплый повторный запуск не мигал лишним окном.
     /// </summary>
-    private static IntegrityResult VerifyWithSplash(string root, bool full)
-    {
-        var verification = Task.Run(() => IntegrityVerifier.Verify(root, full));
-        GuardianSplash? splash = null;
-        var elapsed = Stopwatch.StartNew();
-        try
-        {
-            while (!verification.Wait(40))
-            {
-                if (splash is null && elapsed.ElapsedMilliseconds > 700)
-                {
-                    splash = new GuardianSplash();
-                    splash.Show();
-                }
-                Application.DoEvents();
-            }
-            return verification.Result;
-        }
-        finally
-        {
-            splash?.Close();
-            splash?.Dispose();
-        }
-    }
+    /// <summary>
+    /// Проверка целостности идёт молча: всю презентацию и озвучку ведёт
+    /// круглый пульсирующий сплэш самого браузера (статус приходит
+    /// переменной окружения NEXUS_INTEGRITY_STATUS). Десятки секунд
+    /// проверки больше не показывают отдельного прямоугольного окна.
+    /// </summary>
+    private static IntegrityResult VerifyWithSplash(string root, bool full) =>
+        IntegrityVerifier.Verify(root, full);
 
     private static bool ShouldUseSafeMode()
     {

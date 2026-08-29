@@ -25,9 +25,12 @@ public partial class PrivacyDockControl : UserControl
         InitializeComponent();
     }
 
-    /// <summary>Включает/выключает панель (совместимо с вызовами MainWindow).</summary>
+    /// <summary>Включает/выключает панель: управляет и видимостью —
+    /// при старте галочка настроений одна и та же истина (баг: панель
+    /// показывалась при выключенной галочке).</summary>
     public Task SetEnabledAsync(bool enabled)
     {
+        Visibility = enabled ? Visibility.Visible : Visibility.Collapsed;
         if (enabled)
         {
             LoadState();
