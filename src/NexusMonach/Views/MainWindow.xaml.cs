@@ -1360,6 +1360,12 @@ public partial class MainWindow : Window
 
     private void ShowSettings_Click(object sender, RoutedEventArgs e) => ShowSettings();
 
+    private void ShowAnnotations_Click(object sender, RoutedEventArgs e)
+    {
+        var window = new AnnotationsWindow { Owner = this };
+        window.Show();
+    }
+
     private void ShowNetworkWatchdog_Click(object sender, RoutedEventArgs e)
     {
         // Если Дозор не запущен — запускаем для просмотра.

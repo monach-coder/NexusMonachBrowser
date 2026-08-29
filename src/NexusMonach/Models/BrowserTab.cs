@@ -305,6 +305,10 @@ public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
         if (!_isPrivate && SettingsService.Current.TrailModeEnabled)
             await core.AddScriptToExecuteOnDocumentCreatedAsync(Services.FingerprintService.FarbleScript);
 
+        // Мост аннотирования: панель над выделением, подсветки,
+        // копирование в Markdown и захват видео-фрагментов.
+        await core.AddScriptToExecuteOnDocumentCreatedAsync(Services.AnnotationsBridge.Script);
+
         if (Directory.Exists(AppPaths.WebAssets))
         {
             core.SetVirtualHostNameToFolderMapping(
@@ -485,6 +489,7 @@ public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
                 _upgradedHttpsUrl = null;
                 NavigationSucceeded?.Invoke(this, EventArgs.Empty);
                 _ = ConfigureStartPageAsync();
+                _ = ApplySavedHighlightsAsync();
                 _ = TryRestoreSecureRestartStateAsync();
             }
             else if (_pendingHttpFallback is not null && _upgradedHttpsUrl is not null)
@@ -617,6 +622,11 @@ public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
 
     private void HandleWebMessage(CoreWebView2WebMessageReceivedEventArgs e)
     {
+        // Мост аннотирования приходит с любых страниц: сообщения nexus-*
+        // валидируются отдельно (источник обязан совпадать с текущей вкладкой).
+        if (HandleAnnotationMessage(e))
+            return;
+
         if (!TryGetInternalMessagePage(e.Source, out var page))
             return;
 
@@ -670,9 +680,135 @@ public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
         }
     }
 
-    /// <summary>Проталкивает состояние цепочки в открытую стартовую страницу.</summary>
-    private async Task PushNetworkStateAsync(Services.NetworkChainSnapshot snapshot)
+    /// <summary>
+    /// Обрабатывает сообщения моста аннотирования (nexus-*): подсветка,
+    /// заметка, копия в Markdown, захваченный видео-фрагмент. Источник
+    /// сообщения обязан совпадать с адресом текущей вкладки.
+    /// </summary>
+    private bool HandleAnnotationMessage(CoreWebView2WebMessageReceivedEventArgs e)
     {
+        try
+        {
+            using var json = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = json.RootElement;
+            if (!root.TryGetProperty("type", out var typeNode)) return false;
+            var type = typeNode.GetString();
+            if (type is null || !type.StartsWith("nexus-", StringComparison.Ordinal)) return false;
+
+            // Источник — только текущая страница вкладки, никакие другие.
+            var source = Uri.TryCreate(e.Source, UriKind.Absolute, out var src) ? src : null;
+            if (source is null ||
+                !string.Equals(CurrentUrl, source.ToString(), StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            switch (type)
+            {
+                case "nexus-annotate":
+                {
+                    var quote = Trim(root, "quote", 8000);
+                    if (quote.Length == 0) break;
+                    var color = Enum.TryParse<Services.HighlightColor>(Trim(root, "color", 20), out var parsed)
+                        ? parsed : Services.HighlightColor.Yellow;
+                    Services.AnnotationsService.Add(new Services.PageAnnotation
+                    {
+                        Kind = Services.AnnotationKind.Highlight,
+                        Quote = quote, Color = color,
+                        Url = CurrentUrl, PageTitle = Title
+                    });
+                    break;
+                }
+                case "nexus-note":
+                {
+                    var quote = Trim(root, "quote", 8000);
+                    var note = Trim(root, "note", 4000);
+                    if (quote.Length == 0) break;
+                    Services.AnnotationsService.Add(new Services.PageAnnotation
+                    {
+                        Kind = Services.AnnotationKind.Note,
+                        Quote = quote, Note = note,
+                        Url = CurrentUrl, PageTitle = Title
+                    });
+                    break;
+                }
+                case "nexus-copy-md":
+                {
+                    var markdown = Trim(root, "markdown", 100_000);
+                    if (markdown.Length > 0)
+                        System.Windows.Clipboard.SetText(markdown);
+                    break;
+                }
+                case "nexus-video":
+                {
+                    _ = SaveVideoFragmentAsync(root);
+                    break;
+                }
+                case "nexus-video-failed":
+                    Services.CrashReportService.AddBreadcrumb("annotations",
+                        "video-" + Trim(root, "reason", 40));
+                    break;
+            }
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static string Trim(JsonElement root, string name, int limit)
+    {
+        if (!root.TryGetProperty(name, out var node)) return string.Empty;
+        var value = node.GetString() ?? string.Empty;
+        return value.Length <= limit ? value : value[..limit];
+    }
+
+    /// <summary>Сохраняет захваченный webm-фрагмент в Data/notes-media.</summary>
+    private async Task SaveVideoFragmentAsync(JsonElement root)
+    {
+        try
+        {
+            var base64 = root.TryGetProperty("base64", out var data) ? data.GetString() : null;
+            if (string.IsNullOrEmpty(base64) || base64.Length > 120_000_000) return;
+            var position = root.TryGetProperty("position", out var pos) ? pos.GetDouble() : 0;
+            var duration = root.TryGetProperty("duration", out var dur) ? dur.GetDouble() : 0;
+
+            Directory.CreateDirectory(Services.AnnotationsService.MediaDirectory);
+            var fileName = "fragment-" + DateTimeOffset.Now.ToString("yyyyMMdd-HHmmss") + ".webm";
+            await File.WriteAllBytesAsync(Path.Combine(Services.AnnotationsService.MediaDirectory, fileName),
+                Convert.FromBase64String(base64));
+            Services.AnnotationsService.Add(new Services.PageAnnotation
+            {
+                Kind = Services.AnnotationKind.VideoFragment,
+                MediaPath = "notes-media/" + fileName,
+                VideoPositionSeconds = position,
+                DurationSeconds = duration,
+                Url = CurrentUrl, PageTitle = Title
+            });
+        }
+        catch (Exception ex)
+        {
+            Services.CrashReportService.RecordNonFatal("annotations", "video-save", ex);
+        }
+    }
+
+    /// <summary>Подсвечивает сохранённые цитаты страницы после навигации.</summary>
+    private async Task ApplySavedHighlightsAsync()
+    {
+        try
+        {
+            if (Core is null) return;
+            var highlights = Services.AnnotationsService.ForUrl(CurrentUrl);
+            if (highlights.Count == 0) return;
+            await Core.ExecuteScriptAsync(Services.AnnotationsBridge.HighlightsScript(highlights));
+        }
+        catch (InvalidOperationException swallowed)
+        {
+            Services.SwallowLog.Log("browser-tab", "ApplySavedHighlightsAsync", swallowed);
+        }
+    }
+
+    /// <summary>Проталкивает состояние цепочки в открытую стартовую страницу.</summary>
+    private async Task PushNetworkStateAsync(Services.NetworkChainSnapshot snapshot)    {
         try
         {
             if (Core is null || !CurrentUrl.Equals(UrlService.NewTabUrl, StringComparison.OrdinalIgnoreCase))
