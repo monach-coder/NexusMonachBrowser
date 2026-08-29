@@ -402,6 +402,8 @@ public partial class App : Application
         // ли что-то, пока браузер был закрыт.
         ShutdownCoordinator.RunStep("profile-integrity", Services.ProfileIntegrityService.CaptureAtExit, timeout);
         Services.EgressCanaryService.Stop();
+        // Встроенный маршрутизатор цепочки слушает loopback только пока жив браузер.
+        Services.Chain.ChainRouterService.Stop();
         // Правила порт-щита живут только пока работает браузер.
         Services.PortShieldService.RemoveSessionShield();
         CrashReportService.MarkCleanExit();
