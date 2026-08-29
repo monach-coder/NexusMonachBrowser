@@ -300,6 +300,11 @@ public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
         if (!_isPrivate)
             await ExtensionService.EnsureInstalledAsync(core.Profile);
 
+        // Режим Следа: farbling до создания документа — во всех фреймах
+        // и до любых скриптов страницы.
+        if (!_isPrivate && SettingsService.Current.TrailModeEnabled)
+            await core.AddScriptToExecuteOnDocumentCreatedAsync(Services.FingerprintService.FarbleScript);
+
         if (Directory.Exists(AppPaths.WebAssets))
         {
             core.SetVirtualHostNameToFolderMapping(

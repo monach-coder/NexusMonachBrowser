@@ -313,6 +313,11 @@ public partial class App : Application
                     // Сетевая цепочка: сначала транспорт (Xray), потом Тор —
                     // torrc генерируется уже с обёрткой в поднятый сервер.
                     _ = Task.Run(StartNetworkChainAsync);
+                    // Слои доверия: целостность профиля между сессиями,
+                    // свежесть движка, канарейка цепочки.
+                    Services.ProfileIntegrityService.VerifyAtStartup();
+                    _ = Task.Run(Services.WebView2RuntimeWatchdog.CheckAsync);
+                    Services.EgressCanaryService.Start();
                 }
             }
             if (smokeSelfTest)
@@ -378,6 +383,10 @@ public partial class App : Application
         ShutdownCoordinator.RunStep("video-voice", VideoDubbingVoiceService.Shutdown, timeout);
         ShutdownCoordinator.RunStep("assistant-voice", VoiceAssistantService.Shutdown, timeout);
         ShutdownCoordinator.RunStep("gpu-recovery", GpuRecoveryService.Stop, timeout);
+        // Снимок целостности профиля: при следующем старте сверим — менялось
+        // ли что-то, пока браузер был закрыт.
+        ShutdownCoordinator.RunStep("profile-integrity", Services.ProfileIntegrityService.CaptureAtExit, timeout);
+        Services.EgressCanaryService.Stop();
         // Правила порт-щита живут только пока работает браузер.
         Services.PortShieldService.RemoveSessionShield();
         CrashReportService.MarkCleanExit();

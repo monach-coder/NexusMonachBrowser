@@ -39,6 +39,15 @@ public static class BrowserEnvironment
             AllowSingleSignOnUsingOSPrimaryAccount = false,
             IsCustomCrashReportingEnabled = true
         };
+        // Режим Следа: UA выравнивается под самый массовый Chrome —
+        // не случайная подмена (случайность = уникальность), а серость.
+        if (SettingsService.Current.TrailModeEnabled)
+        {
+            var grayAgent = FingerprintService.NormalizeUserAgent(
+                CoreWebView2Environment.GetAvailableBrowserVersionString() ?? "");
+            options.AdditionalBrowserArguments =
+                (browserArguments + " --user-agent=\"" + grayAgent + "\"").Trim();
+        }
 
         _environment = await CoreWebView2Environment.CreateAsync(
             browserExecutableFolder: null,

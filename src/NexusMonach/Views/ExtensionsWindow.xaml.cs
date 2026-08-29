@@ -46,13 +46,35 @@ public partial class ExtensionsWindow : Window
 
         try
         {
-            await ExtensionService.InstallAsync(_profile, dialog.FolderName);
-            await RefreshAsync();
+            await TryInstallAsync(dialog.FolderName, allowRisky: false);
         }
         catch (Exception ex)
         {
             GlassDialogWindow.Show(this, "Не удалось установить расширение:\n\n" + ex.Message,
                 "Расширения", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>
+    /// Установка с осознанным подтверждением: страж расширений блокирует
+    /// опасные комбинации прав; пользователь может overrides только
+    /// явным «Да, установить» в диалоге с перечнем рисков.
+    /// </summary>
+    private async Task TryInstallAsync(string folder, bool allowRisky)
+    {
+        try
+        {
+            await ExtensionService.InstallAsync(_profile, folder, allowRisky);
+            await RefreshAsync();
+        }
+        catch (InvalidOperationException risky) when (risky.Message.StartsWith("СТРАЖ РАСШИРЕНИЙ"))
+        {
+            var answer = GlassDialogWindow.Show(this,
+                risky.Message + "\n\nУстановить всё равно?",
+                "Страж расширений", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (answer != MessageBoxResult.Yes) return;
+            await ExtensionService.InstallAsync(_profile, folder, allowRisky: true);
+            await RefreshAsync();
         }
     }
 

@@ -64,7 +64,8 @@ public static class ExtensionService
         finally { Gate.Release(); }
     }
 
-    public static async Task<CoreWebView2BrowserExtension> InstallAsync(CoreWebView2Profile profile, string sourceFolder)
+    public static async Task<CoreWebView2BrowserExtension> InstallAsync(
+        CoreWebView2Profile profile, string sourceFolder, bool allowRisky = false)
     {
         var manifestPath = Path.Combine(sourceFolder, "manifest.json");
         if (!File.Exists(manifestPath))
@@ -76,6 +77,15 @@ public static class ExtensionService
         var version = root.TryGetProperty("version", out var v) ? v.GetString() ?? "0" : "0";
         if (!root.TryGetProperty("manifest_version", out var mv) || mv.GetInt32() is not (2 or 3))
             throw new InvalidOperationException("Поддерживаются расширения Manifest V2 и Manifest V3.");
+
+        // Страж расширений: опасные комбинации прав блокируются до установки —
+        // поставить можно только осознанно, повторным подтверждением.
+        var risk = ExtensionRiskAnalyzer.Analyze(root);
+        if (risk.Verdict == ExtensionRiskVerdict.Dangerous && !allowRisky)
+            throw new InvalidOperationException(
+                "СТРАЖ РАСШИРЕНИЙ: " + risk.Summary + "\n\n" +
+                string.Join("\n• ", new[] { "" }.Concat(risk.Reasons)).TrimStart('\n', '•', ' ') +
+                "\n\nСчёт риска: " + risk.Score);
 
         var sourceFingerprint = Convert.ToHexString(SHA256.HashData(
             Encoding.UTF8.GetBytes(Path.GetFullPath(sourceFolder).ToUpperInvariant())))[..16];
