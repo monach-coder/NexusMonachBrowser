@@ -328,12 +328,17 @@ public partial class MainWindow : Window
         tab.NexusSearchRequested += async (_, e) =>
         {
             BeginPendingSiteResearch(tab, e.Value, "nexus-search", "search-provider");
+            // Тихий Следопыт: поиск уже идёт, пока пользователь листает
+            // выдачу, — без вкладок, без навигаций, без озвучки запроса.
+            Services.SledopytQuietEye.ObserveQuery(tab, e.Value, _isPrivate);
             await RunNexusSearchAsync(tab, e.Value);
         };
         tab.SearchResultRequested += async (_, e) =>
         {
             if (!NexusSearchService.IsAllowedResultUrl(e.Url) || !Uri.TryCreate(e.Url, UriKind.Absolute, out var target)) return;
             if (!_isPrivate) await NexusSearchService.RecordChoiceAsync(e.Query, target.AbsoluteUri);
+            // Обучение тихого Следопыта: пользователь выбрал этот результат.
+            Services.SledopytQuietEye.RecordChoice(e.Query, target.AbsoluteUri);
             if (!(_tabResearch.TryGetValue(tab, out var state) && state.PendingFollowUp is { } pending &&
                   pending.Query.Equals(e.Query, StringComparison.OrdinalIgnoreCase)))
                 BeginPendingSiteResearch(tab, e.Query, "nexus-search", "search-provider");
@@ -387,6 +392,12 @@ public partial class MainWindow : Window
         // обман сканеров, ARP- и DNS-стражи. О запуске обязательно
         // сообщается голосом: защита видима, а не тайная.
         StartWatchdogOnce();
+        // Тихий Следопыт: индикатор «нашёл» на кнопке, без открытия окна.
+        if (_sledopytBadgeArmed is null)
+        {
+            _sledopytBadgeArmed = () => Dispatcher.Invoke(ArmSledopytBadge);
+            Services.SledopytQuietEye.ResultReady += _sledopytBadgeArmed;
+        }
         // «Режим След»: на каждую вкладку накладывается порт-страж —
         // WebRTC блокируется, DNS идёт через Tor, mDNS/SSDP отключены.
         if (SettingsService.Current.TrailModeEnabled)
@@ -453,6 +464,7 @@ public partial class MainWindow : Window
     }
 
     private static int _torRelayStarted;
+    private Action? _sledopytBadgeArmed;
 
     /// <summary>
     /// Автостарт Тора один раз на сессию — с обёрткой (транспорт или VPN),
@@ -560,10 +572,13 @@ public partial class MainWindow : Window
                 return;
             }
             var sourceTitle = tab.Title;
+            // Тихий режим: Следопыт документирует исследование, но не
+            // открывает окно и не зачитывает запрос — пользователь уже
+            // на сайте, ему не мешаем. Окно — только по кнопке.
             Dispatcher.Invoke(() =>
             {
                 SshTerminalDock.Visibility = Visibility.Collapsed;
-                LocalAiDock.BeginBackgroundResearch(tab, query);
+                LocalAiDock.BeginBackgroundResearch(tab, query, silent: true);
             });
             var pageText = await tab.GetReadablePageTextAsync();
             SledopytDiagnosticsService.Record("site-research", "page-read", "success",
@@ -586,9 +601,14 @@ public partial class MainWindow : Window
             {
                 LocalAiDock.StoreBackgroundResearch(tab, sourceUrl, report);
             });
-            VoiceAssistantService.Announce(
-                $"Следопыт закончил анализ сайта. Подходящих источников: {report.Items.Count}. " +
-                BriefVoiceSummary(report.DirectAnswer), VoiceAnnouncementPriority.Important, _isPrivate);
+            // Голос — только когда есть прямой ответ, и без пересказа
+            // запроса пользователя: он сам знает, что искал.
+            if (!string.IsNullOrWhiteSpace(report.DirectAnswer))
+                VoiceAssistantService.Announce(
+                    "Следопыт нашёл прямой ответ по вашему запросу. Открыть — кнопка Следопыта.",
+                    VoiceAnnouncementPriority.Important, _isPrivate);
+            else
+                CrashReportService.AddBreadcrumb("sledopyt", "silent-completed");
         }
         catch (OperationCanceledException)
         {
@@ -1105,7 +1125,28 @@ public partial class MainWindow : Window
         var tab = ActiveTab;
         if (tab?.Core is null) return;
         SshTerminalDock.Visibility = Visibility.Collapsed;
+        // Тихий результат Следопыта ждёт здесь: сбрасываем индикатор
+        // и показываем накопленное без вторжения в browsing.
+        ResetSledopytBadge();
         await LocalAiDock.PrepareShoppingAgentAsync(tab);
+    }
+
+    /// <summary>Индикатор тихого результата: точка на кнопке Следопыта.</summary>
+    private void ResetSledopytBadge()
+    {
+        if (SledopytButton is null) return;
+        SledopytButton.Content = "AI";
+        SledopytButton.ToolTip = "Nexus Следопыт: найти, проверить и сравнить информацию";
+    }
+
+    private void ArmSledopytBadge()
+    {
+        if (SledopytButton is null) return;
+        var pending = Services.SledopytQuietEye.PendingResult;
+        if (pending is null) return;
+        SledopytButton.Content = "AI •";
+        SledopytButton.ToolTip = "Следопыт нашёл: " +
+            (string.IsNullOrWhiteSpace(pending.BestTitle) ? pending.BestUrl : pending.BestTitle);
     }
 
     // ═════════════════════════════════════════════════════════

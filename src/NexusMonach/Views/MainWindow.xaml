@@ -199,7 +199,7 @@
                     </ContextMenu>
                 </Button.ContextMenu>
             </Button>
-            <Button Grid.Column="7" Content="AI" Style="{StaticResource IconButton}" FontFamily="Segoe UI"
+            <Button x:Name="SledopytButton" Grid.Column="7" Content="AI" Style="{StaticResource IconButton}" FontFamily="Segoe UI"
                     FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}"
                     ToolTip="Nexus Следопыт: найти, проверить и сравнить информацию" Click="ShoppingAgentTop_Click" />
 

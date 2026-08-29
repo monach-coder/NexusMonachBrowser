@@ -1500,7 +1500,12 @@ public partial class LocalAiDockControl : UserControl
         StatusText.Text = $"Готово · изучено материалов сайта: {report.Items.Count} · сохранено в граф знаний";
     }
 
-    public void BeginBackgroundResearch(BrowserTab tab, string query)
+    /// <summary>
+    /// Начинает фоновое исследование. Тихий режим (silent) — документирует
+    /// работу, но НЕ открывает окно и не занимает интерфейс: Следопыт
+    /// помогает, а не мешает; своё окно он показывает только по кнопке.
+    /// </summary>
+    public void BeginBackgroundResearch(BrowserTab tab, string query, bool silent = false)
     {
         _cancellation?.Cancel();
         _tab = tab;
@@ -1509,14 +1514,17 @@ public partial class LocalAiDockControl : UserControl
         _showingBackgroundResearch = true;
         _backgroundResearchHost = tab.CurrentHost;
         _backgroundResearchStages.Clear();
-        Visibility = Visibility.Visible;
-        ModeTitleText.Text = "NEXUS СЛЕДОПЫТ";
-        PageTitleText.Text = tab.Title + " · " + tab.CurrentHost;
-        TestLocalAiButton.Visibility = Visibility.Collapsed;
-        ShoppingAgentPanel.Visibility = Visibility.Collapsed;
-        ShowTextResult("Ищу важную информацию по запросу:\n«" + query +
-                       "»\n\n1. Читаю открытую страницу…\n2. Отбираю релевантные разделы этого сайта…\n3. Сопоставляю факты локально…");
-        StatusText.Text = "Следопыт работает · текущая страница остаётся доступной";
+        if (!silent)
+        {
+            Visibility = Visibility.Visible;
+            ModeTitleText.Text = "NEXUS СЛЕДОПЫТ";
+            PageTitleText.Text = tab.Title + " · " + tab.CurrentHost;
+            TestLocalAiButton.Visibility = Visibility.Collapsed;
+            ShoppingAgentPanel.Visibility = Visibility.Collapsed;
+            ShowTextResult("Ищу важную информацию по запросу:\n«" + query +
+                           "»\n\n1. Читаю открытую страницу…\n2. Отбираю релевантные разделы этого сайта…\n3. Сопоставляю факты локально…");
+            StatusText.Text = "Следопыт работает · текущая страница остаётся доступной";
+        }
     }
 
     public void UpdateBackgroundResearchProgress(BrowserTab tab, string message)
