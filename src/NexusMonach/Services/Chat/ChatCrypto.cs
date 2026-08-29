@@ -15,7 +15,11 @@ public static class ChatCrypto
     private const int NonceBytes = 12;
     private const int TagBytes = 16;
 
-    /// <summary>Личная пара ключей участника. Приватная часть — RAM-only.</summary>
+    /// <summary>
+    /// Личная пара ключей участника. Приватная часть не покидает браузер
+    /// владельца: в памяти — процесс, на диске — только DPAPI-зашифрованный
+    /// файл личности (см. ChatIdentityStore).
+    /// </summary>
     public sealed class Identity
     {
         private readonly ECDiffieHellman _dh;
@@ -26,6 +30,28 @@ public static class ChatCrypto
             _dh = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
             var point = _dh.PublicKey.ExportParameters().Q;
             PublicKey = (point.X ?? []).Concat(point.Y ?? []).ToArray();
+        }
+
+        private Identity(ECDiffieHellman existing)
+        {
+            _dh = existing;
+            var point = _dh.PublicKey.ExportParameters().Q;
+            PublicKey = (point.X ?? []).Concat(point.Y ?? []).ToArray();
+        }
+
+        /// <summary>Приватная часть в PKCS#8 PEM — для DPAPI-хранилища личности.</summary>
+        public string ExportPrivateKeyPem() => _dh.ExportPkcs8PrivateKeyPem();
+
+        /// <summary>Восстановление личности из PKCS#8 PEM. Кривая — строго P-256.</summary>
+        public static Identity FromPrivateKeyPem(string pem)
+        {
+            using var parser = ECDsa.Create();
+            parser.ImportFromPem(pem);
+            var parameters = parser.ExportParameters(includePrivateParameters: true);
+            // ECCurve.Equals ненадёжен для именованных кривых — сверяем OID.
+            if (parameters.Curve.Oid?.Value != "1.2.840.10045.3.1.7")
+                throw new CryptographicException("Личность чата использует неожиданную кривую.");
+            return new Identity(ECDiffieHellman.Create(parameters));
         }
 
         /// <summary>Общий секрет с собеседником (ECDH) → ключ AES-256.</summary>

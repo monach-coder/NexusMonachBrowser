@@ -3,11 +3,13 @@ using System.Windows;
 namespace NexusMonach.Views;
 
 /// <summary>
-/// Ввод публичного ключа собеседника для создания инвайта.
+/// Ввод публичного ключа собеседника для создания инвайта. Имя — необязательная
+/// метка для файла-инвайта, в криптографию не попадает.
 /// </summary>
 public partial class InputForPublicKeyWindow : Window
 {
     public byte[]? PublicKeyBytes { get; private set; }
+    public string PeerName => new((NameBox.Text ?? string.Empty).Where(char.IsLetterOrDigit).Take(24).ToArray());
 
     public InputForPublicKeyWindow()
     {

@@ -106,6 +106,9 @@
                              ToolTip="Ваше имя для участников обмена" />
                     <Button Content="Создать комнату" Margin="6,0,0,0" Padding="9,4" FontSize="11"
                             Style="{StaticResource NexusButton}" Click="CreateRoom_Click" />
+                    <Button Content="Мой ключ…" Margin="6,0,0,0" Padding="9,4" FontSize="11"
+                            Style="{StaticResource NexusButton}" Click="MyKey_Click"
+                            ToolTip="Показать и скопировать свой публичный ключ — передать собеседнику" />
                     <Button Content="Инвайт…" Margin="6,0,0,0" Padding="9,4" FontSize="11"
                             Style="{StaticResource NexusButton}" Click="MakeInvite_Click"
                             ToolTip="Пригласить: файл-инвайт для собеседника" />

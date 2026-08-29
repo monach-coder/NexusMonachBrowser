@@ -176,4 +176,40 @@ public sealed class PlannerChatTests
         Assert.StartsWith("mailto:team%40example.com", mailto, StringComparison.Ordinal);
         Assert.Contains("%D0%A0%D0%B5%D0%BB%D0%B8%D0%B7", mailto, StringComparison.Ordinal); // «Релиз»
     }
+
+    // ── Личность: сохранение и восстановление ────────────────────
+
+    [Fact]
+    public void Identity_PemRoundTrip_PreservesKeyAndFingerprint()
+    {
+        var original = new ChatCrypto.Identity();
+        var restored = ChatCrypto.Identity.FromPrivateKeyPem(original.ExportPrivateKeyPem());
+
+        Assert.Equal(original.PublicKey, restored.PublicKey);
+        Assert.Equal(ChatCrypto.Fingerprint(original.PublicKey),
+            ChatCrypto.Fingerprint(restored.PublicKey));
+    }
+
+    [Fact]
+    public void Identity_RestoredCanWrapForPeer()
+    {
+        // Восстановленная из файла личность заворачивает ключ комнаты
+        // для собеседника — и собеседник его разворачивает.
+        var restored = ChatCrypto.Identity.FromPrivateKeyPem(
+            new ChatCrypto.Identity().ExportPrivateKeyPem());
+        var peer = new ChatCrypto.Identity();
+        var roomKey = ChatCrypto.GenerateRoomKey();
+
+        var wrapped = restored.WrapFor(roomKey, peer.PublicKey);
+        Assert.Equal(roomKey, peer.UnwrapFrom(wrapped, restored.PublicKey));
+    }
+
+    [Fact]
+    public void Identity_RejectsWrongCurve()
+    {
+        using var otherCurve = ECDsa.Create(ECCurve.NamedCurves.nistP384);
+        var pem = otherCurve.ExportPkcs8PrivateKeyPem();
+        Assert.Throws<CryptographicException>(() =>
+            ChatCrypto.Identity.FromPrivateKeyPem(pem));
+    }
 }

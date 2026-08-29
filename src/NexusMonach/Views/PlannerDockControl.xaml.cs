@@ -18,7 +18,9 @@ namespace NexusMonach.Views;
 public partial class PlannerDockControl : UserControl
 {
     private const int ChatPort = 9477;
-    private ChatCrypto.Identity? _identity;
+    // Личность одна на браузер и переживает перезапуски (DPAPI-файл);
+    // переписка по-прежнему исчезает вместе с сессией.
+    private ChatCrypto.Identity Identity => Services.Chat.ChatIdentityStore.Identity;
     private ChatSession? _session;
     private string _roomName = "комната";
 
@@ -155,8 +157,6 @@ public partial class PlannerDockControl : UserControl
         TasksPane.Visibility = Visibility.Collapsed;
         ChatPane.Visibility = Visibility.Visible;
         StatusRun.Text = "· обмен";
-        if (_identity is null)
-            _identity = new ChatCrypto.Identity();
     }
 
     // ── Защищённый обмен ──────────────────────────────────────────
@@ -164,8 +164,7 @@ public partial class PlannerDockControl : UserControl
     private ChatSession EnsureSession()
     {
         if (_session is not null) return _session;
-        _identity ??= new ChatCrypto.Identity();
-        _session = new ChatSession(_identity, DisplayNameBox.Text.Trim());
+        _session = new ChatSession(Identity, DisplayNameBox.Text.Trim());
         _session.MessageReceived += OnMessage;
         _session.MemberChanged += (member, joined) => Dispatcher.Invoke(() =>
         {
@@ -226,9 +225,9 @@ public partial class PlannerDockControl : UserControl
             var session = EnsureSession();
             _roomName = "комната-" + DateTime.Now.ToString("HHmm");
             await session.CreateRoomAsync(_roomName, ChatPort);
-            ChatState.Text = $"Комната «{_roomName}» создана. Ваш ключ: " +
-                ChatCrypto.Fingerprint(_identity!.PublicKey) +
-                $". Приглашайте инвайтом — адрес собеседнику: ваш_адрес:{ChatPort}";
+            ChatState.Text = $"Комната «{_roomName}» создана. Ваш отпечаток: " +
+                ChatCrypto.Fingerprint(Identity.PublicKey) +
+                ". Передайте собеседнику свой ключ («Мой ключ»), затем создайте инвайт.";
             VoiceAssistantService.Announce("Комната создана. Пригласите собеседника инвайтом.",
                 VoiceAnnouncementPriority.Important);
         }
@@ -237,6 +236,13 @@ public partial class PlannerDockControl : UserControl
             CrashReportService.RecordNonFatal("chat", "create-room", ex);
             ChatState.Text = "Не удалось создать комнату: " + ex.Message;
         }
+    }
+
+    /// <summary>«Мой ключ»: показать, скопировать, проговорить отпечаток.</summary>
+    private void MyKey_Click(object sender, RoutedEventArgs e)
+    {
+        var window = new MyPublicKeyWindow { Owner = Window.GetWindow(this) };
+        window.ShowDialog();
     }
 
     private void MakeInvite_Click(object sender, RoutedEventArgs e)
@@ -252,16 +258,19 @@ public partial class PlannerDockControl : UserControl
         };
         if (keyDialog.ShowDialog() != true || keyDialog.PublicKeyBytes is not { Length: 64 } key)
         {
-            ChatState.Text = "Для инвайта нужен публичный ключ собеседника (64 байта, base64).";
+            ChatState.Text = "Для инвайта нужен публичный ключ собеседника — он берёт его кнопкой «Мой ключ».";
             return;
         }
         var host = "127.0.0.1"; // для локальной сети; для интернета — внешний адрес
         var invite = _session.BuildInvite(_roomName, key, host, ChatPort);
+        var peerSuffix = string.IsNullOrWhiteSpace(keyDialog.PeerName)
+            ? string.Empty
+            : "-" + keyDialog.PeerName;
         var dialog = new SaveFileDialog
         {
             Title = "Сохранить инвайт",
             Filter = "Инвайт Nexus (*.nexusinvite)|*.nexusinvite",
-            FileName = "invite-" + _roomName + ".nexusinvite"
+            FileName = "invite-" + _roomName + peerSuffix + ".nexusinvite"
         };
         if (dialog.ShowDialog(Window.GetWindow(this)) != true) return;
         File.WriteAllText(dialog.FileName, invite.Serialize());
@@ -284,7 +293,7 @@ public partial class PlannerDockControl : UserControl
             return;
         }
         // Проверка адресата: инвайт завёрнут на наш ключ.
-        if (!invite.InviteePublicKey.AsSpan().SequenceEqual(_identity!.PublicKey))
+        if (!invite.InviteePublicKey.AsSpan().SequenceEqual(Identity.PublicKey))
         {
             ChatState.Text = "Инвайт выдан другому ключу — он не ваш.";
             return;
