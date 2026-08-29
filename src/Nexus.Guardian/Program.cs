@@ -186,11 +186,24 @@ internal static class Program
         {
             var updateSplash = new GuardianSplash();
             updateSplash.SetStatus("Проверяю обновления Nexus…");
+            updateSplash.SetStage(1);
             updateSplash.Show();
             try
             {
                 var applied = SilentUpdateCoordinator.StartupUpdate(
-                    root, GuardianRoot, updateSplash.SetStatus, TimeSpan.FromSeconds(150));
+                    root, GuardianRoot, updateSplash.SetStatus, TimeSpan.FromSeconds(150),
+                    timeline: progress =>
+                    {
+                        updateSplash.SetStage(progress.Stage.ToLowerInvariant() switch
+                        {
+                            var s when s.StartsWith("найдена") || s.StartsWith("скачиваю") => 2,
+                            var s when s.StartsWith("проверяю подпись") || s.StartsWith("устанавливаю") => 3,
+                            var s when s.StartsWith("версия актуальна") => 4,
+                            _ => 1
+                        });
+                        updateSplash.SetStatus(progress.Stage);
+                        updateSplash.SetProgress(progress.Percent, progress.Detail);
+                    });
                 if (applied)
                 {
                     // Апликатор ждёт нашего выхода, применяет файлы и сам

@@ -39,15 +39,22 @@ internal static class SilentUpdateCoordinator
     /// Бюджет по времени: медленная сеть — стартуем текущую версию,
     /// фоновое обновление догонит как раньше.
     /// </summary>
+    /// <summary>
+    /// Отчёт хода обновления для сплэша: этап, процент загрузки (-1 —
+    /// неопределённый), человекочитаемая деталь (МБ, версия).
+    /// </summary>
+    public sealed record UpdateProgress(string Stage, int Percent, string Detail);
+
     public static bool StartupUpdate(
         string applicationRoot, string guardianRoot,
-        Action<string>? progress, TimeSpan budget)
+        Action<string>? progress, TimeSpan budget,
+        Action<UpdateProgress>? timeline = null)
     {
         try
         {
             using var cts = new CancellationTokenSource(budget);
             var update = Task.Run(() => StartupUpdateAsync(
-                applicationRoot, guardianRoot, progress, cts.Token));
+                applicationRoot, guardianRoot, progress, cts.Token, timeline));
             var elapsed = Stopwatch.StartNew();
             while (!update.Wait(40))
             {
@@ -64,15 +71,22 @@ internal static class SilentUpdateCoordinator
 
     private static async Task<bool> StartupUpdateAsync(
         string applicationRoot, string guardianRoot,
-        Action<string>? progress, CancellationToken cancellationToken)
+        Action<string>? progress, CancellationToken cancellationToken,
+        Action<UpdateProgress>? timeline = null)
     {
         applicationRoot = NormalizeDirectory(applicationRoot);
         if (TryReadPending(guardianRoot, out _)) return false; // применится обычным путём
         progress?.Invoke("Проверяю обновления…");
-        await CheckAndStageAsync(applicationRoot, guardianRoot, cancellationToken);
+        timeline?.Invoke(new UpdateProgress("Проверяю обновления…", -1, string.Empty));
+        await CheckAndStageAsync(applicationRoot, guardianRoot, cancellationToken, timeline);
         if (!TryReadPending(guardianRoot, out var pending) || pending is null)
+        {
+            timeline?.Invoke(new UpdateProgress("Версия актуальна", -1, string.Empty));
             return false; // версия актуальна
+        }
         progress?.Invoke($"Устанавливаю версию {pending.Version}…");
+        timeline?.Invoke(new UpdateProgress($"Устанавливаю версию {pending.Version}…", -1,
+            "браузер перезапустится сам"));
         return TryLaunchPendingApply(applicationRoot, guardianRoot, relaunch: true);
     }
 
@@ -102,7 +116,7 @@ internal static class SilentUpdateCoordinator
     }
 
     public static async Task<int> CheckAndStageAsync(string applicationRoot, string guardianRoot,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, Action<UpdateProgress>? timeline = null)
     {
         applicationRoot = NormalizeDirectory(applicationRoot);
         if (TryReadPending(guardianRoot, out _)) return 0;
@@ -147,7 +161,15 @@ internal static class SilentUpdateCoordinator
         Directory.CreateDirectory(updatesRoot);
         var safeVersion = available.ToString().Replace('.', '-');
         var archivePath = Path.Combine(updatesRoot, $"nexus-{safeVersion}.zip.part");
-        await DownloadAsync(client, downloadUrl, archivePath, declaredSize, cancellationToken);
+        timeline?.Invoke(new UpdateProgress($"Найдена версия {available}", -1,
+            "скачиваю обновление"));
+        await DownloadAsync(client, downloadUrl, archivePath, declaredSize, cancellationToken,
+            (done, total) => timeline?.Invoke(new UpdateProgress(
+                $"Скачиваю обновление {available}…",
+                total > 0 ? (int)(done * 100 / total) : -1,
+                $"{done / 1024.0 / 1024.0:F0} из {total / 1024.0 / 1024.0:F0} МБ")));
+        timeline?.Invoke(new UpdateProgress("Проверяю подпись обновления…", -1,
+            $"{declaredSize / 1024.0 / 1024.0:F0} МБ загружено"));
         if (!string.IsNullOrWhiteSpace(digest) && digest.StartsWith("sha256:",
                 StringComparison.OrdinalIgnoreCase))
         {
@@ -348,7 +370,8 @@ internal static class SilentUpdateCoordinator
         ?? throw new InvalidDataException("Манифест обновления не читается.");
 
     private static async Task DownloadAsync(HttpClient client, Uri url, string destination,
-        long declaredSize, CancellationToken cancellationToken)
+        long declaredSize, CancellationToken cancellationToken,
+        Action<long, long>? progress = null)
     {
         using var response = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead,
             cancellationToken);
@@ -362,6 +385,7 @@ internal static class SilentUpdateCoordinator
             FileShare.None, 1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
         var buffer = new byte[1024 * 1024];
         long total = 0;
+        var lastReport = DateTimeOffset.MinValue;
         int read;
         while ((read = await input.ReadAsync(buffer, cancellationToken)) > 0)
         {
@@ -369,8 +393,15 @@ internal static class SilentUpdateCoordinator
             if (total > MaxArchiveBytes || total > declaredSize)
                 throw new InvalidDataException("Архив обновления превысил заявленный размер.");
             await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+            // Прогресс — не чаще 4 раз в секунду: сплэш живой, интерфейс не захлёбывается.
+            if (progress is not null && (DateTimeOffset.UtcNow - lastReport).TotalMilliseconds >= 250)
+            {
+                lastReport = DateTimeOffset.UtcNow;
+                progress(total, declaredSize);
+            }
         }
         if (total != declaredSize) throw new EndOfStreamException("Архив обновления загружен не полностью.");
+        progress?.Invoke(declaredSize, declaredSize);
     }
 
     private static async Task<string> ComputeSha256Async(string path, CancellationToken cancellationToken)
