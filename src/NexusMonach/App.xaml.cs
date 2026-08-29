@@ -247,6 +247,11 @@ public partial class App : Application
                 startupAudio = StartupSoundService.PlayAsync();
             if (e.Args.Any(x => x.Equals("--guardian-test-crash", StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidOperationException("Intentional Nexus Guardian crash-pipeline test.");
+            // Встроенный маршрутизатор цепочки — до создания окружения
+            // WebView2: его loopback-адрес зашивается в аргументы прокси,
+            // а живой маршрут (слой/транспорт/прокси/напрямую) выбирается
+            // для каждого соединения на лету.
+            Services.Chain.ChainRouterService.Start();
             await BrowserEnvironment.InitializeAsync();
             CrashReportService.AddBreadcrumb("startup", "webview2-ready");
             await startupAudio;

@@ -32,8 +32,8 @@ public sealed record NetworkChainSnapshot(
 /// выхода в сеть — при поднятом транспорте (Xray) он заворачивается в
 /// сервер, иначе в системный VPN; без туннеля Тор ждёт, а браузер
 /// продолжает работу с максимальной защитой, но с реальным IP.
-/// Смена маршрута вкладок применяется к новым вкладкам после перезапуска:
-/// прокси зашит в аргументы окружения WebView2.
+/// Маршрут живёт во встроенном маршрутизаторе цепочки: смена тумблера
+/// применяется к новым соединениям сразу, перезапуск не нужен.
 /// </summary>
 public static class NetworkChainService
 {
@@ -174,7 +174,7 @@ public static class NetworkChainService
 
     private static string RouteChangeNote(BrowserSettings settings) =>
         settings.TorInChain || settings.VlessEnabled || settings.EnableCustomProxy
-            ? " Новые вкладки поедут по новому маршруту после перезапуска браузера."
+            ? " Встроенный маршрутизатор применит маршрут к новым соединениям сразу, без перезапуска."
             : string.Empty;
 
     private static void Announce(string text, bool critical = false) =>
