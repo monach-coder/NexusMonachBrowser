@@ -4,9 +4,11 @@ using Xunit;
 namespace NexusMonach.Security.Tests;
 
 /// <summary>
-/// Встроенный маршрутизатор цепочки: чистая логика выбора маршрута и
-/// построение SOCKS5-запросов. Сетевая часть покрыта самопроверкой браузера.
+/// Встроенный маршрутизатор цепочки: выбор маршрута, построение SOCKS5-запросов
+/// и живой цикл через loopback-цель (без внешней сети). Одна коллекция с
+/// VlessChainTests: маршрутизатор статический и влияет на аргументы прокси.
 /// </summary>
+[Collection("chain-router")]
 public class ChainRouterTests
 {
     [Fact]
@@ -93,5 +95,120 @@ public class ChainRouterTests
     {
         Assert.Throws<ArgumentException>(() =>
             ChainRouterService.BuildConnectRequest("", 80));
+    }
+
+    // ── Живой цикл через loopback: без интернета и внешних сервисов ──
+
+    [Fact]
+    public async Task Router_ConnectsDirectlyToLoopbackTarget()
+    {
+        try
+        {
+            // Эхо-сервер на loopback — цель прямого маршрута.
+            var echo = System.Net.Sockets.TcpListener.Create(0);
+            echo.Start(4);
+            var echoPort = ((System.Net.IPEndPoint)echo.LocalEndpoint).Port;
+            var echoTask = Task.Run(async () =>
+            {
+                using var accepted = await echo.AcceptTcpClientAsync();
+                var buffer = new byte[64];
+                var stream = accepted.GetStream();
+                var read = await stream.ReadAsync(buffer);
+                await stream.WriteAsync(buffer.AsMemory(0, read));
+            });
+
+            ChainRouterService.Start();
+            Assert.True(ChainRouterService.IsRunning, "маршрутизатор не поднялся");
+
+            using var client = new System.Net.Sockets.TcpClient();
+            await client.ConnectAsync(System.Net.IPAddress.Loopback, ChainRouterService.Port);
+            var stream = client.GetStream();
+            await stream.WriteAsync(new byte[] { 5, 1, 0 });
+            var greeting = new byte[2];
+            await ReadExactAsync(stream, greeting);
+            Assert.Equal(0, greeting[1]); // без аутентификации
+
+            var request = ChainRouterService.BuildConnectRequest(
+                System.Net.IPAddress.Loopback.ToString(), echoPort);
+            await stream.WriteAsync(request);
+            var reply = new byte[10];
+            await ReadExactAsync(stream, reply);
+            Assert.Equal(0, reply[1]); // REP = успех
+
+            var probe = "привет, маршрут"u8.ToArray();
+            await stream.WriteAsync(probe);
+            var echoed = new byte[probe.Length];
+            await ReadExactAsync(stream, echoed);
+            Assert.Equal(probe, echoed);
+            await echoTask.WaitAsync(TimeSpan.FromSeconds(10));
+            echo.Stop();
+        }
+        finally
+        {
+            ChainRouterService.Stop();
+        }
+    }
+
+    [Fact]
+    public async Task Router_DeadTarget_GivesHonestSocksWithinSeconds()
+    {
+        try
+        {
+            // Закрытый порт на loopback: маршрутизатор обязан ЯВНО отказать
+            // (REP=1), а не молча оборвать — тихий обрыв вешает вкладки
+            // до собственных таймаутов движка.
+            var deadPort = FindClosedLoopbackPort();
+            ChainRouterService.Start();
+            Assert.True(ChainRouterService.IsRunning, "маршрутизатор не поднялся");
+
+            using var client = new System.Net.Sockets.TcpClient();
+            await client.ConnectAsync(System.Net.IPAddress.Loopback, ChainRouterService.Port);
+            var stream = client.GetStream();
+            await stream.WriteAsync(new byte[] { 5, 1, 0 });
+            var greeting = new byte[2];
+            await ReadExactAsync(stream, greeting);
+
+            var request = ChainRouterService.BuildConnectRequest(
+                System.Net.IPAddress.Loopback.ToString(), deadPort);
+            await stream.WriteAsync(request);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            // Отказ приходит кадром SOCKS5 — читаем ровно заголовок ответа.
+            var firstTwo = new byte[2];
+            await ReadExactAsync(stream, firstTwo, timeout.Token);
+            Assert.Equal(5, firstTwo[0]);
+            Assert.Equal(1, firstTwo[1]); // REP = general SOCKS server failure
+        }
+        finally
+        {
+            ChainRouterService.Stop();
+        }
+    }
+
+    private static int FindClosedLoopbackPort()
+    {
+        for (var port = 49000; port < 49500; port++)
+        {
+            try
+            {
+                var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, port);
+                probe.Start(1);
+                probe.Stop();
+                return port;
+            }
+            catch (System.Net.Sockets.SocketException) { /* занят — следующий */ }
+        }
+        throw new InvalidOperationException("Не нашли свободный порт для теста.");
+    }
+
+    private static async Task ReadExactAsync(
+        System.IO.Stream stream, byte[] buffer, System.Threading.CancellationToken token = default)
+    {
+        var total = 0;
+        while (total < buffer.Length)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(total), token);
+            if (read <= 0) throw new System.IO.EndOfStreamException("Соединение оборвано раньше ответа.");
+            total += read;
+        }
     }
 }

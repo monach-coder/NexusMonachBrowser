@@ -197,9 +197,15 @@ public static class ChainRouterService
                     // ход с защитой Режима Следа вместо чёрной дыры.
                     AnnounceFallback(route);
                     try { upstream = await ConnectUpstreamAsync(ChainRoute.Direct, host, port); }
-                    catch { return; }
+                    catch { /* и прямой не прошёл — честный отказ ниже */ }
                 }
-                if (upstream is null) return;
+                if (upstream is null)
+                {
+                    // Явный отказ SOCKS5 вместо тихого обрыва: вкладка сразу
+                    // показывает ошибку, а не висит до таймаута движка.
+                    await stream.WriteAsync(new byte[] { 5, 1, 0, 1, 0, 0, 0, 0, 0, 0 });
+                    return;
+                }
 
                 await stream.WriteAsync(new byte[] { 5, 0, 0, 1, 0, 0, 0, 0, 0, 0 });
                 await PumpAsync(stream, upstream);
@@ -231,14 +237,33 @@ public static class ChainRouterService
             default:
             {
                 // Прямое соединение: домен разрешается локально — это и есть
-                // честный «прямой» режим, без прыжков через чужие хосты.
+                // честный «прямой» режим. Пробуем ВСЕ адреса, IPv4 первым:
+                // сломанный у провайдера IPv6 не должен убивать сеть.
                 var addresses = await Dns.GetHostAddressesAsync(host);
                 if (addresses.Length == 0) throw new SocketException((int)SocketError.HostNotFound);
-                var direct = new TcpClient();
-                using var connectTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-                await direct.ConnectAsync(addresses[0], port, connectTimeout.Token);
-                direct.NoDelay = true;
-                return direct.GetStream();
+                var ordered = addresses
+                    .OrderByDescending(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                    .ToArray();
+                TcpClient? connected = null;
+                foreach (var address in ordered)
+                {
+                    var candidate = new TcpClient();
+                    try
+                    {
+                        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                        await candidate.ConnectAsync(address, port, timeout.Token);
+                        connected = candidate;
+                        break;
+                    }
+                    catch
+                    {
+                        candidate.Dispose();
+                    }
+                }
+                if (connected is null)
+                    throw new SocketException((int)SocketError.ConnectionRefused);
+                connected.NoDelay = true;
+                return connected.GetStream();
             }
         }
     }

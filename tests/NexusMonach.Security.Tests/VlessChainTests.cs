@@ -7,6 +7,10 @@ using Xunit;
 
 namespace NexusMonach.Security.Tests;
 
+// Одна коллекция с тестами маршрутизатора: ChainRouterService статический,
+// и его запуск меняет поведение ProxyConfigurationService — гонять эти
+// классы параллельно нельзя.
+[Collection("chain-router")]
 public sealed class VlessChainTests
 {
     private const string RealityLink =
