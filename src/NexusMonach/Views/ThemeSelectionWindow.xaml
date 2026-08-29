@@ -1,8 +1,8 @@
 <Window x:Class="NexusMonach.Views.ThemeSelectionWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Первый запуск · оформление" Width="720" Height="590"
-        MinWidth="680" MinHeight="480" WindowStartupLocation="CenterScreen"
+        Title="Первый запуск · оформление" Width="720" Height="680"
+        MinWidth="680" MinHeight="560" WindowStartupLocation="CenterScreen"
         Background="{StaticResource BackgroundBrush}" Foreground="{StaticResource TextBrush}"
         Icon="/Assets/nexus-monach.ico" Style="{StaticResource GlassPopupWindow}">
     <Window.Resources>
@@ -133,6 +133,8 @@
             </RadioButton>
         </Grid>
 
+        <!-- Секции голоса и защиты — в СВОИХ строках: наложение двух
+             StackPanel в одной Grid.Row приводило к задвоению текста. -->
         <StackPanel Grid.Row="2" Margin="0,16,0,0">
             <TextBlock Text="Голос ассистента" FontSize="16" FontWeight="SemiBold" />
             <TextBlock Text="Выберите голос для озвучки перевода и ответов."
@@ -145,7 +147,7 @@
             </StackPanel>
         </StackPanel>
 
-        <StackPanel Grid.Row="2" Margin="0,20,0,0">
+        <StackPanel Grid.Row="3" Margin="0,16,0,0">
             <TextBlock Text="Защита при запуске" FontSize="16" FontWeight="SemiBold" />
             <TextBlock Text="Всё это можно изменить в настройках позже."
                        Margin="0,4,0,8" Foreground="{StaticResource MutedTextBrush}" FontSize="12" />
