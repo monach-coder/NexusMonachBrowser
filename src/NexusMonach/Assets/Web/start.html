@@ -27,8 +27,6 @@
     .card .icon { color:var(--aqua); font-size:20px; }
     .card strong { display:block; margin:10px 0 4px; font-size:13px; }
     .card span { color:var(--muted); font-size:11.5px; line-height:1.45; }
-    .settings { margin-top:26px; border:1px solid #35536a; border-radius:16px; padding:8px 16px; color:#b9cad7; background:transparent; cursor:pointer; }
-    .settings:hover { color:var(--text); border-color:#4b7c80; background:rgba(54,215,196,.05); }
     .network { display:none; margin-top:26px; gap:10px; justify-content:center; flex-wrap:wrap; }
     .network .toggle { min-width:128px; border:1px solid var(--line); border-radius:14px; padding:10px 16px; color:var(--muted); background:var(--card); cursor:pointer; font:inherit; font-size:12.5px; text-align:center; transition:border-color .15s, color .15s; }
     .network .toggle:hover { border-color:#4b7c80; }
@@ -54,8 +52,6 @@
       <article class="card"><div class="icon">◇</div><strong>Приватное окно</strong><span>Отдельный режим не сохраняет локальную историю и данные сеанса после закрытия окна.</span></article>
     </section>
 
-    <button class="settings" id="settings" type="button" hidden>Настроить защиту</button>
-
     <section class="network" id="network" aria-label="Сетевая цепочка">
       <button class="toggle" id="toggle-vless" type="button">Сервер<small id="toggle-vless-hint">выключен</small></button>
       <button class="toggle" id="toggle-tor" type="button">Маршрут<small id="toggle-tor-hint">вне цепочки</small></button>
@@ -66,7 +62,6 @@
   </main>
   <script>
     const send = message => { if (window.chrome?.webview) window.chrome.webview.postMessage(message); };
-    document.getElementById('settings').addEventListener('click', () => send({ type: 'settings' }));
 
     // Тумблеры сетевой цепочки: сервер (VLESS), Тор в цепочке, ручной прокси.
     // Состояние приходит от браузера (nexusNetworkState) и на клик уходит
@@ -103,8 +98,7 @@
       Forest:     { bg:'#09140f', panel:'#102219', line:'#2a503b', text:'#eff8f2', muted:'#91aa99', aqua:'#50d890', gold:'#d1ba69', accentRgb:'80,216,144', goldRgb:'209,186,105' },
       Amethyst:   { bg:'#100b18', panel:'#1c1429', line:'#4a3564', text:'#f6f0ff', muted:'#aa9ab9', aqua:'#b68cff', gold:'#e0b86f', accentRgb:'182,140,255', goldRgb:'224,184,111' }
     };
-    window.nexusConfigureStartPage = ({ showSetup = false, theme = 'MonachAqua', mode = 'Dark', network = null } = {}) => {
-      document.getElementById('settings').hidden = !showSetup;
+    window.nexusConfigureStartPage = ({ theme = 'MonachAqua', mode = 'Dark', network = null } = {}) => {
       if (network) window.nexusNetworkState(network);
       const dark = palettes[theme] || palettes.MonachAqua;
       const palette = mode === 'Light'

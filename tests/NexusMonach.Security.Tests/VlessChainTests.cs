@@ -107,9 +107,9 @@ public sealed class VlessChainTests
     [Fact]
     public void ProxyArguments_FallThroughToCustom_WhenServicesDown()
     {
-        // Цепочка адаптивна к живому окружению: на машине разработки может
-        // стоять поднятый Тор (9051) с VPN — тогда вкладки честно заворачиваются
-        // в него; без живого Тора действует ручной прокси из настроек.
+        // Цепочка адаптивна к живому окружению машины разработки: может быть
+        // поднят Тор (9051), а после smoke-прогона — и транспорт со случайным
+        // портом; без живых служб действует ручной прокси из настроек.
         var settings = new BrowserSettings
         {
             TorInChain = true,
@@ -120,9 +120,11 @@ public sealed class VlessChainTests
             ProxyPort = 9155
         };
         var arguments = ProxyConfigurationService.BuildBrowserArguments(settings);
-        var expected = TorService.IsRunning
-            ? $"socks5://127.0.0.1:{TorService.SocksPort}"
-            : "socks5://127.0.0.1:9155";
+        var expected = Services.Vless.VlessRuntime.IsRunning
+            ? $"socks5://127.0.0.1:{Services.Vless.VlessRuntime.SocksPort}"
+            : TorService.IsRunning
+                ? $"socks5://127.0.0.1:{TorService.SocksPort}"
+                : "socks5://127.0.0.1:9155";
         Assert.Contains(expected, arguments, StringComparison.Ordinal);
     }
 }

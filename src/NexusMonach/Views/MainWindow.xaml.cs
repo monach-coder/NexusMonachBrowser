@@ -1379,15 +1379,6 @@ public partial class MainWindow : Window
     private void ShowDeveloperTools_Click(object sender, RoutedEventArgs e) =>
         ActiveTab?.Core?.OpenDevToolsWindow();
 
-    private async void ShowPrivacyMonitor_Click(object sender, RoutedEventArgs e)
-    {
-        var show = PrivacyDock.Visibility != Visibility.Visible;
-        await PrivacyDock.SetEnabledAsync(show);
-        var settings = SettingsService.Current;
-        settings.ShowPrivacyMonitor = show;
-        await SettingsService.SaveAsync(settings);
-    }
-
     /// <summary>Применяет видимость панели «Приватность и защита» из настроек.</summary>
     internal static async void ApplyPrivacyDockVisibility(bool visible)
     {

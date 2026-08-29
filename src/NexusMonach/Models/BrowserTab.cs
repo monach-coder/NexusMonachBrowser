@@ -211,7 +211,6 @@ public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
         var network = Services.NetworkChainService.Snapshot();
         var configuration = JsonSerializer.Serialize(new
         {
-            showSetup = !settings.InitialProtectionSetupShown,
             theme = settings.Theme.ToString(),
             mode = settings.ThemeMode.ToString(),
             network = JsonSerializer.Deserialize<JsonElement>(network.ToJson())
@@ -837,7 +836,7 @@ public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
 
     private static bool IsAllowedInternalMessage(string page, string? type) =>
         page.Equals("/start.html", StringComparison.OrdinalIgnoreCase)
-            ? type is "navigate" or "settings" or "toggle-vless" or "toggle-tor" or "toggle-proxy"
+            ? type is "navigate" or "toggle-vless" or "toggle-tor" or "toggle-proxy"
             : page.Equals("/search.html", StringComparison.OrdinalIgnoreCase) && type == "result-open";
 
     private void HandleDownload(CoreWebView2DownloadStartingEventArgs e)

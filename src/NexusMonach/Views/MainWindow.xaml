@@ -241,7 +241,6 @@
                         <MenuItem Header="Граф знаний и память просмотра" InputGestureText="Ctrl+Shift+G" Click="ShowKnowledgeGraph_Click" />
                         <Separator />
                         <MenuItem x:Name="ExtensionsMenuItem" Header="Расширения" Click="ShowExtensions_Click" />
-                        <MenuItem Header="Показать / скрыть Privacy Dock" Click="ShowPrivacyMonitor_Click" />
                         <MenuItem Header="Инструменты разработчика Chromium" InputGestureText="F12 / Ctrl+Shift+I"
                                   Click="ShowDeveloperTools_Click" />
                         <MenuItem Header="SSH-терминал Linux" Click="SshTerminal_Click" />
