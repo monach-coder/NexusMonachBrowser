@@ -1398,6 +1398,17 @@ public partial class MainWindow : Window
         window.Show();
     }
 
+    /// <summary>Вертикальная панель планировщика: показ/скрытие «План».</summary>
+    private void ShowPlanner_Click(object sender, RoutedEventArgs e)
+    {
+        var show = PlannerDock.Visibility != Visibility.Visible;
+        PlannerDock.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        if (show)
+            Services.VoiceAssistantService.Announce(
+                "Панель планировщика открыта. Задачи и защищённый обмен.",
+                Services.VoiceAnnouncementPriority.Progress);
+    }
+
     private void ShowNetworkWatchdog_Click(object sender, RoutedEventArgs e)
     {
         // Если Дозор не запущен — запускаем для просмотра.
