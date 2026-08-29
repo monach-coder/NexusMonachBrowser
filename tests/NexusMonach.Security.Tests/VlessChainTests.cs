@@ -111,6 +111,9 @@ public sealed class VlessChainTests
     [Fact]
     public void ProxyArguments_FallThroughToCustom_WhenServicesDown()
     {
+        // Проверяем именно запасную логику без маршрутизатора: он мог быть
+        // поднят соседними тестами коллекции — останавливаем явно.
+        Services.Chain.ChainRouterService.Stop();
         // Цепочка адаптивна к живому окружению машины разработки: может быть
         // поднят Тор (9051), а после smoke-прогона — и транспорт со случайным
         // портом; без живых служб действует ручной прокси из настроек.
@@ -124,10 +127,15 @@ public sealed class VlessChainTests
             ProxyPort = 9155
         };
         var arguments = ProxyConfigurationService.BuildBrowserArguments(settings);
-        var expected = Services.Vless.VlessRuntime.IsRunning
-            ? $"socks5://127.0.0.1:{Services.Vless.VlessRuntime.SocksPort}"
-            : TorService.IsRunning
-                ? $"socks5://127.0.0.1:{TorService.SocksPort}"
+        // Ожидание повторяет правило маршрута: через Тор — только когда он
+        // реально обёрнут (транспорт или живой VPN; Teredo больше не считается).
+        var transportUp = Services.Vless.VlessRuntime.IsRunning;
+        var wrapped = TorService.IsRunning &&
+                      (transportUp || VpnDetector.DetectCached().VpnActive);
+        var expected = wrapped
+            ? $"socks5://127.0.0.1:{TorService.SocksPort}"
+            : transportUp
+                ? $"socks5://127.0.0.1:{Services.Vless.VlessRuntime.SocksPort}"
                 : "socks5://127.0.0.1:9155";
         Assert.Contains(expected, arguments, StringComparison.Ordinal);
     }

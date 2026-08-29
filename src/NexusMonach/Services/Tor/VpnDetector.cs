@@ -72,25 +72,42 @@ public static class VpnDetector
     /// <summary>
     /// Определяет, является ли сетевой адаптер VPN-туннелем.
     /// </summary>
-    private static bool IsVpnAdapter(NetworkInterface ni)
+    private static bool IsVpnAdapter(NetworkInterface ni) =>
+        IsVpnAdapter(ni.NetworkInterfaceType.ToString(), ni.Description, ni.Name);
+
+    /// <summary>
+    /// Чистая логика распознавания VPN-адаптера (проверяется юнит-тестами).
+    /// Системные переходные псевдоинтерфейсы Windows — Teredo, ISATAP, 6to4 —
+    /// всегда «Up» и имеют тип Tunnel; VPN они не являются. Без фильтра
+    /// детектор вечно видел бы «VPN активен» и заворачивал вкладки в
+    /// анонимный слой, который без настоящей обёртки не выходит в сеть.
+    /// </summary>
+    internal static bool IsVpnAdapter(string interfaceType, string description, string name)
     {
-        if (ni.NetworkInterfaceType is NetworkInterfaceType.Ppp
-            or NetworkInterfaceType.Tunnel)
+        var desc = description.ToLowerInvariant();
+        var title = name.ToLowerInvariant();
+
+        if (desc.Contains("teredo") || desc.Contains("isatap") || desc.Contains("6to4") ||
+            title.Contains("teredo") || title.Contains("isatap") || title.Contains("6to4"))
+            return false;
+
+        if (desc.Contains("pseudo-interface") || title.Contains("pseudo-interface"))
+            return false;
+
+        if (interfaceType == NetworkInterfaceType.Ppp.ToString() ||
+            interfaceType == NetworkInterfaceType.Tunnel.ToString())
             return true;
 
-        var description = ni.Description.ToLowerInvariant();
-        var name = ni.Name.ToLowerInvariant();
-
-        return description.Contains("wireguard") ||
-               description.Contains("openvpn") ||
-               description.Contains("tap-windows") ||
-               description.Contains("tap adapter") ||
-               description.Contains("vpn") ||
-               description.Contains("tunnel") ||
-               name.Contains("wireguard") ||
-               name.Contains("openvpn") ||
-               name.Contains("vpn") ||
-               name.Contains("tunnel");
+        return desc.Contains("wireguard") ||
+               desc.Contains("openvpn") ||
+               desc.Contains("tap-windows") ||
+               desc.Contains("tap adapter") ||
+               desc.Contains("vpn") ||
+               desc.Contains("tunnel") ||
+               title.Contains("wireguard") ||
+               title.Contains("openvpn") ||
+               title.Contains("vpn") ||
+               title.Contains("tunnel");
     }
 
     /// <summary>
