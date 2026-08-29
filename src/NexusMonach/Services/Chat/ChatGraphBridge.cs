@@ -52,7 +52,7 @@ public static class ChatGraphBridge
                     break;
                 case "факт":
                 case "решение":
-                    KnowledgeGraphService.AddCapsuleAsync(new SmartCapsule
+                    _ = KnowledgeGraphService.AddCapsuleAsync(new SmartCapsule
                     {
                         Name = (kind == "факт" ? "Факт" : "Решение") + " · " + roomName,
                         Summary = value + " — " + message.Author,

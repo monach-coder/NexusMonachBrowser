@@ -61,12 +61,13 @@ public sealed class ChatSession : IDisposable
 
     // ── Создание комнаты (якорь сразу мы) ────────────────────────
 
-    public async Task CreateRoomAsync(string roomName, int port)
+    public Task CreateRoomAsync(string roomName, int port)
     {
         _roomKey = ChatCrypto.GenerateRoomKey();
-        await StartListeningAsync(port);
+        StartListeningAsync(port);
         _isAnchor = true;
         StateChanged?.Invoke($"Комната «{roomName}» создана. Вы якорь, порт {port}.");
+        return Task.CompletedTask;
     }
 
     /// <summary>Инвайт для конкретного собеседника: заворачиваем ключ комнаты.</summary>
@@ -100,7 +101,7 @@ public sealed class ChatSession : IDisposable
 
     // ── Якорение: слушаем порт, принимаем участников ──────────────
 
-    private async Task StartListeningAsync(int port)
+    private void StartListeningAsync(int port)
     {
         _listener = new TcpListener(IPAddress.Any, port);
         _listener.Start(8);
@@ -186,7 +187,7 @@ public sealed class ChatSession : IDisposable
                         if (!_isAnchor)
                         {
                             _isAnchor = true;
-                            await StartListeningAsync(port);
+                            StartListeningAsync(port);
                             StateChanged?.Invoke("Якорь ушёл — якорность передана вам (порт " + port + ").");
                         }
                         break;

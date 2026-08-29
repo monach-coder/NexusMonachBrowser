@@ -24,8 +24,8 @@ public static class ChatCrypto
         public Identity()
         {
             _dh = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
-            PublicKey = _dh.PublicKey.ExportParameters().Q.X
-                .Concat(_dh.PublicKey.ExportParameters().Q.Y).ToArray();
+            var point = _dh.PublicKey.ExportParameters().Q;
+            PublicKey = (point.X ?? []).Concat(point.Y ?? []).ToArray();
         }
 
         /// <summary>Общий секрет с собеседником (ECDH) → ключ AES-256.</summary>
