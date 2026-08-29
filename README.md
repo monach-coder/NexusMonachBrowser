@@ -1,4 +1,4 @@
-# Nexus Monach Browser 2.9
+# Nexus Monach Browser
 
 [![Verify Windows build](https://github.com/monach-coder/NexusMonachBrowser/actions/workflows/verify.yml/badge.svg)](https://github.com/monach-coder/NexusMonachBrowser/actions/workflows/verify.yml)
 [![Windows portable build](https://github.com/monach-coder/NexusMonachBrowser/actions/workflows/windows-build.yml/badge.svg)](https://github.com/monach-coder/NexusMonachBrowser/actions/workflows/windows-build.yml)
