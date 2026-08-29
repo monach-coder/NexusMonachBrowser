@@ -17,7 +17,7 @@
                     <Run x:Name="ChainStatusText" Text="Маршрут: прямой" Foreground="{StaticResource AccentBrush}" />
                 </TextBlock>
                 <Button x:Name="CollapseButton" Grid.Column="2" Content="Свернуть" FontSize="10.5"
-                        Style="{StaticResource IconButton}" Padding="8,3"
+                        Style="{StaticResource NexusButton}" Padding="8,3"
                         ToolTip="Свернуть панель (вернуть — галочка в настройках или меню)"
                         Click="Collapse_Click" />
             </Grid>
@@ -25,13 +25,13 @@
             <!-- Тумблеры сетевой цепочки -->
             <UniformGrid Columns="3" Margin="0,8,0,0">
                 <Button x:Name="VlessToggle" Margin="0,0,8,0" Padding="10,7" FontSize="12"
-                        Style="{StaticResource IconButton}" Click="VlessToggle_Click"
+                        Style="{StaticResource NexusButton}" Click="VlessToggle_Click"
                         Content="Сервер: выкл" ToolTip="Направить трафик через собственный сервер" />
                 <Button x:Name="TorToggle" Margin="0,0,8,0" Padding="10,7" FontSize="12"
-                        Style="{StaticResource IconButton}" Click="TorToggle_Click"
+                        Style="{StaticResource NexusButton}" Click="TorToggle_Click"
                         Content="Маршрут: вне цепочки" ToolTip="Слой анонимности в цепочке вкладок" />
                 <Button x:Name="ProxyToggle" Padding="10,7" FontSize="12"
-                        Style="{StaticResource IconButton}" Click="ProxyToggle_Click"
+                        Style="{StaticResource NexusButton}" Click="ProxyToggle_Click"
                         Content="Прокси: выкл" ToolTip="Ручной прокси из настроек сети" />
             </UniformGrid>
 
@@ -47,14 +47,14 @@
                 <TextBox x:Name="VlessUriBox" Padding="8,5" FontSize="11.5" VerticalContentAlignment="Center"
                          ToolTip="Ссылка профиля сервера (vless://…)" />
                 <Button x:Name="VlessConnectButton" Grid.Column="1" Content="Подключить" Margin="8,0,0,0"
-                        Padding="10,5" FontSize="11.5" Style="{StaticResource IconButton}"
+                        Padding="10,5" FontSize="11.5" Style="{StaticResource NexusButton}"
                         Click="VlessConnect_Click" />
                 <TextBox x:Name="ProxyHostBox" Grid.Column="2" Margin="8,0,0,0" Padding="8,5" FontSize="11.5"
                          VerticalContentAlignment="Center" ToolTip="Прокси: адрес или имя сервера" />
                 <TextBox x:Name="ProxyPortBox" Grid.Column="3" Margin="6,0,0,0" Padding="8,5" FontSize="11.5"
                          VerticalContentAlignment="Center" ToolTip="Прокси: порт" />
                 <ComboBox x:Name="ProxyKindCombo" Grid.Column="4" Margin="6,0,0,0" Width="82" FontSize="11.5"
-                          VerticalAlignment="Center" ToolTip="Тип прокси" />
+                          VerticalAlignment="Center" DisplayMemberPath="Label" ToolTip="Тип прокси" />
             </Grid>
 
             <!-- Защита -->
@@ -72,7 +72,7 @@
                           Content="Страж WebRTC" Checked="WebRtc_Changed" Unchecked="WebRtc_Changed"
                           ToolTip="Запретить WebRTC обходить прокси (применяется после перезапуска)" />
                 <ComboBox x:Name="PortShieldCombo" Width="230" FontSize="11" VerticalAlignment="Center"
-                          SelectionChanged="PortShield_Changed"
+                          DisplayMemberPath="Label" SelectionChanged="PortShield_Changed"
                           ToolTip="Порт-щит: закрытие утекающих портов локальной сети на сессию" />
             </WrapPanel>
 
