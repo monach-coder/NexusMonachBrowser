@@ -71,6 +71,7 @@ public partial class PrivacyDockControl : UserControl
         _suppressEvents = true;
         var settings = SettingsService.Current;
         VlessUriBox.Text = settings.VlessProfileUri;
+        BridgesBox.Text = settings.TorCustomBridges;
         ProxyHostBox.Text = settings.ProxyHost;
         ProxyPortBox.Text = settings.ProxyPort.ToString();
         ProxyKindCombo.ItemsSource = new Choice<ProxyKind>[]
@@ -247,6 +248,21 @@ public partial class PrivacyDockControl : UserControl
         var settings = SettingsService.Current;
         settings.PortShieldMode = choice.Value;
         await SettingsService.SaveAsync(settings);
+    }
+
+    private async void BridgesBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_suppressEvents) return;
+        var settings = SettingsService.Current;
+        var bridges = BridgesBox.Text.Trim();
+        if (bridges == settings.TorCustomBridges.Trim()) return;
+        settings.TorCustomBridges = bridges;
+        await SettingsService.SaveAsync(settings);
+        // Мосты меняют torrc — перестраиваем маршрут сразу, если он активен.
+        await Services.NetworkChainService.RewrapTorAsync(settings);
+        Services.VoiceAssistantService.Announce(
+            "Мосты обновлены. Маршрут перезапускается с новым конфигом.",
+            Services.VoiceAnnouncementPriority.Progress);
     }
 
     // ── Сворачивание ──────────────────────────────────────────────

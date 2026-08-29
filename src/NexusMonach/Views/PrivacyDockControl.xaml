@@ -62,6 +62,19 @@
                           VerticalAlignment="Center" DisplayMemberPath="Label" ToolTip="Тип прокси" />
             </Grid>
 
+            <!-- Мосты против DPI: obfs4 и webtunnel, по одному в строке.
+                 webtunnel-мосты живучее в цензурных сетях (маскируются под HTTPS). -->
+            <Expander Margin="0,8,0,0" FontSize="10.5" Header="Мосты против DPI (obfs4 / webtunnel)">
+                <StackPanel>
+                    <TextBox x:Name="BridgesBox" Padding="7,5" FontSize="11" MinHeight="52" Margin="0,6,0,4"
+                             AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                             ToolTip="obfs4 IP:ПОРТ ОТПЕЧАТОК cert=... iat-mode=0&#10;webtunnel IP:ПОРТ ОТПЕЧАТОК url=https://сайт/путь cert=...&#10;Бинарные транспорты кладутся в C:\Tor\pluggable_transports (lyrebird.exe, webtunnel-client.exe)"
+                             LostFocus="BridgesBox_LostFocus" />
+                    <TextBlock FontSize="9.5" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap"
+                               Text="Применяется при следующем запуске маршрута. Публичные мосты блокируют быстро; приватный мост на своём сервере живёт долго." />
+                </StackPanel>
+            </Expander>
+
             <!-- Смысловой блок 2: защита самой машины -->
             <TextBlock Text="ЗАЩИТА МАШИНЫ" FontSize="9.5" Margin="0,10,0,4"
                        Foreground="{StaticResource MutedTextBrush}" />
