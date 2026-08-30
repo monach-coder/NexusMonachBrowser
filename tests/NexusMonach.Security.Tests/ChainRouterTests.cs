@@ -239,6 +239,26 @@ public class ChainRouterTests
         }
     }
 
+    [Fact]
+    public void ParseDohIpv4_TakesOnlyARecords()
+    {
+        var json = """
+        {"Status":0,"Answer":[
+          {"name":"ya.ru","type":5,"TTL":300,"data":"ya.ru"},
+          {"name":"ya.ru","type":1,"TTL":300,"data":"77.88.44.242"},
+          {"name":"ya.ru","type":28,"TTL":300,"data":"2a02:6b8::2:242"},
+          {"name":"ya.ru","type":1,"TTL":300,"data":"5.255.255.242"}]}
+        """;
+        Assert.Equal(new[] { "77.88.44.242", "5.255.255.242" }, ChainRouterService.ParseDohIpv4(json));
+    }
+
+    [Fact]
+    public void ParseDohIpv4_BrokenJson_Empty()
+    {
+        Assert.Empty(ChainRouterService.ParseDohIpv4("{oops"));
+        Assert.Empty(ChainRouterService.ParseDohIpv4("""{"Status":2}"""));
+    }
+
     private static int FindClosedLoopbackPort()
     {
         for (var port = 49000; port < 49500; port++)

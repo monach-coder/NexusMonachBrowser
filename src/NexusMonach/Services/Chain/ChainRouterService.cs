@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
@@ -268,16 +269,13 @@ public static class ChainRouterService
             }
             default:
             {
-                // Прямое соединение: домен разрешается локально — это и есть
-                // честный «прямой» режим. Пробуем ВСЕ адреса, IPv4 первым:
-                // сломанный у провайдера IPv6 не должен убивать сеть.
-                var addresses = await Dns.GetHostAddressesAsync(host);
+                // Прямое соединение: домен разрешается лестницей — системный
+                // резолвер с коротким окном, затем DoH по IP-литералу (локальный
+                // DNS вообще не участвует; заодно нет утечки DNS провайдеру).
+                var addresses = await ResolveHostAsync(host);
                 if (addresses.Length == 0) throw new SocketException((int)SocketError.HostNotFound);
-                var ordered = addresses
-                    .OrderByDescending(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
-                    .ToArray();
                 TcpClient? connected = null;
-                foreach (var address in ordered)
+                foreach (var address in addresses)
                 {
                     var candidate = new TcpClient();
                     try
@@ -298,6 +296,88 @@ public static class ChainRouterService
                 return connected.GetStream();
             }
         }
+    }
+
+    /// <summary>
+    /// Лестница разрешения имён для прямого маршрута. Первый этаж — системный
+    /// резолвер с окном 2 секунды: на здоровой машине ответ мгновенный.
+    /// Второй этаж — DNS-over-HTTPS к 1.1.1.1 по IP-литералу: спасает, когда
+    /// локальный DNS перехвачен, отфильтрован по приложениям или душит AAAA.
+    /// </summary>
+    private static async Task<IPAddress[]> ResolveHostAsync(string host)
+    {
+        if (IPAddress.TryParse(host, out var literal)) return [literal];
+        try
+        {
+            using var window = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            var all = await Dns.GetHostAddressesAsync(host).WaitAsync(window.Token);
+            var ipv4 = all.Where(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork).ToArray();
+            if (ipv4.Length > 0) return ipv4;
+            if (all.Length > 0) return all;
+        }
+        catch { /* системный резолвер молчит — следующий этаж */ }
+        var viaDoh = await ResolveViaDohAsync(host);
+        if (viaDoh.Length > 0)
+        {
+            CrashReportService.AddBreadcrumb("chain-router", "dns-via-doh");
+            return viaDoh;
+        }
+        throw new SocketException((int)SocketError.HostNotFound);
+    }
+
+    /// <summary>DoH-клиент без системного прокси: адрес — IP-литерал.</summary>
+    private static readonly HttpClient DohClient = new(new HttpClientHandler { UseProxy = false })
+    {
+        Timeout = TimeSpan.FromSeconds(3)
+    };
+
+    private static async Task<IPAddress[]> ResolveViaDohAsync(string host)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get,
+                "https://1.1.1.1/dns-query?name=" + Uri.EscapeDataString(host) + "&type=A");
+            request.Headers.Accept.ParseAdd("application/dns-json");
+            using var response = await DohClient.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+            var json = await response.Content.ReadAsStringAsync();
+            return ParseDohIpv4(json).Select(IPAddress.Parse).ToArray();
+        }
+        catch
+        {
+            return [];
+        }
+    }
+
+    /// <summary>Разбор JSON-ответа DoH: записи типа A (1) → IPv4. Чистая функция для тестов.</summary>
+    internal static IReadOnlyList<string> ParseDohIpv4(string json)
+    {
+        var result = new List<string>();
+        try
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(json);
+            if (!document.RootElement.TryGetProperty("Answer", out var answers) ||
+                answers.ValueKind != System.Text.Json.JsonValueKind.Array)
+                return result;
+            foreach (var answer in answers.EnumerateArray())
+            {
+                if (!answer.TryGetProperty("type", out var type) || type.GetInt32() != 1)
+                    continue;
+                if (answer.TryGetProperty("data", out var data) &&
+                    data.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    var value = data.GetString();
+                    if (!string.IsNullOrEmpty(value) && IPAddress.TryParse(value, out var parsed) &&
+                        parsed.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                        result.Add(value);
+                }
+            }
+        }
+        catch
+        {
+            // Битый JSON — просто пустой результат.
+        }
+        return result;
     }
 
     /// <summary>Клиентская сторона SOCKS5: приветствие + CONNECT за домен.</summary>
