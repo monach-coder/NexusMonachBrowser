@@ -322,8 +322,38 @@ public static class ChainRouterService
             CrashReportService.AddBreadcrumb("chain-router", "dns-via-doh");
             return viaDoh;
         }
+        // Последний шанс: медленный системный резолвер — некоторые локальные
+        // перехватчики DNS отвечают, но дольше первого окна.
+        try
+        {
+            using var slow = new CancellationTokenSource(TimeSpan.FromSeconds(4));
+            var viaSystem = await Dns.GetHostAddressesAsync(host).WaitAsync(slow.Token);
+            var ipv4 = viaSystem
+                .Where(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                .ToArray();
+            if (ipv4.Length > 0)
+            {
+                CrashReportService.AddBreadcrumb("chain-router", "dns-via-system-slow");
+                return ipv4;
+            }
+            if (viaSystem.Length > 0) return viaSystem;
+        }
+        catch { /* совсем тихо — честный отказ */ }
         throw new SocketException((int)SocketError.HostNotFound);
     }
+
+    /// <summary>
+    /// DoH-резолверы по IP-литералам. Не один, а три: локальные фильтры
+    /// (например, VPN-клиенты) сознательно глушат DoH к 1.1.1.1, удерживая
+    /// контроль над DNS, — но заблокировать все три, не сломав половину
+    /// интернета, нельзя. Первый удачный ответ выигрывает.
+    /// </summary>
+    internal static readonly string[] DohEndpoints =
+    [
+        "https://1.1.1.1/dns-query",
+        "https://8.8.8.8/dns-query",
+        "https://9.9.9.9/dns-query"
+    ];
 
     /// <summary>DoH-клиент без системного прокси: адрес — IP-литерал.</summary>
     private static readonly HttpClient DohClient = new(new HttpClientHandler { UseProxy = false })
@@ -333,20 +363,25 @@ public static class ChainRouterService
 
     private static async Task<IPAddress[]> ResolveViaDohAsync(string host)
     {
-        try
+        foreach (var endpoint in DohEndpoints)
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get,
-                "https://1.1.1.1/dns-query?name=" + Uri.EscapeDataString(host) + "&type=A");
-            request.Headers.Accept.ParseAdd("application/dns-json");
-            using var response = await DohClient.SendAsync(request);
-            response.EnsureSuccessStatusCode();
-            var json = await response.Content.ReadAsStringAsync();
-            return ParseDohIpv4(json).Select(IPAddress.Parse).ToArray();
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get,
+                    endpoint + "?name=" + Uri.EscapeDataString(host) + "&type=A");
+                request.Headers.Accept.ParseAdd("application/dns-json");
+                using var response = await DohClient.SendAsync(request);
+                response.EnsureSuccessStatusCode();
+                var json = await response.Content.ReadAsStringAsync();
+                var addresses = ParseDohIpv4(json).Select(IPAddress.Parse).ToArray();
+                if (addresses.Length > 0) return addresses;
+            }
+            catch
+            {
+                // Этот резолвер перехвачен или молчит — пробуем следующий.
+            }
         }
-        catch
-        {
-            return [];
-        }
+        return [];
     }
 
     /// <summary>Разбор JSON-ответа DoH: записи типа A (1) → IPv4. Чистая функция для тестов.</summary>
