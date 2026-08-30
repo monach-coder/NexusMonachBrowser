@@ -53,6 +53,7 @@
     </section>
 
     <section class="network" id="network" aria-label="Сетевая цепочка">
+      <button class="toggle" id="toggle-auto" type="button" title="Управляющий выходом в сеть: следит за живостью пути и при обрыве сам поднимает настроенный сервер; ручные тумблеры всегда важнее">Авто<small id="toggle-auto-hint">выключен</small></button>
       <button class="toggle" id="toggle-vless" type="button" title="Свой сервер VLESS/Xray: весь трафик и анонимный слой идут через него">Сервер · VLESS<small id="toggle-vless-hint">выключен</small></button>
       <button class="toggle" id="toggle-tor" type="button" title="Анонимный слой Tor в цепочке вкладок; без туннеля работает с реальным IP">Слой · Tor<small id="toggle-tor-hint">вне цепочки</small></button>
       <button class="toggle" id="toggle-warp" type="button" title="Бесплатный туннель Cloudflare WARP: обёртка без своего сервера; управление — в клиенте WARP">WARP · Cloudflare<small id="toggle-warp-hint">—</small></button>
@@ -68,6 +69,8 @@
     // Состояние приходит от браузера (nexusNetworkState) и на клик уходит
     // наружу — страница сама ничего не решает и не хранит.
     const toggles = [
+      { id: 'toggle-auto', type: 'toggle-auto',
+        on: s => s.auto, hint: s => s.auto ? 'следит за путём' : 'ручной режим' },
       { id: 'toggle-vless', type: 'toggle-vless',
         on: s => s.vless, hint: s => s.vless ? 'подключён' : (s.vlessConfigured ? 'настроен, выключен' : 'нет ссылки') },
       { id: 'toggle-tor', type: 'toggle-tor',

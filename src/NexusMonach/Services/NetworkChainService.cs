@@ -15,6 +15,7 @@ public sealed record NetworkChainSnapshot(
     bool TorWrapped,
     bool WarpInstalled,
     bool WarpConnected,
+    bool AutoGovernor,
     string StatusText)
 {
     public string ToJson() => System.Text.Json.JsonSerializer.Serialize(new
@@ -26,6 +27,7 @@ public sealed record NetworkChainSnapshot(
         proxy = ProxyEnabled,
         warpInstalled = WarpInstalled,
         warp = WarpConnected,
+        auto = AutoGovernor,
         status = StatusText
     });
 }
@@ -55,7 +57,27 @@ public static class NetworkChainService
             settings.VlessEnabled, settings.TorInChain, settings.EnableCustomProxy,
             vlessRunning, torRunning, wrapped,
             Services.Warp.WarpService.IsInstalled, warpConnected,
+            settings.AutoNetworkGovernor,
             Describe(settings, vlessRunning, wrapped));
+    }
+
+    /// <summary>Тумблер «Авто»: управляющий выходом в сеть вкл/выкл.</summary>
+    public static async Task<NetworkChainSnapshot> ToggleAutoAsync()
+    {
+        var settings = SettingsService.Current;
+        settings.AutoNetworkGovernor = !settings.AutoNetworkGovernor;
+        await SettingsService.SaveAsync(settings);
+        if (settings.AutoNetworkGovernor)
+        {
+            Services.NetworkGovernor.Start();
+            Announce("Управляющий включён: слежу за выходом в сеть, при обрыве подниму сервер сам.");
+        }
+        else
+        {
+            Services.NetworkGovernor.Stop();
+            Announce("Управляющий выключен. Маршрутом управляете вручную.");
+        }
+        return Snapshot();
     }
 
     /// <summary>Тумблер «Сервер» (VLESS): поднимает или останавливает транспорт,

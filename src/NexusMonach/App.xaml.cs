@@ -328,6 +328,10 @@ public partial class App : Application
                     // Сетевая цепочка: сначала транспорт (Xray), потом Тор —
                     // torrc генерируется уже с обёрткой в поднятый сервер.
                     _ = Task.Run(StartNetworkChainAsync);
+                    // Управляющий выходом в сеть: живой прямой путь или
+                    // автоподъём сервера при обрыве, с голосом.
+                    if (SettingsService.Current.AutoNetworkGovernor)
+                        Services.NetworkGovernor.Start();
                     // Слои доверия: целостность профиля между сессиями,
                     // свежесть движка, канарейка цепочки.
                     Services.ProfileIntegrityService.VerifyAtStartup();
@@ -404,6 +408,8 @@ public partial class App : Application
         Services.EgressCanaryService.Stop();
         // Встроенный маршрутизатор цепочки слушает loopback только пока жив браузер.
         Services.Chain.ChainRouterService.Stop();
+        // Управляющий выходом в сеть засыпает вместе с браузером.
+        Services.NetworkGovernor.Stop();
         // Правила порт-щита живут только пока работает браузер.
         Services.PortShieldService.RemoveSessionShield();
         CrashReportService.MarkCleanExit();

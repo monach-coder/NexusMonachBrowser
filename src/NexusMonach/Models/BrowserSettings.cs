@@ -145,6 +145,12 @@ public sealed class BrowserSettings
     /// идёт напрямую через Xray или системный VPN.
     /// </summary>
     public bool TorInChain { get; set; } = true;
+    /// <summary>
+    /// Управляющий выходом в сеть: следит за живостью прямого пути и, когда
+    /// тот умирает, сам поднимает настроенный сервер (VLESS) и голосом ведёт
+    /// пользователя по лестнице маршрутов. Ручные тумблеры всегда важнее.
+    /// </summary>
+    public bool AutoNetworkGovernor { get; set; } = true;
     public string HomePage { get; set; } = "app://newtab";
     public CrashReportMode CrashReportMode { get; set; } = CrashReportMode.LocalOnly;
     public CrashReportDestination CrashReportDestination { get; set; } = CrashReportDestination.HttpsCollector;
