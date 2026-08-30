@@ -143,7 +143,20 @@ public static class TorBridgeManager
     {
         TorService.Stop();
 
-        var bridges = ParseBridges(settings.TorCustomBridges);
+        // Мосты сессии: свои приватные важнее; иначе случайная строка из
+        // пула пользователя. Публичные списки не используем принципиально —
+        // выложенное в открытый доступ выгорает первым.
+        var bridgeSource = settings.TorCustomBridges;
+        if (string.IsNullOrWhiteSpace(bridgeSource))
+        {
+            var session = BridgeRotator.PickSessionBridge(settings.TorBridgePool);
+            if (session is not null)
+            {
+                bridgeSource = session;
+                CrashReportService.AddBreadcrumb("tor", "bridge-rotated-from-pool");
+            }
+        }
+        var bridges = ParseBridges(bridgeSource);
         var wrapPort = Services.Vless.VlessRuntime.IsRunning
             ? Services.Vless.VlessRuntime.SocksPort
             : (int?)null;
@@ -152,7 +165,7 @@ public static class TorBridgeManager
             settings.TorRelayEnabled, settings.TorRelayNickname,
             settings.TorRelayOrPort, settings.TorRelayObfs4Port, wrapPort);
 
-        // Записываем torrc во временную папку и стартуем Tor именно с ним.
+        // Записываем torrc во временную папку и стартуем Тор именно с ним.
         var dataDir = Path.Combine(Path.GetTempPath(), "nexus-tor-data");
         Directory.CreateDirectory(dataDir);
         var torrcPath = Path.Combine(dataDir, "torrc");

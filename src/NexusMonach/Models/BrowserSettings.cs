@@ -192,6 +192,12 @@ public sealed class BrowserSettings
     public bool TorBridgeEnabled { get; set; }
     /// <summary>Приватные мосты пользователя (obfs4 IP:PORT KEY cert=...).</summary>
     public string TorCustomBridges { get; set; } = string.Empty;
+    /// <summary>
+    /// Пул приватных мостов (по одному в строке): каждая сессия берёт случайный,
+    /// если строка ручных мостов пуста. Публичные списки не используются —
+    /// выложенное в открытый доступ выгорает первым.
+    /// </summary>
+    public string TorBridgePool { get; set; } = string.Empty;
 
     public BrowserSettings Clone() => new()
     {

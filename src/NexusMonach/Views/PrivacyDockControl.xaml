@@ -66,10 +66,20 @@
                  webtunnel-мосты живучее в цензурных сетях (маскируются под HTTPS). -->
             <Expander Margin="0,8,0,0" FontSize="10.5" Header="Мосты против DPI (obfs4 / webtunnel)">
                 <StackPanel>
-                    <TextBox x:Name="BridgesBox" Padding="7,5" FontSize="11" MinHeight="52" Margin="0,6,0,4"
+                    <Button Content="Получить приватные webtunnel-мосты…" Margin="0,6,0,6" Padding="9,5"
+                            FontSize="10.5" Style="{StaticResource NexusButton}"
+                            Click="FetchBridges_Click"
+                            ToolTip="Запрос к официальному разда́тчику Tor Project: решаете капчу — браузер получает неизданные мосты и сам вписывает их в пул" />
+                    <TextBox x:Name="BridgesBox" Padding="7,5" FontSize="11" MinHeight="52" Margin="0,0,0,4"
                              AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                             ToolTip="obfs4 IP:ПОРТ ОТПЕЧАТОК cert=... iat-mode=0&#10;webtunnel IP:ПОРТ ОТПЕЧАТОК url=https://сайт/путь cert=...&#10;Бинарные транспорты кладутся в C:\Tor\pluggable_transports (lyrebird.exe, webtunnel-client.exe)"
+                             ToolTip="Ручные мосты (важнее пула):&#10;obfs4 IP:ПОРТ ОТПЕЧАТОК cert=... iat-mode=0&#10;webtunnel IP:ПОРТ ОТПЕЧАТОК url=https://сайт/путь cert=...&#10;Бинарные транспорты кладутся в C:\Tor\pluggable_transports (lyrebird.exe, webtunnel-client.exe)"
                              LostFocus="BridgesBox_LostFocus" />
+                    <TextBlock Text="Пул приватных мостов (по одному в строке) — каждая сессия берёт случайный:"
+                               FontSize="9.5" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
+                    <TextBox x:Name="BridgePoolBox" Padding="7,5" FontSize="11" MinHeight="44" Margin="0,4,0,4"
+                             AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                             ToolTip="Свои приватные webtunnel/obfs4-мосты. Ротация криптослучайная, новой сессии — новый мост"
+                             LostFocus="BridgePoolBox_LostFocus" />
                     <TextBlock FontSize="9.5" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap"
                                Text="Применяется при следующем запуске маршрута. Публичные мосты блокируют быстро; приватный мост на своём сервере живёт долго." />
                 </StackPanel>

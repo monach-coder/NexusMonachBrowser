@@ -75,6 +75,7 @@ public partial class PrivacyDockControl : UserControl
         var settings = SettingsService.Current;
         VlessUriBox.Text = settings.VlessProfileUri;
         BridgesBox.Text = settings.TorCustomBridges;
+        BridgePoolBox.Text = settings.TorBridgePool;
         ProxyHostBox.Text = settings.ProxyHost;
         ProxyPortBox.Text = settings.ProxyPort.ToString();
         ProxyKindCombo.ItemsSource = new Choice<ProxyKind>[]
@@ -266,6 +267,72 @@ public partial class PrivacyDockControl : UserControl
         Services.VoiceAssistantService.Announce(
             "Мосты обновлены. Маршрут перезапускается с новым конфигом.",
             Services.VoiceAnnouncementPriority.Progress);
+    }
+
+    /// <summary>
+    /// Пул приватных мостов: по одному в строке; каждая сессия берёт случайный,
+    /// пока строка ручных мостов пуста. Публичные списки не используем.
+    /// </summary>
+    private async void BridgePoolBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_suppressEvents) return;
+        var settings = SettingsService.Current;
+        var pool = BridgePoolBox.Text.Trim();
+        if (pool == settings.TorBridgePool.Trim()) return;
+        settings.TorBridgePool = pool;
+        await SettingsService.SaveAsync(settings);
+        var count = pool.Split('\n').Count(line => line.Trim().Length > 0);
+        Services.VoiceAssistantService.Announce(
+            count > 0
+                ? $"Пул мостов сохранён: {count}. Каждая сессия будет брать случайный."
+                : "Пул мостов очищен.",
+            Services.VoiceAnnouncementPriority.Progress);
+    }
+
+    /// <summary>
+    /// «Получить приватные webtunnel-мосты»: капча разда́тчика Tor Project —
+    /// и мосты автоматически вписываются в пул ротации. Публичные списки
+    /// не используются.
+    /// </summary>
+    private async void FetchBridges_Click(object sender, RoutedEventArgs e)
+    {
+        Services.VoiceAssistantService.Announce(
+            "Запрашиваю приватные мосты у распределителя Tor Project. Решите задание в окошке.",
+            Services.VoiceAnnouncementPriority.Progress);
+        var challenge = await Services.Tor.MoatBridgeFetcher.FetchChallengeAsync();
+        if (challenge is null)
+        {
+            Services.VoiceAssistantService.Announce(
+                "Раздатчик мостиков не отвечает — возможно, адрес недоступен без туннеля. Попробуйте позже или через VPN.",
+                Services.VoiceAnnouncementPriority.Important);
+            return;
+        }
+        var dialog = new MoatCaptchaWindow(challenge) { Owner = Window.GetWindow(this) };
+        if (dialog.ShowDialog() != true || dialog.Bridges.Count == 0)
+        {
+            Services.VoiceAssistantService.Announce(
+                "Мосты не получены: задание не решено или разда́тчик отказал.",
+                Services.VoiceAnnouncementPriority.Important);
+            return;
+        }
+
+        var settings = SettingsService.Current;
+        var pool = settings.TorBridgePool
+            .Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0)
+            .ToList();
+        var fresh = dialog.Bridges.Where(line => !pool.Contains(line)).ToList();
+        pool.AddRange(fresh);
+        settings.TorBridgePool = string.Join(Environment.NewLine, pool);
+        await SettingsService.SaveAsync(settings);
+        _suppressEvents = true;
+        BridgePoolBox.Text = settings.TorBridgePool;
+        _suppressEvents = false;
+
+        Services.VoiceAssistantService.Announce(
+            $"Получено мостов: {fresh.Count}. Пул пополнен, каждая сессия будет брать случайный.",
+            Services.VoiceAnnouncementPriority.Important);
     }
 
     // ── Сворачивание ──────────────────────────────────────────────
