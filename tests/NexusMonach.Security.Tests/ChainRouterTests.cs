@@ -284,6 +284,54 @@ public class ChainRouterTests
         Assert.Equal("77.88.44.242", addresses[0]);
     }
 
+    [Fact]
+    public async Task Router_ConnectsByDomainName_Loopback()
+    {
+        // Регрессия одного байта: для доменной записи head[4] — ДЛИНА имени,
+        // и имя читается целиком со следующего байта. Кривой парсер собирал
+        // имя с ведущим нулём и без последней буквы — и все домены умирали.
+        try
+        {
+            var echo = System.Net.Sockets.TcpListener.Create(0);
+            echo.Start(4);
+            var echoPort = ((System.Net.IPEndPoint)echo.LocalEndpoint).Port;
+            var echoTask = Task.Run(async () =>
+            {
+                using var accepted = await echo.AcceptTcpClientAsync();
+                var buffer = new byte[64];
+                var stream = accepted.GetStream();
+                var read = await stream.ReadAsync(buffer);
+                await stream.WriteAsync(buffer.AsMemory(0, read));
+            });
+
+            ChainRouterService.Start();
+            using var client = new System.Net.Sockets.TcpClient();
+            await client.ConnectAsync(System.Net.IPAddress.Loopback, ChainRouterService.Port);
+            var stream = client.GetStream();
+            await stream.WriteAsync(new byte[] { 5, 1, 0 });
+            var greeting = new byte[2];
+            await ReadExactAsync(stream, greeting);
+
+            var request = ChainRouterService.BuildConnectRequest("localhost", echoPort);
+            await stream.WriteAsync(request);
+            var reply = new byte[10];
+            await ReadExactAsync(stream, reply);
+            Assert.Equal(0, reply[1]);
+
+            var probe = "домен-жив"u8.ToArray();
+            await stream.WriteAsync(probe);
+            var echoed = new byte[probe.Length];
+            await ReadExactAsync(stream, echoed);
+            Assert.Equal(probe, echoed);
+            await echoTask.WaitAsync(TimeSpan.FromSeconds(10));
+            echo.Stop();
+        }
+        finally
+        {
+            ChainRouterService.Stop();
+        }
+    }
+
     private static int FindClosedLoopbackPort()
     {
         for (var port = 49000; port < 49500; port++)

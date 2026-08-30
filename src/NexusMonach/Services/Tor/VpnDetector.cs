@@ -24,8 +24,9 @@ public static class VpnDetector
     private static readonly object Gate = new();
 
     /// <summary>
-    /// Детект с кэшем на 30 секунд: полный скан (включая порты) слишком
-    /// тяжёл, чтобы гонять его на каждый пересбор аргументов браузера.
+    /// Детект с кэшем на 30 секунд: перечисление адаптеров под сторонними
+    /// фильтр-драйверами умеет виснуть секундами, поэтому путь горячего
+    /// соединения никогда не ждёт скана — протухший кэш обновляется фоном.
     /// </summary>
     public static VpnDetectionResult DetectCached()
     {
@@ -33,14 +34,28 @@ public static class VpnDetector
         {
             if (_cached is not null && DateTime.UtcNow - _cachedAt < TimeSpan.FromSeconds(30))
                 return _cached;
+            if (_cached is null)
+            {
+                // Первый опрос — синхронно (момент старта), дальше только фон.
+                var first = Detect();
+                _cached = first;
+                _cachedAt = DateTime.UtcNow;
+                return first;
+            }
         }
-        var fresh = Detect();
+        _ = Task.Run(() =>
+        {
+            var fresh = Detect();
+            lock (Gate)
+            {
+                _cached = fresh;
+                _cachedAt = DateTime.UtcNow;
+            }
+        });
         lock (Gate)
         {
-            _cached = fresh;
-            _cachedAt = DateTime.UtcNow;
+            return _cached!;
         }
-        return fresh;
     }
 
     /// <summary>

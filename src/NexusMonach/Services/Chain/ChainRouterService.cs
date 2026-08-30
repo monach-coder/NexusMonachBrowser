@@ -183,6 +183,19 @@ public static class ChainRouterService
             settings.EnableCustomProxy);
     }
 
+    /// <summary>Временная диагностика живой машины — в файл рядом с профилем.</summary>
+    internal static void RouterDebugLog(string line)
+    {
+        try
+        {
+            File.AppendAllText(
+                Path.Combine(Environment.GetFolderPath(
+                    Environment.SpecialFolder.LocalApplicationData), "NexusMonach", "router-debug.log"),
+                $"{DateTime.Now:HH:mm:ss.fff} {line}{Environment.NewLine}");
+        }
+        catch { }
+    }
+
     private static async Task HandleClientAsync(TcpClient client)
     {
         using (client)
@@ -226,13 +239,16 @@ public static class ChainRouterService
                     default:
                         return;
                 }
-                var pending = addressBytes.Length - 1;
+                // Для IPv4/IPv6 пятый байт запроса — первый байт адреса;
+                // для домена — ДЛИНА имени, и само имя читается целиком
+                // со следующего байта (классическая ловушка SOCKS5).
+                var pending = head[3] == 3 ? addressBytes.Length : addressBytes.Length - 1;
                 if (pending > 0)
                 {
                     var rest = new byte[pending];
                     if (await ReadAsync(stream, rest, pending, TimeSpan.FromSeconds(10)) < pending)
                         return;
-                    Array.Copy(rest, 0, addressBytes, 1, pending);
+                    Array.Copy(rest, 0, addressBytes, head[3] == 3 ? 0 : 1, pending);
                 }
                 var portBytes = new byte[2];
                 if (await ReadAsync(stream, portBytes, 2, TimeSpan.FromSeconds(10)) < 2) return;
@@ -356,17 +372,19 @@ public static class ChainRouterService
         {
             using var window = new CancellationTokenSource(TimeSpan.FromSeconds(2));
             var all = await Dns.GetHostAddressesAsync(host).WaitAsync(window.Token);
+            RouterDebugLog($"dns system ok: {string.Join(',', all.Select(a => a.ToString()))}");
             var ipv4 = all.Where(a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork).ToArray();
             if (ipv4.Length > 0) return ipv4;
             if (all.Length > 0) return all;
         }
-        catch { /* системный резолвер молчит — следующий этаж */ }
+        catch (Exception ex) { RouterDebugLog("dns system fail: " + ex.GetType().Name); }
         var viaDoh = await ResolveViaDohAsync(host);
         if (viaDoh.Length > 0)
         {
             CrashReportService.AddBreadcrumb("chain-router", "dns-via-doh");
             return viaDoh;
         }
+        RouterDebugLog("doh: все эндпоинты молчат");
         // DNS-over-TCP: обычный TCP-порт 53 — работает там, где локальный
         // фильтр душит и системный DNS, и DoH (443 к резолверам), но не
         // трогает прямые TCP-соединения самого браузера.
@@ -376,6 +394,26 @@ public static class ChainRouterService
             CrashReportService.AddBreadcrumb("chain-router", "dns-via-tcp53");
             return viaTcp;
         }
+        RouterDebugLog("tcp53: все серверы молчат");
+        // UDP-запрос классического DNS: последний сетевой ход перед честным
+        // отказом — некоторые фильтры душат только TCP/DoH.
+        var viaUdp = await ResolveViaUdpDnsAsync(host);
+        if (viaUdp.Length > 0)
+        {
+            CrashReportService.AddBreadcrumb("chain-router", "dns-via-udp53");
+            return viaUdp;
+        }
+        // Джода против per-app DNS-фильтров: DoH к СОБСТВЕННОМУ резолверу
+        // фильтра (dns.adguard.com через его anycast-IP, SNI его же имени).
+        // Свой DNS фильтр не блокирует, а 443/TCP к произвольному IP у
+        // браузера работает.
+        var viaFilterOwn = await ResolveViaFilterOwnDohAsync(host);
+        if (viaFilterOwn.Length > 0)
+        {
+            CrashReportService.AddBreadcrumb("chain-router", "dns-via-filter-own-doh");
+            return viaFilterOwn;
+        }
+        RouterDebugLog("filter-own doh: молчит");
         // Последний шанс: медленный системный резолвер — некоторые локальные
         // перехватчики DNS отвечают, но дольше первого окна.
         try
@@ -397,16 +435,19 @@ public static class ChainRouterService
     }
 
     /// <summary>
-    /// DoH-резолверы по IP-литералам. Не один, а три: локальные фильтры
-    /// (например, VPN-клиенты) сознательно глушат DoH к 1.1.1.1, удерживая
-    /// контроль над DNS, — но заблокировать все три, не сломав половину
-    /// интернета, нельзя. Первый удачный ответ выигрывает.
+    /// DoH-резолверы по IP-литералам. Не один и не три: локальные фильтры
+    /// (например, VPN-клиенты) душат DNS по-разному — блок-листами «известных»
+    /// DoH-адресов, перехватом 53/TCP+UDP по приложениям. Поэтому в лестнице
+    /// и первичные, и ВТОРИЧНЫЕ IP тех же резолверов (1.0.0.1, 8.8.4.4,
+    /// 149.112.112.112): их в блок-листах часто нет, а сертификаты покрывают.
     /// </summary>
     internal static readonly string[] DohEndpoints =
     [
-        "https://1.1.1.1/dns-query",
+        "https://1.0.0.1/dns-query",
         "https://8.8.8.8/dns-query",
-        "https://9.9.9.9/dns-query"
+        "https://8.8.4.4/dns-query",
+        "https://1.1.1.1/dns-query",
+        "https://149.112.112.112/dns-query"
     ];
 
     /// <summary>DoH-клиент без системного прокси: адрес — IP-литерал.</summary>
@@ -439,10 +480,13 @@ public static class ChainRouterService
     }
 
     /// <summary>
-    /// DNS-over-TCP: резолверы по IP-литералам на порт 53. Обычный TCP,
-    /// мимо блокировок DoH-портов;_wire-формат с 2-байтовым префиксом длины.
+    /// DNS-over-TCP: первичные и вторичные IP резолверов на порт 53 —
+    /// обычный TCP мимо блок-листов DoH-портов.
     /// </summary>
-    internal static readonly string[] TcpDnsServers = ["8.8.8.8", "1.1.1.1"];
+    internal static readonly string[] TcpDnsServers =
+    [
+        "1.0.0.1", "8.8.8.8", "8.8.4.4", "1.1.1.1", "149.112.112.112"
+    ];
 
     private static async Task<IPAddress[]> ResolveViaTcpDnsAsync(string host)
     {
@@ -451,7 +495,7 @@ public static class ChainRouterService
             try
             {
                 using var tcp = new TcpClient();
-                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(1.5));
                 await tcp.ConnectAsync(server, 53, timeout.Token);
                 tcp.NoDelay = true;
                 var query = BuildDnsQuery(host);
@@ -462,12 +506,12 @@ public static class ChainRouterService
                 query.CopyTo(framed, 2);
                 await stream.WriteAsync(framed);
                 var lengthHeader = new byte[2];
-                if (await ReadAsync(stream, lengthHeader, 2, TimeSpan.FromSeconds(2)) < 2)
+                if (await ReadAsync(stream, lengthHeader, 2, TimeSpan.FromSeconds(1.5)) < 2)
                     continue;
                 var responseLength = lengthHeader[0] << 8 | lengthHeader[1];
                 if (responseLength is < 12 or > 4096) continue;
                 var response = new byte[responseLength];
-                if (await ReadAsync(stream, response, responseLength, TimeSpan.FromSeconds(2)) <
+                if (await ReadAsync(stream, response, responseLength, TimeSpan.FromSeconds(1.5)) <
                     responseLength) continue;
                 var addresses = ParseDnsA(response);
                 if (addresses.Count > 0)
@@ -476,6 +520,76 @@ public static class ChainRouterService
             catch
             {
                 // Этот сервер молчит — следующий.
+            }
+        }
+        return [];
+    }
+
+    /// <summary>
+    /// DoH через резолвер самого фильтра: dns.adguard.com по anycast-адресу.
+    /// ConnectCallback сам владеет сокетом — системный DNS не участвует.
+    /// </summary>
+    private static readonly HttpClient FilterOwnDohClient = new(
+        new SocketsHttpHandler
+        {
+            UseProxy = false,
+            ConnectCallback = async (context, token) =>
+            {
+                var tcp = new TcpClient();
+                await tcp.ConnectAsync(IPAddress.Parse("94.140.14.14"), 443, token);
+                var ssl = new System.Net.Security.SslStream(tcp.GetStream());
+                await ssl.AuthenticateAsClientAsync(
+                    new System.Net.Security.SslClientAuthenticationOptions
+                    {
+                        TargetHost = context.DnsEndPoint.Host
+                    }, token);
+                return ssl;
+            }
+        })
+    {
+        Timeout = TimeSpan.FromSeconds(3)
+    };
+
+    private static async Task<IPAddress[]> ResolveViaFilterOwnDohAsync(string host)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get,
+                "https://dns.adguard.com/dns-query?name=" + Uri.EscapeDataString(host) + "&type=A");
+            request.Headers.Accept.ParseAdd("application/dns-json");
+            using var response = await FilterOwnDohClient.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+            var json = await response.Content.ReadAsStringAsync();
+            var addresses = ParseDohIpv4(json).Select(IPAddress.Parse).ToArray();
+            if (addresses.Length > 0) return addresses;
+        }
+        catch
+        {
+            // Фильтр чужой или суровее обычного — честный отказ дальше.
+        }
+        return [];
+    }
+
+    /// <summary>Классический UDP DNS к тем же резолверам: последний ход.</summary>
+    private static async Task<IPAddress[]> ResolveViaUdpDnsAsync(string host)
+    {
+        foreach (var server in TcpDnsServers)
+        {
+            try
+            {
+                using var udp = new System.Net.Sockets.UdpClient();
+                udp.Client.ReceiveTimeout = 1500;
+                udp.Connect(server, 53);
+                var query = BuildDnsQuery(host);
+                await udp.SendAsync(query, query.Length);
+                var result = await udp.ReceiveAsync();
+                var addresses = ParseDnsA(result.Buffer);
+                if (addresses.Count > 0)
+                    return addresses.Select(IPAddress.Parse).ToArray();
+            }
+            catch
+            {
+                // Следующий сервер.
             }
         }
         return [];

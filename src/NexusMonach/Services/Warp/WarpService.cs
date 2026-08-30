@@ -10,30 +10,70 @@ public enum WarpStatus
     /// <summary>Туннель WARP поднят: системная обёртка, пригодная для слоя.</summary>
     Connected,
     /// <summary>Клиент есть (адаптер присутствует), туннель опущен.</summary>
-    Disconnected
+    Disconnected,
+    /// <summary>Статус ещё не прочитан.</summary>
+    Unknown
 }
 
 /// <summary>
 /// Детектор официального клиента Cloudflare WARP — по его сетевому адаптеру,
-/// без запуска чужих процессов и без своего сетевого стека. WARP — бесплатный
-/// системный туннель к сети Cloudflare: в нашей цепочке он занимает слот
-/// обёртки, как системный VPN — годится, когда нет своего сервера. Но это НЕ
-/// анонимность: Cloudflare видит весь трафик и логирует; слот — доступность.
-/// Подключением управляет сам клиент WARP (иконка в трее) — браузер читает
-/// состояние и заворачивает в туннель анонимный слой.
+/// без запуска чужих процессов и без своего сетевого стека. Перечисление
+/// адаптеров — ДОРОГАЯ операция: под фильтрами сторонних VPN-драйверов она
+/// умеет виснуть секундами, поэтому статус вычисляется в фоне и кэшируется.
+/// Путь горячего соединения никогда не касается адаптеров напрямую.
+/// WARP — бесплатный системный туннель к сети Cloudflare: слот доступности,
+/// НЕ анонимности (Cloudflare видит трафик и логирует). Управление — в самом
+/// клиенте WARP; браузер читает состояние и заворачивает в туннель слой.
 /// </summary>
 public static class WarpService
 {
-    /// <summary>Живой статус по адаптерам машины.</summary>
-    public static WarpStatus Status =>
-        ClassifyAdapter(NetworkInterface.GetAllNetworkInterfaces()
-            .Where(ni => ni.Name.ToLowerInvariant().Contains("cloudflarewarp") ||
-                         ni.Description.ToLowerInvariant().Contains("cloudflarewarp"))
-            .ToList());
+    private static readonly object Sync = new();
+    private static WarpStatus _cached = WarpStatus.Unknown;
+    private static DateTimeOffset _cachedAt = DateTimeOffset.MinValue;
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(5);
+
+    /// <summary>Кэшированный статус; протухший — обновляется в фоне.</summary>
+    public static WarpStatus Status
+    {
+        get
+        {
+            lock (Sync)
+            {
+                if (DateTimeOffset.UtcNow - _cachedAt < CacheTtl) return _cached;
+                if (_cachedAt == DateTimeOffset.MinValue)
+                {
+                    // Первый опрос — синхронно (старт), дальше только фон.
+                    Refresh();
+                    return _cached;
+                }
+                _ = Task.Run(Refresh);
+                return _cached;
+            }
+        }
+    }
 
     public static bool IsInstalled => Status != WarpStatus.NotInstalled;
 
     public static bool IsConnected => Status == WarpStatus.Connected;
+
+    private static void Refresh()
+    {
+        try
+        {
+            var warpUp = NetworkInterface.GetAllNetworkInterfaces()
+                .Where(ni => ni.Name.ToLowerInvariant().Contains("cloudflarewarp") ||
+                             ni.Description.ToLowerInvariant().Contains("cloudflarewarp"))
+                .ToList();
+            _cached = ClassifyAdapter(warpUp
+                .Select(ni => (ni.OperationalStatus == OperationalStatus.Up, true))
+                .ToList());
+        }
+        catch
+        {
+            _cached = WarpStatus.Unknown;
+        }
+        _cachedAt = DateTimeOffset.UtcNow;
+    }
 
     /// <summary>Чистая функция классификации — проверяется юнит-тестами.</summary>
     internal static WarpStatus ClassifyAdapter(
@@ -43,8 +83,4 @@ public static class WarpService
         if (warp.Count == 0) return WarpStatus.NotInstalled;
         return warp.Any(a => a.IsUp) ? WarpStatus.Connected : WarpStatus.Disconnected;
     }
-
-    private static WarpStatus ClassifyAdapter(List<NetworkInterface> warpAdapters) =>
-        ClassifyAdapter(warpAdapters.Select(ni => (ni.OperationalStatus == OperationalStatus.Up, true))
-            .ToList());
 }
