@@ -111,14 +111,59 @@ public static class ChainRouterService
     }
 
     /// <summary>
-    /// Живое состояние обёртки Тора: процесс крутится И есть туннель
-    /// (транспорт или системный VPN). Слой без обёртки не выходит в сеть —
-    /// через него вкладки не пускаются.
+    /// Живое состояние обёртки Тора: процесс крутится, есть туннель
+    /// (транспорт, WARP или системный VPN) И слой реально строит цепочки —
+    /// SOCKS отвечает, но без работоспособных цепочек каждый запрос гнил
+    /// в нём по 15 секунд до запасного хода. Здоровье проверяется пробой
+    /// CONNECT через SOCKS Тора и кэшируется на полминуты.
     /// </summary>
     internal static bool IsTorWrapped() =>
         Services.Tor.TorService.IsRunning &&
         (Services.Vless.VlessRuntime.IsRunning ||
-         Services.Tor.VpnDetector.DetectCached().VpnActive);
+         Services.Warp.WarpService.IsConnected ||
+         Services.Tor.VpnDetector.DetectCached().VpnActive) &&
+        TorRouteHealthy();
+
+    private static volatile bool _torHealthy;
+    private static DateTimeOffset _torProbedAt = DateTimeOffset.MinValue;
+    private static readonly SemaphoreSlim TorProbeGate = new(1, 1);
+
+    private static bool TorRouteHealthy()
+    {
+        var probed = _torProbedAt;
+        if (DateTimeOffset.UtcNow - probed < TimeSpan.FromSeconds(30))
+            return _torHealthy;
+        // Проба уходит в фон; до первого ответа считаем слой неготовым —
+        // вкладки не должны гнить в необстрелянном SOCKS.
+        _ = Task.Run(ProbeTorRouteAsync);
+        return probed == DateTimeOffset.MinValue ? false : _torHealthy;
+    }
+
+    /// <summary>Проба слоя: реальный CONNECT через SOCKS Тора к 1.1.1.1.</summary>
+    private static async Task ProbeTorRouteAsync()
+    {
+        if (!await TorProbeGate.WaitAsync(0)) return;
+        try
+        {
+            var healthy = false;
+            try
+            {
+                var upstream = await ConnectSocksUpstreamAsync(
+                    "127.0.0.1", Services.Tor.TorService.SocksPort, "1.1.1.1", 443);
+                upstream.Dispose();
+                healthy = true;
+            }
+            catch { healthy = false; }
+            _torHealthy = healthy;
+            _torProbedAt = DateTimeOffset.UtcNow;
+            if (!healthy)
+                CrashReportService.AddBreadcrumb("chain-router", "tor-route-unhealthy");
+        }
+        finally
+        {
+            TorProbeGate.Release();
+        }
+    }
 
     internal static ChainRoute PickRoute(
         bool torInChain, bool torWrapped,
@@ -322,6 +367,15 @@ public static class ChainRouterService
             CrashReportService.AddBreadcrumb("chain-router", "dns-via-doh");
             return viaDoh;
         }
+        // DNS-over-TCP: обычный TCP-порт 53 — работает там, где локальный
+        // фильтр душит и системный DNS, и DoH (443 к резолверам), но не
+        // трогает прямые TCP-соединения самого браузера.
+        var viaTcp = await ResolveViaTcpDnsAsync(host);
+        if (viaTcp.Length > 0)
+        {
+            CrashReportService.AddBreadcrumb("chain-router", "dns-via-tcp53");
+            return viaTcp;
+        }
         // Последний шанс: медленный системный резолвер — некоторые локальные
         // перехватчики DNS отвечают, но дольше первого окна.
         try
@@ -382,6 +436,114 @@ public static class ChainRouterService
             }
         }
         return [];
+    }
+
+    /// <summary>
+    /// DNS-over-TCP: резолверы по IP-литералам на порт 53. Обычный TCP,
+    /// мимо блокировок DoH-портов;_wire-формат с 2-байтовым префиксом длины.
+    /// </summary>
+    internal static readonly string[] TcpDnsServers = ["8.8.8.8", "1.1.1.1"];
+
+    private static async Task<IPAddress[]> ResolveViaTcpDnsAsync(string host)
+    {
+        foreach (var server in TcpDnsServers)
+        {
+            try
+            {
+                using var tcp = new TcpClient();
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                await tcp.ConnectAsync(server, 53, timeout.Token);
+                tcp.NoDelay = true;
+                var query = BuildDnsQuery(host);
+                var stream = tcp.GetStream();
+                var framed = new byte[query.Length + 2];
+                framed[0] = (byte)(query.Length >> 8);
+                framed[1] = (byte)(query.Length & 0xFF);
+                query.CopyTo(framed, 2);
+                await stream.WriteAsync(framed);
+                var lengthHeader = new byte[2];
+                if (await ReadAsync(stream, lengthHeader, 2, TimeSpan.FromSeconds(2)) < 2)
+                    continue;
+                var responseLength = lengthHeader[0] << 8 | lengthHeader[1];
+                if (responseLength is < 12 or > 4096) continue;
+                var response = new byte[responseLength];
+                if (await ReadAsync(stream, response, responseLength, TimeSpan.FromSeconds(2)) <
+                    responseLength) continue;
+                var addresses = ParseDnsA(response);
+                if (addresses.Count > 0)
+                    return addresses.Select(IPAddress.Parse).ToArray();
+            }
+            catch
+            {
+                // Этот сервер молчит — следующий.
+            }
+        }
+        return [];
+    }
+
+    /// <summary>DNS-запрос A-записи: заголовок + вопрос, без сжатия.</summary>
+    internal static byte[] BuildDnsQuery(string host)
+    {
+        var labels = host.Split('.');
+        using var question = new MemoryStream();
+        foreach (var label in labels)
+        {
+            var bytes = Encoding.ASCII.GetBytes(label);
+            question.WriteByte((byte)bytes.Length);
+            question.Write(bytes, 0, bytes.Length);
+        }
+        question.WriteByte(0);
+        var tail = new byte[] { 0, 1, 0, 1 }; // A, IN
+        var query = new byte[12 + (int)question.Length + tail.Length];
+        query[0] = 0x12; query[1] = 0x34;      // идентификатор
+        query[2] = 0x01; query[3] = 0x00;      // рекурсия желательна
+        query[5] = 0x01;                       // один вопрос
+        var offset = 12;
+        question.ToArray().CopyTo(query, offset);
+        offset += (int)question.Length;
+        tail.CopyTo(query, offset);
+        return query;
+    }
+
+    /// <summary>
+    /// Разбор ответа DNS: только A-записи (IPv4). Имена пропускаются с
+    /// учётом сжатия (указатели 0xC0), CNAME — мимо. Чистая функция для тестов.
+    /// </summary>
+    internal static IReadOnlyList<string> ParseDnsA(byte[] response)
+    {
+        var result = new List<string>();
+        if (response.Length < 12) return result;
+        var questions = response[4] << 8 | response[5];
+        var answers = response[6] << 8 | response[7];
+        var offset = 12;
+        for (var i = 0; i < questions && offset < response.Length; i++)
+            offset = SkipDnsName(response, offset);
+        offset += 4; // тип + класс вопроса
+        for (var i = 0; i < answers && offset < response.Length; i++)
+        {
+            offset = SkipDnsName(response, offset);
+            if (offset + 10 > response.Length) break;
+            var type = response[offset] << 8 | response[offset + 1];
+            var dataLength = response[offset + 8] << 8 | response[offset + 9];
+            offset += 10;
+            if (type == 1 && dataLength == 4 && offset + 4 <= response.Length)
+                result.Add($"{response[offset]}.{response[offset + 1]}.{response[offset + 2]}.{response[offset + 3]}");
+            offset += dataLength;
+        }
+        return result;
+    }
+
+    /// <summary>Пропуск имени с учётом сжатия: метки или указатель 0xC0.</summary>
+    private static int SkipDnsName(byte[] message, int offset)
+    {
+        while (offset < message.Length)
+        {
+            var length = message[offset];
+            if (length == 0) return offset + 1;
+            if ((length & 0xC0) == 0xC0) return offset + 2;
+            offset += 1 + length;
+        }
+        return offset;
     }
 
     /// <summary>Разбор JSON-ответа DoH: записи типа A (1) → IPv4. Чистая функция для тестов.</summary>

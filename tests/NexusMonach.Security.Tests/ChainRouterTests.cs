@@ -259,6 +259,31 @@ public class ChainRouterTests
         Assert.Empty(ChainRouterService.ParseDohIpv4("""{"Status":2}"""));
     }
 
+    [Fact]
+    public void DnsTcp_QueryBuildsAndParses()
+    {
+        // Запрос: заголовок 12 байт + имя + A/IN.
+        var query = ChainRouterService.BuildDnsQuery("ya.ru");
+        Assert.True(query.Length > 16);
+        Assert.Equal(0x01, query[2]); // рекурсия
+        Assert.Equal(0, query[4]);    // qdcount: старший байт
+        Assert.Equal(1, query[5]);    // qdcount = 1
+
+        // Ответ: вопрос ya.ru + CNAME + A-запись 77.88.44.242 (со сжатием имени).
+        var response = new System.Collections.Generic.List<byte>();
+        response.AddRange(new byte[] { 0x12, 0x34, 0x81, 0x80, 0, 1, 0, 2, 0, 0, 0, 0 });
+        response.AddRange(new byte[] { 2, (byte)'y', (byte)'a', 2, (byte)'r', (byte)'u', 0, 0, 1, 0, 1 });
+        // CNAME: имя указателем (0xC0 0x0C), type 5, длина данных с именем
+        response.AddRange(new byte[] { 0xC0, 0x0C, 0, 5, 0, 1, 0, 0, 0, 60, 0, 6,
+            3, (byte)'w', (byte)'w', (byte)'w', 0xC0, 0x0C });
+        // A: указатель, type 1, TTL, длина 4, адрес
+        response.AddRange(new byte[] { 0xC0, 0x0C, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 77, 88, 44, 242 });
+
+        var addresses = ChainRouterService.ParseDnsA(response.ToArray());
+        Assert.Single(addresses);
+        Assert.Equal("77.88.44.242", addresses[0]);
+    }
+
     private static int FindClosedLoopbackPort()
     {
         for (var port = 49000; port < 49500; port++)
