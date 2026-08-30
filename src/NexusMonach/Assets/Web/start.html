@@ -53,9 +53,10 @@
     </section>
 
     <section class="network" id="network" aria-label="Сетевая цепочка">
-      <button class="toggle" id="toggle-vless" type="button">Сервер<small id="toggle-vless-hint">выключен</small></button>
-      <button class="toggle" id="toggle-tor" type="button">Маршрут<small id="toggle-tor-hint">вне цепочки</small></button>
-      <button class="toggle" id="toggle-proxy" type="button">Прокси<small id="toggle-proxy-hint">выключен</small></button>
+      <button class="toggle" id="toggle-vless" type="button" title="Свой сервер VLESS/Xray: весь трафик и анонимный слой идут через него">Сервер · VLESS<small id="toggle-vless-hint">выключен</small></button>
+      <button class="toggle" id="toggle-tor" type="button" title="Анонимный слой Tor в цепочке вкладок; без туннеля работает с реальным IP">Слой · Tor<small id="toggle-tor-hint">вне цепочки</small></button>
+      <button class="toggle" id="toggle-warp" type="button" title="Бесплатный туннель Cloudflare WARP: обёртка без своего сервера; управление — в клиенте WARP">WARP · Cloudflare<small id="toggle-warp-hint">—</small></button>
+      <button class="toggle" id="toggle-proxy" type="button" title="Ручной прокси из настроек: настраивается в центре анонимности">Прокси<small id="toggle-proxy-hint">выключен</small></button>
     </section>
     <div class="chain" id="chain"></div>
     <div class="foot">Стартовая страница работает локально и не выполняет внешних запросов.</div>
@@ -71,6 +72,8 @@
         on: s => s.vless, hint: s => s.vless ? 'подключён' : (s.vlessConfigured ? 'настроен, выключен' : 'нет ссылки') },
       { id: 'toggle-tor', type: 'toggle-tor',
         on: s => s.tor, hint: s => s.tor ? (s.torWrapped ? 'в цепочке, обёрнут' : 'ждёт туннель') : 'вне цепочки' },
+      { id: 'toggle-warp', type: 'toggle-warp',
+        on: s => s.warp, hint: s => s.warp ? 'туннель активен' : (s.warpInstalled ? 'клиент есть, отключён' : 'не установлен') },
       { id: 'toggle-proxy', type: 'toggle-proxy',
         on: s => s.proxy, hint: () => '' }
     ];

@@ -104,10 +104,14 @@ public static class VpnDetector
                desc.Contains("tap adapter") ||
                desc.Contains("vpn") ||
                desc.Contains("tunnel") ||
+               desc.Contains("warp") ||
+               desc.Contains("cloudflare") ||
                title.Contains("wireguard") ||
                title.Contains("openvpn") ||
                title.Contains("vpn") ||
-               title.Contains("tunnel");
+               title.Contains("tunnel") ||
+               title.Contains("warp") ||
+               title.Contains("cloudflare");
     }
 
     /// <summary>

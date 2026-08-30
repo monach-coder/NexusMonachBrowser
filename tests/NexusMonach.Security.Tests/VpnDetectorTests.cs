@@ -43,4 +43,14 @@ public class VpnDetectorTests
     {
         Assert.False(VpnDetector.IsVpnAdapter(type, description, name));
     }
+
+    [Theory]
+    [InlineData("Tunnel", "Cloudflare WARP Virtual Adapter", "CloudflareWARP")]
+    [InlineData("Ethernet", "Cloudflare WARP", "CloudflareWARP")]
+    public void WarpAdapter_IsDetectedAsWrap(string type, string description, string name)
+    {
+        // Официальный клиент WARP поднимает адаптер CloudflareWARP — он
+        // занимает слот системной обёртки для анонимного слоя.
+        Assert.True(VpnDetector.IsVpnAdapter(type, description, name));
+    }
 }

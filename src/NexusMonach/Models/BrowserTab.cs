@@ -658,15 +658,17 @@ public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
             {
                 SettingsRequested?.Invoke(this, EventArgs.Empty);
             }
-            else if (type is "toggle-vless" or "toggle-tor" or "toggle-proxy")
+            else if (type is "toggle-vless" or "toggle-tor" or "toggle-proxy" or "toggle-warp")
             {
-                // Тумблеры цепочки на стартовой странице: сервер, Тор, прокси.
+                // Тумблеры цепочки на стартовой странице: сервер, слой, прокси,
+                // индикатор WARP.
                 _ = Task.Run(async () =>
                 {
                     var snapshot = type switch
                     {
                         "toggle-vless" => await Services.NetworkChainService.ToggleVlessAsync(),
                         "toggle-tor" => await Services.NetworkChainService.ToggleTorAsync(),
+                        "toggle-warp" => await Services.NetworkChainService.WarpButtonAsync(),
                         _ => await Services.NetworkChainService.ToggleProxyAsync()
                     };
                     await PushNetworkStateAsync(snapshot);
@@ -836,7 +838,7 @@ public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
 
     private static bool IsAllowedInternalMessage(string page, string? type) =>
         page.Equals("/start.html", StringComparison.OrdinalIgnoreCase)
-            ? type is "navigate" or "toggle-vless" or "toggle-tor" or "toggle-proxy"
+            ? type is "navigate" or "toggle-vless" or "toggle-tor" or "toggle-proxy" or "toggle-warp"
             : page.Equals("/search.html", StringComparison.OrdinalIgnoreCase) && type == "result-open";
 
     private void HandleDownload(CoreWebView2DownloadStartingEventArgs e)

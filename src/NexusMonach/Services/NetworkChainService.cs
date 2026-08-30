@@ -13,6 +13,8 @@ public sealed record NetworkChainSnapshot(
     bool VlessRunning,
     bool TorRunning,
     bool TorWrapped,
+    bool WarpInstalled,
+    bool WarpConnected,
     string StatusText)
 {
     public string ToJson() => System.Text.Json.JsonSerializer.Serialize(new
@@ -22,6 +24,8 @@ public sealed record NetworkChainSnapshot(
         tor = TorInChain,
         torWrapped = TorWrapped,
         proxy = ProxyEnabled,
+        warpInstalled = WarpInstalled,
+        warp = WarpConnected,
         status = StatusText
     });
 }
@@ -43,11 +47,15 @@ public static class NetworkChainService
         var settings = SettingsService.Current;
         var vlessRunning = Services.Vless.VlessRuntime.IsRunning;
         var torRunning = Services.Tor.TorService.IsRunning;
+        var warpConnected = Services.Warp.WarpService.IsConnected;
         var wrapped = torRunning &&
-                      (vlessRunning || Services.Tor.VpnDetector.DetectCached().VpnActive);
+                      (vlessRunning || warpConnected ||
+                       Services.Tor.VpnDetector.DetectCached().VpnActive);
         return new NetworkChainSnapshot(
             settings.VlessEnabled, settings.TorInChain, settings.EnableCustomProxy,
-            vlessRunning, torRunning, wrapped, Describe(settings, vlessRunning, wrapped));
+            vlessRunning, torRunning, wrapped,
+            Services.Warp.WarpService.IsInstalled, warpConnected,
+            Describe(settings, vlessRunning, wrapped));
     }
 
     /// <summary>Тумблер «Сервер» (VLESS): поднимает или останавливает транспорт,
@@ -172,6 +180,23 @@ public static class NetworkChainService
         settings.TorInChain || settings.TorRelayEnabled || settings.TrailModeEnabled
             ? Tor.TorBridgeManager.RestartWithBridgesAsync(settings)
             : Task.CompletedTask;
+
+    /// <summary>
+    /// Кнопка WARP на стартовой странице: подключением управляет сам
+    /// официальный клиент (иконка в трее) — браузер читает состояние адаптера
+    /// и заворачивает в туннель анонимный слой. Здесь — пояснение и статус.
+    /// </summary>
+    public static Task<NetworkChainSnapshot> WarpButtonAsync()
+    {
+        var snapshot = Snapshot();
+        if (!snapshot.WarpInstalled)
+            Announce("Клиент Cloudflare WARP не найден. Установите официальный клиент — браузер подхватит туннель сам и завернёт в него анонимный слой.");
+        else if (snapshot.WarpConnected)
+            Announce("Туннель WARP активен. Анонимный слой может заворачиваться в него; управление подключением — в клиенте WARP.");
+        else
+            Announce("Клиент WARP установлен, туннель опущен. Подключите его в собственном клиенте — браузер подхватит сам.");
+        return Task.FromResult(snapshot);
+    }
 
     private static string Describe(BrowserSettings settings, bool vlessRunning, bool wrapped)
     {

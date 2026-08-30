@@ -227,11 +227,14 @@ public static class ChainRouterService
                     return;
                 }
 
-                await stream.WriteAsync(new byte[] { 5, 0, 0, 1, 0, 0, 0, 0, 0, 0 });
+                // Сначала регистрация, потом ответ «успех»: получив успех,
+                // клиент обязан попасть под DropAllTunnels — иначе смена
+                // маршрута может проскочить мимо только что поднятого туннеля.
                 var tunnelId = Guid.NewGuid();
                 Tunnels[tunnelId] = (route, client, upstream);
                 try
                 {
+                    await stream.WriteAsync(new byte[] { 5, 0, 0, 1, 0, 0, 0, 0, 0, 0 });
                     await PumpAsync(stream, upstream);
                 }
                 finally
