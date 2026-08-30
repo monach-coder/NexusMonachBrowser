@@ -111,18 +111,31 @@ public static class ChainRouterService
     }
 
     /// <summary>
-    /// Живое состояние обёртки Тора: процесс крутится, есть туннель
-    /// (транспорт, WARP или системный VPN) И слой реально строит цепочки —
-    /// SOCKS отвечает, но без работоспособных цепочек каждый запрос гнил
-    /// в нём по 15 секунд до запасного хода. Здоровье проверяется пробой
+    /// Живое состояние обёртки Тора: процесс крутится и (есть туннель
+    /// ИЛИ настроены мосты — webtunnel сам пробивает путь под HTTPS, ему
+    /// обёртка не обязательна). Финальное слово за пробой цепочки: SOCKS
+    /// отвечает, но без работоспособных цепочек каждый запрос гнил в нём
+    /// по 15 секунд до запасного хода. Здоровье проверяется реальным
     /// CONNECT через SOCKS Тора и кэшируется на полминуты.
     /// </summary>
     internal static bool IsTorWrapped() =>
         Services.Tor.TorService.IsRunning &&
         (Services.Vless.VlessRuntime.IsRunning ||
          Services.Warp.WarpService.IsConnected ||
-         Services.Tor.VpnDetector.DetectCached().VpnActive) &&
+         Services.Tor.VpnDetector.DetectCached().VpnActive ||
+         HasBridges()) &&
         TorRouteHealthy();
+
+    private static bool HasBridges()
+    {
+        var settings = SettingsService.Current;
+        return (!string.IsNullOrWhiteSpace(settings.TorCustomBridges) ||
+                !string.IsNullOrWhiteSpace(settings.TorBridgePool)) &&
+            // Транспорт моста обязан жить на машине: без клиента строка —
+            // не повод пускать вкладки в слой.
+            System.IO.Directory.Exists(
+                System.IO.Path.Combine(AppContext.BaseDirectory, "tor"));
+    }
 
     private static volatile bool _torHealthy;
     private static DateTimeOffset _torProbedAt = DateTimeOffset.MinValue;
