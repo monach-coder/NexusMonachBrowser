@@ -50,10 +50,8 @@ public static class NetworkChainService
             vlessRunning, torRunning, wrapped, Describe(settings, vlessRunning, wrapped));
     }
 
-    /// <summary>
-    /// Тумблер «Сервер» (VLESS): поднимает или останавливает транспорт,
-    /// перезапускает Тора с новой обёрткой. Без ссылки профиля не включается.
-    /// </summary>
+    /// <summary>Тумблер «Сервер» (VLESS): поднимает или останавливает транспорт,
+    /// перезапускает Тора с новой обёрткой. Без ссылки профиля не включается.</summary>
     public static async Task<NetworkChainSnapshot> ToggleVlessAsync()
     {
         var settings = SettingsService.Current;
@@ -63,6 +61,7 @@ public static class NetworkChainService
         settings.VlessEnabled = false;
         await SettingsService.SaveAsync(settings);
         Services.Vless.VlessRuntime.Stop();
+        RerouteNow();
         Announce("Сервер отключён." + RouteChangeNote(settings));
         await RewrapTorAsync(settings);
         return Snapshot();
@@ -102,6 +101,7 @@ public static class NetworkChainService
         await SettingsService.SaveAsync(settings);
         if (!wasEnabled)
         {
+            RerouteNow();
             Announce("Сервер подключён. Анонимный слой оборачивается в него."
                 + RouteChangeNote(settings));
             await RewrapTorAsync(settings);
@@ -122,6 +122,7 @@ public static class NetworkChainService
             settings.TorInChain = true;
             await SettingsService.SaveAsync(settings);
             await Tor.TorBridgeManager.RestartWithBridgesAsync(settings);
+            RerouteNow();
             var snapshot = Snapshot();
             Announce(snapshot.TorWrapped
                 ? "Анонимный слой в цепочке и обёрнут туннелем." + RouteChangeNote(settings)
@@ -131,6 +132,7 @@ public static class NetworkChainService
 
         settings.TorInChain = false;
         await SettingsService.SaveAsync(settings);
+        RerouteNow();
         Announce("Анонимный слой исключён из цепочки вкладок — скорость выше." + RouteChangeNote(settings));
         return Snapshot();
     }
@@ -148,11 +150,19 @@ public static class NetworkChainService
             return Snapshot();
         }
         await SettingsService.SaveAsync(settings);
+        RerouteNow();
         Announce(settings.EnableCustomProxy
             ? "Ручной прокси включён." + RouteChangeNote(settings)
             : "Ручной прокси отключён.");
         return Snapshot();
     }
+
+    /// <summary>
+    /// Мгновенная переброска: рвёт живые туннели вкладок, чтобы движок не
+    /// катался по старому маршруту на своих keep-alive сокетах. Новые
+    /// соединения маршрутизатор уже отправит по-новому.
+    /// </summary>
+    private static void RerouteNow() => Services.Chain.ChainRouterService.DropAllTunnels();
 
     /// <summary>
     /// Перезапускает Тора с текущей обёрткой: вызывается при изменениях

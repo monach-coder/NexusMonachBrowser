@@ -34,9 +34,29 @@ public static class ChainRouterService
     private static readonly object Sync = new();
     private static volatile bool _fallbackAnnounced;
     private static DateTimeOffset _lastFallbackAnnounceUtc = DateTimeOffset.MinValue;
+    // Живые туннели вкладок: при смене маршрута их можно разорвать, чтобы
+    // движок не катался по старым keep-alive сокетам минутами.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<
+        Guid, (ChainRoute Route, TcpClient Client, Stream Upstream)> Tunnels = new();
 
     public static int Port { get; private set; }
     public static bool IsRunning => _listener is not null;
+
+    /// <summary>
+    /// Разрывает все живые туннели вкладок. Вызывается при переключении
+    /// тумблеров маршрута: движок держит пул соединений, и без разрыва
+    /// страницы ещё долго едут по старому маршруту, как бы «переключение
+    /// не сработало». Обрыв безвреден: движок тут же открывает свежие
+    /// сокеты — уже по новому маршруту.
+    /// </summary>
+    public static void DropAllTunnels()
+    {
+        foreach (var (_, tunnel) in Tunnels)
+        {
+            try { tunnel.Client.Close(); } catch { }
+            try { tunnel.Upstream.Close(); } catch { }
+        }
+    }
 
     /// <summary>Запускает маршрутизатор до создания окружения WebView2.</summary>
     public static void Start()
@@ -208,7 +228,16 @@ public static class ChainRouterService
                 }
 
                 await stream.WriteAsync(new byte[] { 5, 0, 0, 1, 0, 0, 0, 0, 0, 0 });
-                await PumpAsync(stream, upstream);
+                var tunnelId = Guid.NewGuid();
+                Tunnels[tunnelId] = (route, client, upstream);
+                try
+                {
+                    await PumpAsync(stream, upstream);
+                }
+                finally
+                {
+                    Tunnels.TryRemove(tunnelId, out _);
+                }
             }
             catch
             {

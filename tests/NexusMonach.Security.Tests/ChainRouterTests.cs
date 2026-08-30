@@ -184,6 +184,61 @@ public class ChainRouterTests
         }
     }
 
+    [Fact]
+    public async Task Router_DropAllTunnels_CutsLiveConnections()
+    {
+        try
+        {
+            // Живой туннель через роутер обязан обрываться при переброске
+            // маршрута: иначе движок катается по старым keep-alive сокетам
+            // и переключение тумблера «не работает» на глаз.
+            var echo = System.Net.Sockets.TcpListener.Create(0);
+            echo.Start(4);
+            var echoPort = ((System.Net.IPEndPoint)echo.LocalEndpoint).Port;
+            var echoTask = Task.Run(async () =>
+            {
+                using var accepted = await echo.AcceptTcpClientAsync();
+                var buffer = new byte[256];
+                var stream = accepted.GetStream();
+                while (await stream.ReadAsync(buffer) > 0) { /* держим туннель */ }
+            });
+
+            ChainRouterService.Start();
+            using var client = new System.Net.Sockets.TcpClient();
+            await client.ConnectAsync(System.Net.IPAddress.Loopback, ChainRouterService.Port);
+            var stream = client.GetStream();
+            await stream.WriteAsync(new byte[] { 5, 1, 0 });
+            var greeting = new byte[2];
+            await ReadExactAsync(stream, greeting);
+            await stream.WriteAsync(
+                ChainRouterService.BuildConnectRequest("127.0.0.1", echoPort));
+            var reply = new byte[10];
+            await ReadExactAsync(stream, reply);
+            Assert.Equal(0, reply[1]);
+
+            ChainRouterService.DropAllTunnels();
+
+            // Движок видит обрыв как EOF/RST — читаем до него с таймаутом.
+            var probe = new byte[8];
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var sawClose = false;
+            try
+            {
+                var read = await stream.ReadAsync(probe, deadline.Token);
+                sawClose = read == 0; // EOF — туннель срезан
+            }
+            catch (System.Net.Sockets.SocketException) { sawClose = true; }
+            catch (OperationCanceledException) { sawClose = false; }
+            Assert.True(sawClose, "туннель не был разорван DropAllTunnels");
+            await echoTask.WaitAsync(TimeSpan.FromSeconds(10));
+            echo.Stop();
+        }
+        finally
+        {
+            ChainRouterService.Stop();
+        }
+    }
+
     private static int FindClosedLoopbackPort()
     {
         for (var port = 49000; port < 49500; port++)
