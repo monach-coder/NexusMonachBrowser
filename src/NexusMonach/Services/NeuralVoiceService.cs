@@ -481,6 +481,9 @@ public static class NeuralVoiceService
     private static bool PlayWave(string path, LaneState state, NeuralVoiceLane lane,
         int generation)
     {
+        // Аудиоустройство: авточечение и правильный вывод.
+        // WaveOutEvent() без аргументов использует Windows-умолчание.
+        Services.VoiceOutputService.HealIfNeeded();
         using var reader = new AudioFileReader(path);
         using var player = new WaveOutEvent();
         using var completed = new ManualResetEventSlim(false);

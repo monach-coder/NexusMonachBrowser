@@ -285,6 +285,26 @@ public partial class App : Application
             if (!await voiceTask)
                 CrashReportService.AddBreadcrumb("startup", "voice-model-timeout-sapi-fallback");
             VoiceAssistantService.Initialize();
+
+            // Форс-диагностика голоса: SAPI напрямую, минуя нейроголос —
+            // если этот тест молчит, голосовой поток мёртв.
+            try
+            {
+                var testSynth = new System.Speech.Synthesis.SpeechSynthesizer();
+                testSynth.Volume = 100;
+                testSynth.Speak("Диагностика голоса");
+                testSynth.Dispose();
+                CrashReportService.AddBreadcrumb("voice", "sapi-diagnostic-ok");
+            }
+            catch (Exception ex)
+            {
+                CrashReportService.AddBreadcrumb("voice", "sapi-diagnostic-fail");
+                CrashReportService.RecordNonFatal("voice", "sapi-diagnostic", ex);
+            }
+
+            // Аудиоустройство голоса: восстановление из настроек или умолчание.
+            Services.VoiceOutputService.SelectByName(
+                SettingsService.Current.VoiceOutputDeviceName);
             if (!smokeSelfTest)
             {
                 // Только что встало обновление — говорим об этом явно.

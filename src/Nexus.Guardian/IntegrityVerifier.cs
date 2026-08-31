@@ -112,6 +112,16 @@ internal static class IntegrityVerifier
             var info = new FileInfo(fullPath);
             if (info.Length != entry.Length)
             {
+                // AI-модели обновляются сетевой поставкой: смена размера —
+                // ожидаемое событие, не повод ронять браузер в безопасный
+                // режим. Хеш проверится ниже и поймёт реальную порчу.
+                if (entry.Path.StartsWith("AI/models/", StringComparison.OrdinalIgnoreCase) ||
+                    entry.Path.StartsWith("AI/models\\", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (entry.Critical || full)
+                        hashPending.Add((entry, fullPath));
+                    continue;
+                }
                 (entry.Critical ? criticalProblems : otherProblems).Add("Изменён размер: " + entry.Path);
                 continue;
             }

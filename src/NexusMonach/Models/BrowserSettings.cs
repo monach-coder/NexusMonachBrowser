@@ -182,6 +182,8 @@ public sealed class BrowserSettings
     public BrowserThemeMode ThemeMode { get; set; } = BrowserThemeMode.Dark;
     public bool ThemeSelectionCompleted { get; set; }
     public VoiceAssistantMode VoiceAssistantMode { get; set; } = VoiceAssistantMode.ImportantOnly;
+    /// <summary>Имя аудиоустройства для голоса; пусто — умолчание Windows.</summary>
+    public string VoiceOutputDeviceName { get; set; } = string.Empty;
     public bool VoiceSpeakAtStartup { get; set; } = true;
     public bool VoiceHandsFreeEnabled { get; set; } = false;
     public int VoiceRate { get; set; } = 0;
@@ -250,6 +252,7 @@ public sealed class BrowserSettings
         VoiceHandsFreeEnabled = VoiceHandsFreeEnabled,
         VoiceRate = VoiceRate,
         NeuralVoiceProfile = NeuralVoiceProfile,
+        VoiceOutputDeviceName = VoiceOutputDeviceName,
         VideoTranslationMode = VideoTranslationMode
     };
 }
