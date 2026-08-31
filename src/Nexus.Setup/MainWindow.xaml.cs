@@ -338,7 +338,9 @@ public partial class MainWindow : Window
         if (!Directory.Exists(data)) return null;
         var backup = Path.Combine(Path.GetTempPath(),
             "nexus-data-" + Guid.NewGuid().ToString("N"));
-        Directory.Move(data, backup);
+        // Directory.Move не работает между дисками (C: → D:); копируем.
+        CopyDirectory(data, backup);
+        Directory.Delete(data, recursive: true);
         return backup;
     }
 
@@ -350,12 +352,26 @@ public partial class MainWindow : Window
         {
             if (Directory.Exists(destination))
                 Directory.Delete(destination, recursive: true);
-            Directory.Move(backup, destination);
+            CopyDirectory(backup, destination);
+            Directory.Delete(backup, recursive: true);
         }
         catch
         {
             // Профиль дороже чистоты: оставляем бэкап и кричим в лог.
             Log("Не удалось вернуть профиль Data из " + backup);
+        }
+    }
+
+    /// <summary>Копирование дерева между любыми дисками.</summary>
+    private static void CopyDirectory(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(source, file);
+            var target = Path.Combine(destination, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target, overwrite: true);
         }
     }
 
