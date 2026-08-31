@@ -206,6 +206,14 @@ public partial class App : Application
             (integrityVerified ? "подтверждена" : GuardianRuntime.IntegrityStatus));
         if (integrityVerified) splash.CompleteSector(0);
         _ = Services.SplashUpdateWatcher.RunAsync(splash);
+
+        // Нейроголос грузится ПАРАЛЛЕЛЬНО со всем стартом: с первой секунды
+        // сплэша, одновременно с WebView2 и настройками. К моменту первого
+        // объявления («Nexus готов») модель уже на диске.
+        var voiceTask = (!smokeSelfTest && !GuardianRuntime.IsSafeMode)
+            ? Services.VoiceModelGate.WaitAsync(splash)
+            : Task.FromResult(true);
+
         Task startupAudio = Task.CompletedTask;
 
         try
@@ -272,6 +280,10 @@ public partial class App : Application
                     "Nexus Guardian включил безопасный режим после повторных сбоев, графической ошибки или изменения некритических файлов. AI, расширения и аппаратное ускорение временно отключены.",
                     "Nexus Guardian — безопасный режим", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
+            // Голосовая модель грузилась параллельно со всем стартом:
+            // к этому моменту она либо готова, либо истёк таймаут (SAPI).
+            if (!await voiceTask)
+                CrashReportService.AddBreadcrumb("startup", "voice-model-timeout-sapi-fallback");
             VoiceAssistantService.Initialize();
             if (!smokeSelfTest)
             {
