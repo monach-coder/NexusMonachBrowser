@@ -31,6 +31,9 @@
                     <TextBlock Text="Идея, видение и направление — CoderMonach. Проектирование и код — в сотрудничестве с OpenAI Codex и ZCode (агент на модели GLM, Z.ai): надёжность запуска, локальный нейроголос и словарь ударений."
                                Margin="0,5,0,0" TextAlignment="Center" TextWrapping="Wrap"
                                Foreground="{StaticResource MutedTextBrush}" FontSize="11" />
+                    <TextBlock Text="Метод релейных мостов и зеркало реестра Tor Metrics — ValdikSS (tor-relay-scanner / tor-onionoo-mirror), свободные инструменты против цензуры."
+                               Margin="0,5,0,0" TextAlignment="Center" TextWrapping="Wrap"
+                               Foreground="{StaticResource MutedTextBrush}" FontSize="10" />
                 </StackPanel>
             </Border>
             <Border Margin="0,10,0,0" Padding="12,9" Background="{StaticResource PanelBrush}" CornerRadius="8"

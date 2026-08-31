@@ -335,6 +335,80 @@ public partial class PrivacyDockControl : UserControl
             Services.VoiceAnnouncementPriority.Important);
     }
 
+    /// <summary>
+    /// «Найти релейные мосты»: реестр работающих релеев Тора → случайные
+    /// кандидаты → живая TCP-проба → найденные вписываются в пул ротации.
+    /// Метод ValdikSS: релеев тысячи, весь хвост не заблокировать.
+    /// </summary>
+    private async void ScanRelayBridges_Click(object sender, RoutedEventArgs e)
+    {
+        var button = sender as System.Windows.Controls.Button;
+        if (button is not null)
+        {
+            button.IsEnabled = false;
+            button.Content = "Сканирую релеи…";
+        }
+        try
+        {
+            Services.VoiceAssistantService.Announce(
+                "Скачиваю реестр работающих релеев Тора.",
+                Services.VoiceAnnouncementPriority.Progress);
+            var relays = await Services.Tor.RelayBridgeFinder.FetchRelaysAsync();
+            if (relays.Count == 0)
+            {
+                Services.VoiceAssistantService.Announce(
+                    "Реестр релеев недоступен — ни официальный Tor Metrics, ни зеркала не ответили.",
+                    Services.VoiceAnnouncementPriority.Important);
+                return;
+            }
+            var working = await Services.Tor.RelayBridgeFinder.FindWorkingAsync(
+                relays,
+                onProgress: (tried, found) =>
+                {
+                    Services.VoiceAssistantService.Announce(
+                        $"Проверено релеев: {tried}, живых: {found}.",
+                        Services.VoiceAnnouncementPriority.Progress);
+                    return Task.CompletedTask;
+                });
+            if (working.Count == 0)
+            {
+                Services.VoiceAssistantService.Announce(
+                    "Достижимых релеев не нашлось: сеть режет соединения к Тор-портам.",
+                    Services.VoiceAnnouncementPriority.Important);
+                return;
+            }
+
+            var settings = SettingsService.Current;
+            var pool = settings.TorBridgePool
+                .Split('\n')
+                .Select(line => line.Trim())
+                .Where(line => line.Length > 0)
+                .ToList();
+            var fresh = working
+                .Select(relay => relay.ToBridgeLine())
+                .Where(line => !pool.Contains(line))
+                .ToList();
+            pool.AddRange(fresh);
+            settings.TorBridgePool = string.Join(Environment.NewLine, pool);
+            await SettingsService.SaveAsync(settings);
+            _suppressEvents = true;
+            BridgePoolBox.Text = settings.TorBridgePool;
+            _suppressEvents = false;
+
+            Services.VoiceAssistantService.Announce(
+                $"Найдено и вписано релейных мостов: {fresh.Count}. Каждая сессия будет брать случайный.",
+                Services.VoiceAnnouncementPriority.Important);
+        }
+        finally
+        {
+            if (button is { IsEnabled: false })
+            {
+                button.IsEnabled = true;
+                button.Content = "Найти релейные мосты (скан)";
+            }
+        }
+    }
+
     // ── Сворачивание ──────────────────────────────────────────────
 
     private async void Collapse_Click(object sender, RoutedEventArgs e)

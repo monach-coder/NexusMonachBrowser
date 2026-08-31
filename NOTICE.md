@@ -15,3 +15,11 @@ Copyright © 2026 Alexander / monach-coder.
 
 Названия и эмблема регулируются файлом TRADEMARKS.md; сторонние библиотеки,
 runtime и модели сохраняют собственные лицензии.
+
+## Благодарности
+
+- **ValdikSS** — метод релейных мостов (tor-relay-scanner) и зеркало реестра
+  Tor Metrics (tor-onionoo-mirror): в браузере воссозданы чистой реализацией
+  как «Найти релейные мосты»; зеркало остаётся резервным источником реестра.
+- **Tor Project** — Tor, мосты obfs4/webtunnel и разда́тчик Moat.
+- **Xray-core** — транспорт VLESS/Reality.

@@ -66,10 +66,14 @@
                  webtunnel-мосты живучее в цензурных сетях (маскируются под HTTPS). -->
             <Expander Margin="0,8,0,0" FontSize="10.5" Header="Мосты против DPI (obfs4 / webtunnel)">
                 <StackPanel>
-                    <Button Content="Получить приватные webtunnel-мосты…" Margin="0,6,0,6" Padding="9,5"
+                    <Button Content="Получить приватные webtunnel-мосты…" Margin="0,6,0,4" Padding="9,5"
                             FontSize="10.5" Style="{StaticResource NexusButton}"
                             Click="FetchBridges_Click"
                             ToolTip="Запрос к официальному разда́тчику Tor Project: решаете капчу — браузер получает неизданные мосты и сам вписывает их в пул" />
+                    <Button Content="Найти релейные мосты (скан)" Margin="0,0,0,6" Padding="9,5"
+                            FontSize="10.5" Style="{StaticResource NexusButton}"
+                            Click="ScanRelayBridges_Click"
+                            ToolTip="Метод ValdikSS: реестр работающих релеев Тора (их тысячи) — случайные проверяются на достижимость и вписываются в пул. Публичных мостов сотни, их блокируют первыми; длинный хвост релеев не выкурить" />
                     <TextBox x:Name="BridgesBox" Padding="7,5" FontSize="11" MinHeight="52" Margin="0,0,0,4"
                              AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                              ToolTip="Ручные мосты (важнее пула):&#10;obfs4 IP:ПОРТ ОТПЕЧАТОК cert=... iat-mode=0&#10;webtunnel IP:ПОРТ ОТПЕЧАТОК url=https://сайт/путь cert=...&#10;Бинарные транспорты кладутся в C:\Tor\pluggable_transports (lyrebird.exe, webtunnel-client.exe)"
