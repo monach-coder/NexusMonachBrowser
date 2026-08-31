@@ -18,7 +18,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.Diagnostics.EventLog" Version="8.0.1" />
+    <PackageReference Include="System.Diagnostics.EventLog" Version="10.0.11" />
     <ProjectReference Include="..\Nexus.Intelligence.Contracts\Nexus.Intelligence.Contracts.csproj" />
     <ProjectReference Include="..\Nexus.Intelligence.Fabric\Nexus.Intelligence.Fabric.csproj" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
