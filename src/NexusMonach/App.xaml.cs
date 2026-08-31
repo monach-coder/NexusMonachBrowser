@@ -325,6 +325,12 @@ public partial class App : Application
                     // Скан VPN на машине: Tor в Режиме Следа оборачивается в
                     // найденный туннель; результат слышен и виден в логах.
                     _ = Task.Run(ReportVpnState);
+                    // Обходчик DPI (GoodbyeDPI, сторонний): если запущен —
+                    // часть заблокированных сайтов откроется напрямую.
+                    if (Services.DpiBypassDetector.IsRunning)
+                        Services.VoiceAssistantService.Announce(
+                            "Обходчик Дэ-Пэ-Ай активен: часть заблокированных сайтов откроется напрямую.",
+                            Services.VoiceAnnouncementPriority.Important);
                     // Сетевая цепочка: сначала транспорт (Xray), потом Тор —
                     // torrc генерируется уже с обёрткой в поднятый сервер.
                     _ = Task.Run(StartNetworkChainAsync);

@@ -222,11 +222,15 @@ public static class NetworkChainService
 
     private static string Describe(BrowserSettings settings, bool vlessRunning, bool wrapped)
     {
-        if (settings.TorInChain && wrapped)
-            return vlessRunning ? "Слой обёрнут сервером" : "Слой обёрнут туннелем";
-        if (settings.TorInChain)
-            return "Слой ждёт туннель (сервер или системный); IP реальный";
-        return vlessRunning ? "Напрямую через сервер" : "Прямое соединение";
+        string Core() => settings.TorInChain switch
+        {
+            true when wrapped => vlessRunning ? "Слой обёрнут сервером" : "Слой обёрнут туннелем",
+            true => "Слой ждёт туннель (сервер или системный); IP реальный",
+            _ => vlessRunning ? "Напрямую через сервер" : "Прямое соединение"
+        };
+        // Обходчик DPI (GoodbyeDPI, если запущен) оживляет часть заблокированных
+        // сайтов в прямом маршруте — честно показываем это в строке цепочки.
+        return Services.DpiBypassDetector.IsRunning ? Core() + " · DPI-обход активен" : Core();
     }
 
     private static string RouteChangeNote(BrowserSettings settings) =>
