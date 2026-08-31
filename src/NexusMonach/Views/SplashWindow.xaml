@@ -9,10 +9,6 @@
         <Storyboard x:Key="Pulse" RepeatBehavior="Forever" AutoReverse="True">
             <DoubleAnimation Storyboard.TargetName="Glow" Storyboard.TargetProperty="Opacity"
                              From="0.25" To="0.72" Duration="0:0:1.4" />
-            <DoubleAnimation Storyboard.TargetName="LogoScale" Storyboard.TargetProperty="ScaleX"
-                             From="0.97" To="1.02" Duration="0:0:1.4" />
-            <DoubleAnimation Storyboard.TargetName="LogoScale" Storyboard.TargetProperty="ScaleY"
-                             From="0.97" To="1.02" Duration="0:0:1.4" />
         </Storyboard>
     </Window.Resources>
     <Grid Loaded="Grid_Loaded">
