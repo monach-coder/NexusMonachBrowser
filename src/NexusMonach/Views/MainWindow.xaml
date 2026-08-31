@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         xmlns:views="clr-namespace:NexusMonach.Views"
+        xmlns:Controls="clr-namespace:NexusMonach.Controls"
         xmlns:models="clr-namespace:NexusMonach.Models"
         xmlns:services="clr-namespace:NexusMonach.Services"
         Title="Nexus Monach"
@@ -58,8 +59,8 @@
                 </Style>
             </Grid.Resources>
 
-            <Image Grid.Column="0" Width="28" Height="28" Source="/Assets/nexus-monach-512.png"
-                   ToolTip="Nexus Monach" />
+            <Controls:CyberGlobe Grid.Column="0" Width="28" Height="28" RotationSpeed="1.2"
+                                 ToolTip="Nexus Monach — планета вращается" />
 
             <ListBox x:Name="TabsList" Grid.Column="1"
                      ItemsSource="{Binding Tabs}"
