@@ -343,6 +343,8 @@ public partial class App : Application
                     Services.ProfileIntegrityService.VerifyAtStartup();
                     _ = Task.Run(Services.WebView2RuntimeWatchdog.CheckAsync);
                     Services.EgressCanaryService.Start();
+                    // Контроль места на системном диске: голоду диска — голосом.
+                    Services.DiskSpaceWatchdog.Start();
                 }
             }
             if (smokeSelfTest)
@@ -416,6 +418,8 @@ public partial class App : Application
         Services.Chain.ChainRouterService.Stop();
         // Управляющий выходом в сеть засыпает вместе с браузером.
         Services.NetworkGovernor.Stop();
+        // Контроль места засыпает вместе с браузером.
+        Services.DiskSpaceWatchdog.Stop();
         // Правила порт-щита живут только пока работает браузер.
         Services.PortShieldService.RemoveSessionShield();
         CrashReportService.MarkCleanExit();
