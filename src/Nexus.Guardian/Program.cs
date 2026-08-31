@@ -202,7 +202,15 @@ internal static class Program
             // «обновление» (неопределённый ход), затем «загрузка» с процентами
             // и мегабайтами. Применение накопленного — апликатором после
             // нашего выхода, перезапуск обновлённого браузера — сам.
-            if (integrity.State == IntegrityState.Verified && IntegrityVerifier.UsesEmbeddedTrust)
+            // Проверяем обновления и при NonCriticalMismatch: именно так
+            // браузер самовосстанавливается из безопасного режима — обновление
+            // содержит фикс, который перестанет считать смену размера модели
+            // нарушением. Без этого — мёртвый цикл: фикс в обновлении,
+            // а обновление не проверяется из-за того самого бага.
+            var canCheckUpdates = IntegrityVerifier.UsesEmbeddedTrust &&
+                (integrity.State == IntegrityState.Verified ||
+                 integrity.State == IntegrityState.NonCriticalMismatch);
+            if (canCheckUpdates)
             {
                 splash?.CompleteSector(0);
                 splash?.SetStatus("Целостность подтверждена");

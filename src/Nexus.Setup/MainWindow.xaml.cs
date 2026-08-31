@@ -139,9 +139,32 @@ public partial class MainWindow : Window
 
     private async void Install_Click(object sender, RoutedEventArgs e) => await RunInstallAsync();
 
+    /// <summary>Закрыть установщик (крестик или «Готово»).</summary>
+    private void Close_Click(object sender, RoutedEventArgs e) => Close();
+
+    /// <summary>Кнопка «Готово» после успешной установки/удаления.</summary>
+    private void Finish_Click(object sender, RoutedEventArgs e) => Close();
+
+    /// <summary>Отмена установки: останавливает загрузку и возвращает кнопки.</summary>
+    private void Cancel_Click(object sender, RoutedEventArgs e)
+    {
+        _installCts?.Cancel();
+        Status("Установка отменена пользователем.");
+        CancelButton.Visibility = Visibility.Collapsed;
+        InstallButton.Visibility = Visibility.Visible;
+        InstallButton.IsEnabled = true;
+        DirPanel.Visibility = Visibility.Visible;
+    }
+
+    private CancellationTokenSource? _installCts;
+
     private async Task RunInstallAsync()
     {
         InstallButton.IsEnabled = false;
+        InstallButton.Visibility = Visibility.Collapsed;
+        CancelButton.Visibility = Visibility.Visible;
+        DirPanel.Visibility = Visibility.Collapsed;
+        _installCts = new CancellationTokenSource();
         try
         {
             // 1. Манифест и подпись: компрометация зеркала не пройдёт проверку.
@@ -210,6 +233,14 @@ public partial class MainWindow : Window
             RegisterUninstallEntry(_manifest.Version);
             CreateShortcuts();
             Log("Протокол nexus://, запись удаления и ярлыки созданы.");
+
+            // Установка завершена: показываем «Готово» — пользователь сам
+            // закрывает, когда готов (или сразу запускает браузер).
+            Status($"Nexus Monach {_manifest.Version} установлен!");
+            CancelButton.Visibility = Visibility.Collapsed;
+            SkipButton.Visibility = Visibility.Collapsed;
+            FinishButton.Visibility = Visibility.Visible;
+            PhaseText.Text = "Нажмите «Готово» для выхода. Браузер можно запустить с ярлыка на рабочем столе.";
 
             // 5. Нейросети — здесь же, в установщике: перевод, голос и
             // распознавание готовы к первому запуску. Медленный канал —
@@ -493,10 +524,19 @@ public partial class MainWindow : Window
             });
             Status("Nexus Monach удалён.");
             Log("Файлы будут стёрты через несколько секунд.");
+            // Показываем «Готово» — окно закрывается по кнопке, не висит.
+            CancelButton.Visibility = Visibility.Collapsed;
+            FinishButton.Visibility = Visibility.Visible;
+            InstallButton.Visibility = Visibility.Collapsed;
+            PhaseText.Text = "Nexus Monach полностью удалён. Нажмите «Готово» для выхода.";
         }
         catch (Exception ex)
         {
             Status("Ошибка удаления: " + ex.Message);
+            CancelButton.Visibility = Visibility.Collapsed;
+            FinishButton.Visibility = Visibility.Visible;
+            InstallButton.Visibility = Visibility.Collapsed;
+            PhaseText.Text = "Ошибка удаления. Нажмите «Готово» для выхода.";
         }
     }
 

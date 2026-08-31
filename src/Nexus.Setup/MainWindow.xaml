@@ -12,8 +12,8 @@
         <SolidColorBrush x:Key="Muted" Color="#8A94B0" />
         <SolidColorBrush x:Key="Accent" Color="#5B9DFF" />
         <SolidColorBrush x:Key="AccentDim" Color="#243A66" />
+        <SolidColorBrush x:Key="Danger" Color="#E74C3C" />
     </Window.Resources>
-
     <Border Background="{StaticResource Bg}" CornerRadius="16" BorderBrush="#2C3350"
             BorderThickness="1" Margin="10" Padding="34,28">
         <Border.Effect>
@@ -27,8 +27,25 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <!-- Шапка в стиле браузера: круглая эмблема + бренд -->
-            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,22">
+            <!-- Кнопка закрытия — всегда доступна, в правом верхнем углу -->
+            <Button x:Name="CloseButton" Grid.Row="0" Content="✕" FontSize="16"
+                    Width="36" Height="36" HorizontalAlignment="Right" VerticalAlignment="Top"
+                    Background="Transparent" Foreground="{StaticResource Muted}"
+                    BorderThickness="0" Cursor="Hand" Click="Close_Click"
+                    ToolTip="Закрыть установщик">
+                <Button.Style>
+                    <Style TargetType="Button">
+                        <Style.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource Danger}" />
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </Button.Style>
+            </Button>
+
+            <!-- Шапка (сдвинута влево, чтобы не мешать кнопке закрытия) -->
+            <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,44,22">
                 <Border Width="56" Height="56" CornerRadius="28"
                         BorderBrush="{StaticResource Accent}" BorderThickness="1.5"
                         Background="#161B2E" Margin="0,0,16,0">
@@ -62,7 +79,7 @@
                     <TextBlock x:Name="PhaseText" FontSize="12" Foreground="{StaticResource Muted}"
                                TextWrapping="Wrap" TextAlignment="Center"
                                Text="Ядро (~76 МБ) установится за секунды, затем нейросети (2.1 ГБ) скачаются здесь же — перевод, голос и распознавание готовы сразу." />
-                    <StackPanel Orientation="Horizontal" Margin="0,16,0,0" HorizontalAlignment="Center">
+                    <StackPanel x:Name="DirPanel" Orientation="Horizontal" Margin="0,16,0,0" HorizontalAlignment="Center">
                         <TextBox x:Name="InstallDirBox" Width="360" Padding="9,7"
                                  Foreground="{StaticResource Fg}" Background="#161B2E"
                                  BorderBrush="#2C3350" BorderThickness="1"
@@ -77,15 +94,23 @@
                 </StackPanel>
             </Grid>
 
-            <!-- Одна главная кнопка; в фазе AI появляется «Пропустить» -->
+            <!-- Кнопки: Установить / Отмена (во время установки) / Закрыть (после) -->
             <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
                 <Button x:Name="SkipButton" Content="Пропустить нейросети" Width="170" Padding="0,10"
                         Background="Transparent" Foreground="{StaticResource Muted}"
                         BorderBrush="#2C3350" BorderThickness="1" Cursor="Hand" Margin="0,0,12,0"
                         Visibility="Collapsed" Click="Skip_Click" />
+                <Button x:Name="CancelButton" Content="Отмена" Width="110" Padding="0,10"
+                        Background="Transparent" Foreground="{StaticResource Danger}"
+                        BorderBrush="{StaticResource Danger}" BorderThickness="1" Cursor="Hand"
+                        Margin="0,0,12,0" Visibility="Collapsed" Click="Cancel_Click"
+                        ToolTip="Прервать установку" />
                 <Button x:Name="InstallButton" Content="Установить" Width="230" Padding="0,11"
                         Background="{StaticResource Accent}" Foreground="#0B1020" BorderThickness="0"
                         Cursor="Hand" Click="Install_Click" />
+                <Button x:Name="FinishButton" Content="Готово" Width="230" Padding="0,11"
+                        Background="#50C878" Foreground="#0B1020" BorderThickness="0"
+                        Cursor="Hand" Visibility="Collapsed" Click="Finish_Click" />
             </StackPanel>
         </Grid>
     </Border>
