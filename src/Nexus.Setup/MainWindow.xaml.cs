@@ -255,6 +255,16 @@ public partial class MainWindow : Window
                 foreach (var pack in aiPacks)
                 {
                     if (_skipAi) break;
+                    // Проверка места: пак качается в Temp + распаковывается.
+                    var tempDrive = new DriveInfo(Path.GetPathRoot(Path.GetTempPath())!);
+                    var installDrive = new DriveInfo(Path.GetPathRoot(InstallRoot)!);
+                    var neededTemp = pack.Length + 100L * 1024 * 1024; // пак + запас
+                    if (tempDrive.AvailableFreeSpace < neededTemp)
+                    {
+                        Log($"Недостаточно места на {tempDrive.Name}: нужно {neededTemp / 1024 / 1024} МБ, есть {tempDrive.AvailableFreeSpace / 1024 / 1024} МБ.");
+                        Status($"Пропуск: {pack.Purpose} — мало места на диске {tempDrive.Name}");
+                        continue;
+                    }
                     Status("Нейросети: " + pack.Purpose + "…");
                     var stagedZip = Path.Combine(Path.GetTempPath(), pack.RelativePath);
                     await DownloadVerifiedAsync(http, pack, stagedZip);
@@ -362,6 +372,14 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>Потоковый SHA256: файл любого размера без загрузки в память.</summary>
+    private static async Task<string> ComputeFileHashAsync(string path)
+    {
+        await using var stream = File.OpenRead(path);
+        var hashBytes = await SHA256.HashDataAsync(stream);
+        return Convert.ToHexString(hashBytes).ToLowerInvariant();
+    }
+
     /// <summary>Копирование дерева между любыми дисками.</summary>
     private static void CopyDirectory(string source, string destination)
     {
@@ -427,7 +445,9 @@ public partial class MainWindow : Window
         }
         local.Close();
 
-        var hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(partPath))).ToLowerInvariant();
+        // Хеш считаем потоково: ReadAllBytes на 1.2 ГБ файле съедает всю
+        // память одним куском и тихо убивает процесс на больших пакетах.
+        var hash = await ComputeFileHashAsync(partPath);
         if (!hash.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase))
         {
             File.Delete(partPath);
