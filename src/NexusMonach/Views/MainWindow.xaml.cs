@@ -36,13 +36,9 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _memoryTimer;
     private readonly DispatcherTimer _networkPerformanceTimer;
     private DispatcherTimer? _downloadsCloseTimer;
-    private readonly Dictionary<string, (long Received, long Sent)> _networkCounters = new(StringComparer.Ordinal);
-    private DateTime _networkSampleUtc = DateTime.UtcNow;
     private double _downloadBytesPerSecond;
     private double _uploadBytesPerSecond;
     private long? _pingMilliseconds;
-    private int _networkTick;
-    private bool _pingBusy;
     private DateTime _localPortsUpdatedUtc = DateTime.MinValue;
     private int[] _localTcpPorts = [];
     private int[] _localUdpPorts = [];
@@ -106,6 +102,9 @@ public partial class MainWindow : Window
         _memoryTimer.Tick += MemoryTimer_Tick;
         _networkPerformanceTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _networkPerformanceTimer.Tick += NetworkPerformanceTimer_Tick;
+        // Опрос интерфейсов и пинг — в фоне: GetAllNetworkInterfaces под
+        // VPN-фильтрами блокирует UI-поток на сотни миллисекунд.
+        NetworkPerformanceSampler.EnsureStarted();
         _networkPerformanceTimer.Start();
         if (!isPrivate)
         {
@@ -1641,65 +1640,13 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void NetworkPerformanceTimer_Tick(object? sender, EventArgs e)
+    private void NetworkPerformanceTimer_Tick(object? sender, EventArgs e)
     {
-        var now = DateTime.UtcNow;
-        var seconds = Math.Max(0.2, (now - _networkSampleUtc).TotalSeconds);
-        _networkSampleUtc = now;
-        var samples = new List<(double Down, double Up)>();
-        try
-        {
-            foreach (var adapter in NetworkInterface.GetAllNetworkInterfaces().Where(x =>
-                         x.OperationalStatus == OperationalStatus.Up &&
-                         x.NetworkInterfaceType != NetworkInterfaceType.Loopback))
-            {
-                var stats = adapter.GetIPStatistics();
-                if (_networkCounters.TryGetValue(adapter.Id, out var previous))
-                    samples.Add((Math.Max(0, stats.BytesReceived - previous.Received) / seconds,
-                                 Math.Max(0, stats.BytesSent - previous.Sent) / seconds));
-                _networkCounters[adapter.Id] = (stats.BytesReceived, stats.BytesSent);
-            }
-            if (samples.Count > 0)
-            {
-                var active = samples.OrderByDescending(x => x.Down + x.Up).First();
-                _downloadBytesPerSecond = active.Down;
-                _uploadBytesPerSecond = active.Up;
-            }
-        }
-        catch { /* Счётчики отдельных драйверов VPN могут быть недоступны. */ }
-
-        if (++_networkTick % 5 == 0 && !_pingBusy)
-        {
-            _pingBusy = true;
-            try
-            {
-                var gateway = GetDefaultGateway();
-                if (gateway is null) _pingMilliseconds = null;
-                else
-                {
-                    using var ping = new Ping();
-                    var reply = await ping.SendPingAsync(gateway, 1500);
-                    _pingMilliseconds = reply.Status == IPStatus.Success ? reply.RoundtripTime : null;
-                }
-            }
-            catch { _pingMilliseconds = null; }
-            finally { _pingBusy = false; }
-        }
+        var snapshot = NetworkPerformanceSampler.Current;
+        _downloadBytesPerSecond = snapshot.DownloadBytesPerSecond;
+        _uploadBytesPerSecond = snapshot.UploadBytesPerSecond;
+        _pingMilliseconds = snapshot.PingMilliseconds;
         SyncUi();
-    }
-
-    private static string? GetDefaultGateway()
-    {
-        try
-        {
-            return NetworkInterface.GetAllNetworkInterfaces()
-                .Where(x => x.OperationalStatus == OperationalStatus.Up && x.NetworkInterfaceType != NetworkInterfaceType.Loopback)
-                .SelectMany(x => x.GetIPProperties().GatewayAddresses)
-                .Select(x => x.Address)
-                .FirstOrDefault(x => !x.Equals(System.Net.IPAddress.Any) && !x.Equals(System.Net.IPAddress.IPv6Any))
-                ?.ToString();
-        }
-        catch { return null; }
     }
 
     private static string FormatRate(double bytesPerSecond)
