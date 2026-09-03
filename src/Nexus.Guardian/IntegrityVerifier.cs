@@ -246,6 +246,11 @@ internal static class IntegrityVerifier
                // а не компонент браузера.
                relative.Equals("NexusMonach-Setup.exe", StringComparison.OrdinalIgnoreCase) ||
                relative.StartsWith("Data/", StringComparison.OrdinalIgnoreCase) ||
+               // Рантайм-состояние лаунчера (метки сплэш-эстафеты, сессии,
+               // карантин обновлений) — инфраструктура, не компоненты браузера.
+               // В portable-режиме этот каталог живёт прямо в установке, и без
+               // исключения каждая метка превращалась бы в «неучтённый файл».
+               relative.StartsWith("Guardian/", StringComparison.OrdinalIgnoreCase) ||
                // Служебное состояние внешних инструментов разработки не входит в
                // поставку и не влияет на поведение браузера — каталог .mimosa
                // исключается на любом уровне вложенности: инструмент может

@@ -215,19 +215,21 @@
                     Foreground="{StaticResource AccentBrush}" ToolTip="Планировщик задач и защищённый обмен (вертикальная панель)"
                     Click="ShowPlanner_Click" />
 
-            <!-- Индикатор загрузок на месте кнопки микрофона -->
+            <!-- Индикатор загрузок на месте кнопки микрофона.
+                 Спокойная рамка в стиле тулбара: жёлтая рамка читалась как
+                 предупреждение об ошибке (замечание с пользовательских скринов). -->
             <Border x:Name="DownloadsIndicator" Grid.Column="9" Margin="4,8,4,8" Padding="9,0"
                     MinWidth="48" CornerRadius="12" Background="{StaticResource PanelBrush}"
-                    BorderBrush="{StaticResource GoldBrush}" BorderThickness="1" Cursor="Hand"
+                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Cursor="Hand"
                     Visibility="Visible" ToolTip="Загрузки — наведите, чтобы открыть список"
                     MouseEnter="DownloadsIndicator_MouseEnter" MouseLeave="DownloadsIndicator_MouseLeave">
                 <StackPanel Orientation="Horizontal">
                     <TextBlock x:Name="DownloadsIndicatorGlyph" Text="&#xE896;"
                                FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12"
-                               Foreground="{StaticResource GoldBrush}" VerticalAlignment="Center" />
+                               Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center" />
                     <TextBlock x:Name="DownloadsIndicatorText" Text="0" Margin="5,0,0,0"
                                FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"
-                               Foreground="{StaticResource GoldBrush}" />
+                               Foreground="{StaticResource AccentBrush}" />
                 </StackPanel>
             </Border>
 

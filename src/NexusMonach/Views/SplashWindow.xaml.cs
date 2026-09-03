@@ -52,18 +52,31 @@ public partial class SplashWindow : Window
         };
     }
 
-    private void Grid_Loaded(object sender, RoutedEventArgs e)
+    private async void Grid_Loaded(object sender, RoutedEventArgs e)
     {
         ((Storyboard)FindResource("Pulse")).Begin(this, true);
         _comet.Start();
         // Эстафета с Guardian: круглое окно лаунчера закрывается только после
-        // этой метки — старт выглядит одним непрерывным окном.
+        // этой метки — старт выглядит одним непрерывным окном. Одна неудачная
+        // запись (файл на мгновение занят антивирусом/индексатором) стоила бы
+        // десяти секунд двойного сплэша — Guardian держит своё окно до метки.
         try
         {
             var guardian = Path.Combine(Services.AppPaths.AppRoot, "Guardian");
             Directory.CreateDirectory(guardian);
-            File.WriteAllText(Path.Combine(guardian, "splash-ready.json"),
-                DateTimeOffset.UtcNow.ToString("O"));
+            var marker = Path.Combine(guardian, "splash-ready.json");
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    File.WriteAllText(marker, DateTimeOffset.UtcNow.ToString("O"));
+                    return;
+                }
+                catch when (attempt < 5)
+                {
+                    await Task.Delay(150);
+                }
+            }
         }
         catch { /* Guardian переживёт отсутствие метки — просто закроет окно по таймауту */ }
     }

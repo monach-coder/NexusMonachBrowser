@@ -75,6 +75,7 @@ public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
     private string? _pendingHttpFallback;
     private string? _upgradedHttpsUrl;
     private string? _httpAllowedOnce;
+    private string? _webAuthnOfferedFor;
 
     public BrowserTab(string initialUrl, bool isPrivate, bool navigateOnInitialize = true)
     {
@@ -308,6 +309,11 @@ public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
         // копирование в Markdown и захват видео-фрагментов.
         await core.AddScriptToExecuteOnDocumentCreatedAsync(Services.AnnotationsBridge.Script);
 
+        // Пасскеи: WebView2 не поддерживает WebAuthn/Windows Hello —
+        // при отказе credential-API страница получит понятное предложение
+        // открыть её во внешнем браузере вместо молчаливой ошибки.
+        await core.AddScriptToExecuteOnDocumentCreatedAsync(Services.WebAuthnFallback.Script);
+
         if (Directory.Exists(AppPaths.WebAssets))
         {
             core.SetVirtualHostNameToFolderMapping(
@@ -486,6 +492,7 @@ public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
             {
                 _pendingHttpFallback = null;
                 _upgradedHttpsUrl = null;
+                _webAuthnOfferedFor = null;
                 NavigationSucceeded?.Invoke(this, EventArgs.Empty);
                 _ = ConfigureStartPageAsync();
                 _ = ApplySavedHighlightsAsync();
@@ -621,6 +628,12 @@ public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
 
     private void HandleWebMessage(CoreWebView2WebMessageReceivedEventArgs e)
     {
+        // Пасскей отказал на обычном сайте (WebAuthn в WebView2 не работает —
+        // ограничение платформы). Обрабатывается до фильтра внутренних страниц:
+        // источник — любой https.
+        if (HandleWebAuthnFailure(e))
+            return;
+
         // Мост аннотирования приходит с любых страниц: сообщения nexus-*
         // валидируются отдельно (источник обязан совпадать с текущей вкладкой).
         if (HandleAnnotationMessage(e))
@@ -688,6 +701,53 @@ public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
     /// заметка, копия в Markdown, захваченный видео-фрагмент. Источник
     /// сообщения обязан совпадать с адресом текущей вкладки.
     /// </summary>
+    /// <summary>
+    /// Сайт вызвал credential-API и получил отказ: в WebView2 нет
+    /// WebAuthn/Windows Hello (ограничение платформы Microsoft).
+    /// Предлагаем открыть страницу во внешнем браузере — там пасскеи
+    /// работают нативно. Один раз на навигацию, только https.
+    /// </summary>
+    private bool HandleWebAuthnFailure(CoreWebView2WebMessageReceivedEventArgs e)
+    {
+        try
+        {
+            using var json = JsonDocument.Parse(e.WebMessageAsJson);
+            var root = json.RootElement;
+            if (!root.TryGetProperty("kind", out var kindNode) ||
+                kindNode.GetString() != Services.WebAuthnFallback.MessageKind)
+                return false;
+
+            // Открываем ТОЛЬКО текущий https-адрес вкладки (Core.Source);
+            // содержимое веб-сообщения никуда не передаётся.
+            var raw = Core?.Source;
+            if (string.IsNullOrWhiteSpace(raw) ||
+                !Uri.TryCreate(raw, UriKind.Absolute, out var page) ||
+                page.Scheme != Uri.UriSchemeHttps)
+                return true;
+            if (_webAuthnOfferedFor is not null &&
+                _webAuthnOfferedFor.Equals(raw, StringComparison.OrdinalIgnoreCase))
+                return true; // уже предложили на этой странице — не спамим
+
+            _webAuthnOfferedFor = raw;
+            CrashReportService.AddBreadcrumb("webauthn", "fallback-offered");
+            var owner = Window.GetWindow(View);
+            var message =
+                "Сайт использует пасскеи (Windows Hello), но движок WebView2 их " +
+                "не поддерживает — ограничение платформы Microsoft.\n\n" +
+                "Открыть эту страницу во внешнем браузере, где пасскеи работают?";
+            var result = owner is null
+                ? GlassDialogWindow.Show(message, "Пасскеи недоступны", MessageBoxButton.YesNo, MessageBoxImage.Information)
+                : GlassDialogWindow.Show(owner, message, "Пасскеи недоступны", MessageBoxButton.YesNo, MessageBoxImage.Information);
+            if (result == MessageBoxResult.Yes)
+                Services.ExternalBrowser.OpenHttps(page);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private bool HandleAnnotationMessage(CoreWebView2WebMessageReceivedEventArgs e)
     {
         try
