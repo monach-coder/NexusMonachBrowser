@@ -9,8 +9,8 @@ namespace NexusMonach.Services;
 internal static class ExternalBrowser
 {
     [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern IntPtr ShellExecuteW(IntPtr hwnd, string operation, string file,
-        string parameters, string directory, int showCommand);
+    private static extern IntPtr ShellExecuteW(IntPtr hwnd, string? operation, string file,
+        string? parameters, string? directory, int showCommand);
 
     private const int SwShowNormal = 1;
 
