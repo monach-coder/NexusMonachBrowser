@@ -392,7 +392,7 @@ internal sealed class VideoDubbingDiagnosticLog : IAsyncDisposable
     {
         try
         {
-            var directory = Path.Combine(AppContext.BaseDirectory,
+            var directory = Path.Combine(AppPaths.AppRoot,
                 "Diagnostics", "VideoDubbing");
             Directory.CreateDirectory(directory);
             FilePath = Path.Combine(directory,

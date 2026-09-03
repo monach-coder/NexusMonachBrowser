@@ -323,8 +323,21 @@ internal static class SilentUpdateCoordinator
             ApplyVerifiedDirectory(staging, target);
             var result = IntegrityVerifier.Verify(target, full: true);
             if (result.State != IntegrityState.Verified)
-                throw new CryptographicException("Проверка установленного обновления не прошла: " +
-                                                 string.Join("; ", result.Problems.Take(8)));
+            {
+                // Неучтённые файлы (сюда же пишет диагностика рантайма и всё, что
+                // пользователь положил в каталог руками) — не подмена: выносим их
+                // в карантин и перепроверяем. Прецедент 03.09: video-dubbing-*.jsonl
+                // и посторонний .md в каталоге установки превратили каждое
+                // применение обновления в молчаливый отказ запуска.
+                // Прерывают обновление только настоящие повреждения: неучтённый
+                // ИСПОЛНЯЕМЫЙ файл, отсутствие/хеш компонентов.
+                var quarantined = QuarantineUnaccountedFiles(guardianRoot, target, result.Problems);
+                if (quarantined > 0)
+                    result = IntegrityVerifier.Verify(target, full: true);
+                if (result.State != IntegrityState.Verified)
+                    throw new CryptographicException("Проверка установленного обновления не прошла: " +
+                                                     string.Join("; ", result.Problems.Take(8)));
+            }
             File.Delete(PendingPath(guardianRoot));
             // Каталог staging больше не нужен: обновление применено и проверено.
             try { Directory.Delete(staging, recursive: true); } catch { }
@@ -384,6 +397,49 @@ internal static class SilentUpdateCoordinator
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             entry.ExtractToFile(path, overwrite: true);
         }
+    }
+
+    /// <summary>
+    /// Выносит «неучтённые» файлы из каталога установки в карантин
+    /// (Guardian\Updates\quarantine\&lt;время&gt;\), чтобы посторонний файл
+    /// не блокировал применение обновления. Возвращает число вынесенных.
+    /// </summary>
+    private static int QuarantineUnaccountedFiles(string guardianRoot, string target,
+        IReadOnlyList<string> problems)
+    {
+        const string prefix = "Неучтённый файл: ";
+        var moved = 0;
+        var quarantineRoot = Path.Combine(guardianRoot, "Updates", "quarantine",
+            DateTime.UtcNow.ToString("yyyyMMdd-HHmmss"));
+        foreach (var problem in problems)
+        {
+            if (!problem.StartsWith(prefix, StringComparison.Ordinal)) continue;
+            var relative = problem[prefix.Length..];
+            try
+            {
+                var source = Path.GetFullPath(Path.Combine(target,
+                    relative.Replace('/', Path.DirectorySeparatorChar)));
+                // «Неучтённый исполняемый файл» сюда не попадает: другой префикс
+                // и другая угроза — такие файлы должны прерывать обновление.
+                if (!IsChildOf(target, source) || !File.Exists(source)) continue;
+                var destination = Path.Combine(quarantineRoot,
+                    relative.Replace('/', Path.DirectorySeparatorChar));
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.Move(source, destination);
+                moved++;
+            }
+            catch { /* Не получилось вынести — проверка снова его покажет. */ }
+        }
+        if (moved > 0)
+        {
+            try
+            {
+                File.AppendAllText(Path.Combine(guardianRoot, "Updates", "quarantine.log"),
+                    $"{DateTimeOffset.Now:O} в карантин вынесено файлов: {moved}" + Environment.NewLine);
+            }
+            catch { }
+        }
+        return moved;
     }
 
     private static void ApplyVerifiedDirectory(string staging, string target)
