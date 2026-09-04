@@ -10,6 +10,23 @@ internal static class Program
     private static readonly string GuardianRoot = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NexusMonach", "Guardian");
 
+    /// <summary>
+    /// Журнал лаунчера: пишется ДО любого диалога. Прецедент 03.09: процесс
+    /// сидел 8 часов на невидимом MessageBox — что за ошибка его вызвала,
+    /// осталось неизвестным, потому что писали только в окно. Теперь каждая
+    /// ветка с диалогом оставляет след на диске.
+    /// </summary>
+    private static void LogLauncherEvent(string context, string detail)
+    {
+        try
+        {
+            Directory.CreateDirectory(GuardianRoot);
+            File.AppendAllText(Path.Combine(GuardianRoot, "launcher-events.log"),
+                $"{DateTimeOffset.Now:O} [{context}] {detail}{Environment.NewLine}");
+        }
+        catch { /* журнал не должен ломать запуск */ }
+    }
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -108,6 +125,8 @@ internal static class Program
                 waitForPreviousInstance ? TimeSpan.FromSeconds(45) : TimeSpan.Zero);
             if (singleInstance is null)
             {
+                LogLauncherEvent("single-instance",
+                    waitForPreviousInstance ? "предыдущий экземпляр не завершился за 45 с" : "уже запущен");
                 MessageBox.Show(
                     waitForPreviousInstance
                         ? "Предыдущий экземпляр Nexus Monach не завершился за 45 секунд. Перезапуск отменён."
@@ -128,6 +147,7 @@ internal static class Program
                 return 70;
             }
 
+            LogLauncherEvent("launch-failed", ex.ToString());
             MessageBox.Show("Nexus Guardian не смог выполнить безопасный запуск.\n\n" + ex.Message,
                 "Nexus Guardian", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 70;
@@ -243,11 +263,14 @@ internal static class Program
 
             var browserStartedUtc = DateTime.UtcNow;
             using var process = Process.Start(info) ?? throw new InvalidOperationException("Windows не создал процесс браузера.");
-            // Эстафета без шва: круглое окно Guardian закрывается только когда
-            // круглый сплэш браузера отметил свою готовность.
-            WaitForSplashHandoff(splash, process, browserStartedUtc);
+            // Один сплэш на весь старт — тот, что с глобусом. Окно Guardian —
+            // только индикатор долгой проверки целостности ДО рождения браузера;
+            // в момент старта процесса браузера оно закрывается безоговорочно,
+            // чтобы два круглых окна никогда не висели вместе (замечание
+            // пользователя 03–04.09: «стартовал один — именно с глобусом»).
             splash?.CloseGraceful();
             splash = null;
+            _ = browserStartedUtc;
             process.WaitForExit();
             var clean = ReadCleanSession(sessionId);
             var normalExit = process.ExitCode == 0 && clean;
@@ -261,29 +284,6 @@ internal static class Program
         finally
         {
             splash?.CloseGraceful();
-        }
-    }
-
-    /// <summary>
-    /// Ждём маркер splash-ready.json: его пишет круглый сплэш браузера в момент
-    /// показа. Пока маркера нет, окно Guardian остаётся на экране — старт
-    /// выглядит одним непрерывным круглым окном, а не миганием двух.
-    /// </summary>
-    private static void WaitForSplashHandoff(GuardianSplash? splash, Process browser, DateTime browserStartedUtc)
-    {
-        if (splash is null) return;
-        var marker = Path.Combine(GuardianRoot, "splash-ready.json");
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (DateTime.UtcNow < deadline && !browser.HasExited)
-        {
-            try
-            {
-                if (File.GetLastWriteTimeUtc(marker) >= browserStartedUtc.AddSeconds(-1))
-                    return;
-            }
-            catch { /* маркер ещё не создан */ }
-            Application.DoEvents();
-            Thread.Sleep(50);
         }
     }
 

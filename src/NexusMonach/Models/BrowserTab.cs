@@ -572,24 +572,39 @@ public sealed partial class BrowserTab : INotifyPropertyChanged, IDisposable
         if (!needsOurPrompt)
             return;
 
-        if (!TryGetExactWebOrigin(e.Uri, out var requestingOrigin) ||
-            !TryGetExactWebOrigin(Core?.Source, out var topLevelOrigin) ||
-            !OriginsEqual(requestingOrigin, topLevelOrigin) ||
-            requestingOrigin.Scheme != Uri.UriSchemeHttps ||
-            requestingOrigin.Host.Equals("nexus.local", StringComparison.OrdinalIgnoreCase))
+        // Чтение буфера допустимо и из ВСТРОЕННОЙ страницы (iframe): богатые
+        // редакторы форумов и конструкторов живут во фреймах, и молчаливый
+        // отказ ломал вставку текста между страницами (замечание 04.09). Такой
+        // запрос получает тот же диалог — но с пометкой встроенного источника.
+        Uri embeddedOrigin = null!, requestingOrigin = null!, topLevelOrigin = null!;
+        var embeddedClipboardAllowed =
+            e.PermissionKind == CoreWebView2PermissionKind.ClipboardRead &&
+            TryGetExactWebOrigin(e.Uri, out embeddedOrigin) &&
+            embeddedOrigin.Scheme == Uri.UriSchemeHttps &&
+            !embeddedOrigin.Host.Equals("nexus.local", StringComparison.OrdinalIgnoreCase);
+
+        if (!embeddedClipboardAllowed &&
+            (!TryGetExactWebOrigin(e.Uri, out requestingOrigin) ||
+             !TryGetExactWebOrigin(Core?.Source, out topLevelOrigin) ||
+             !OriginsEqual(requestingOrigin, topLevelOrigin) ||
+             requestingOrigin.Scheme != Uri.UriSchemeHttps ||
+             requestingOrigin.Host.Equals("nexus.local", StringComparison.OrdinalIgnoreCase)))
         {
             e.State = CoreWebView2PermissionState.Deny;
             e.Handled = true;
             return;
         }
 
-        var origin = requestingOrigin.GetLeftPart(UriPartial.Authority);
+        var origin = (embeddedClipboardAllowed ? embeddedOrigin : requestingOrigin)
+            .GetLeftPart(UriPartial.Authority);
         var permission = e.PermissionKind switch
         {
             CoreWebView2PermissionKind.Camera => "доступ к камере",
             CoreWebView2PermissionKind.Microphone => "доступ к микрофону",
             CoreWebView2PermissionKind.Geolocation => "местоположение",
-            CoreWebView2PermissionKind.ClipboardRead => "чтение буфера обмена",
+            CoreWebView2PermissionKind.ClipboardRead => embeddedClipboardAllowed
+                ? "чтение буфера обмена (встроенный редактор)"
+                : "чтение буфера обмена",
             CoreWebView2PermissionKind.Notifications => "уведомления",
             CoreWebView2PermissionKind.FileReadWrite => "чтение и изменение выбранных файлов",
             CoreWebView2PermissionKind.LocalFonts => "список локальных шрифтов",

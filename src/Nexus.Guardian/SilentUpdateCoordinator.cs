@@ -147,6 +147,12 @@ internal static class SilentUpdateCoordinator
     /// <summary>Запуск скрытой проверки обновления с записью прогресса.</summary>
     public static async Task<int> RunSplashCheckAsync(string applicationRoot, string guardianRoot)
     {
+        // Жёсткий предел всей проверки: скачать+распаковать+хешировать гигабайты —
+        // минуты, но не ЧАСЫ. Прецеденты 03–04.09: скрытая проверка зависала
+        // (верификация стейджинга без дедлайна), её процесс жил сутями, а окно
+        // Guardian держало мьютекс — браузер становился незапускаем. Таймаут
+        // честно пишется в прогресс; следующая проверка начнёт заново.
+        using var watchdog = new CancellationTokenSource(TimeSpan.FromMinutes(20));
         try
         {
             Directory.CreateDirectory(Path.Combine(guardianRoot, "Updates"));
@@ -159,7 +165,7 @@ internal static class SilentUpdateCoordinator
             }
             File.WriteAllText(throttle, DateTimeOffset.UtcNow.ToString("O"));
             WriteSplashProgress(guardianRoot, "проверяю обновления", -1, string.Empty, false, false, null);
-            await CheckAndStageAsync(applicationRoot, guardianRoot, CancellationToken.None,
+            await CheckAndStageAsync(applicationRoot, guardianRoot, watchdog.Token,
                 progress => WriteSplashProgress(guardianRoot,
                     progress.Stage, progress.Percent, progress.Detail, false, false, null));
             var found = TryReadPending(guardianRoot, out var pending) && pending is not null;
@@ -167,6 +173,12 @@ internal static class SilentUpdateCoordinator
                 found ? "применю при следующем запуске" : string.Empty,
                 done: true, found, pending?.Version);
             return 0;
+        }
+        catch (OperationCanceledException) when (watchdog.IsCancellationRequested)
+        {
+            WriteSplashProgress(guardianRoot, "проверка прервана", -1,
+                "превышен лимит 20 минут — попробую в следующий раз", true, false, null);
+            return 6;
         }
         catch (Exception ex)
         {
