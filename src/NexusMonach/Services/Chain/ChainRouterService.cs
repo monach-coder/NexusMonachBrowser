@@ -346,7 +346,7 @@ public static class ChainRouterService
                 // Прямое соединение: домен разрешается лестницей — системный
                 // резолвер с коротким окном, затем DoH по IP-литералу (локальный
                 // DNS вообще не участвует; заодно нет утечки DNS провайдеру).
-                var addresses = await ResolveHostAsync(host);
+                var addresses = await ResolveHostCachedAsync(host);
                 if (addresses.Length == 0) throw new SocketException((int)SocketError.HostNotFound);
                 TcpClient? connected = null;
                 foreach (var address in addresses)
@@ -373,14 +373,73 @@ public static class ChainRouterService
     }
 
     /// <summary>
-    /// Лестница разрешения имён для прямого маршрута. Первый этаж — системный
-    /// резолвер с окном 2 секунды: на здоровой машине ответ мгновенный.
-    /// Второй этаж — DNS-over-HTTPS к 1.1.1.1 по IP-литералу: спасает, когда
-    /// локальный DNS перехвачен, отфильтрован по приложениям или душит AAAA.
+    /// DNS-кэш роутера: страница — это 15–40 хостов, и без кэша каждый
+    /// повторный визит платил за DNS ту же цену, что первый, а параллельные
+    /// соединения на один хост гоняли лестницу каждый сам за себя.
+    /// Успех кэшируется на 2 минуты, отказ — на 15 секунд (мгновенный
+    /// повторный отказ вместо шестикратного перебора этажей); запросы
+    /// одного хоста дедуплицируются в один полёт.
+    /// </summary>
+    private sealed record DnsAnswer(IPAddress[] Addresses, DateTimeOffset ExpiryUtc, bool Negative);
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DnsAnswer> DnsCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, Task<IPAddress[]>> DnsInFlight =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private static Task<IPAddress[]> ResolveHostCachedAsync(string host)
+    {
+        if (IPAddress.TryParse(host, out var literal))
+            return Task.FromResult(new[] { literal });
+        var now = DateTimeOffset.UtcNow;
+        if (DnsCache.TryGetValue(host, out var cached))
+        {
+            if (cached.ExpiryUtc > now)
+            {
+                if (cached.Negative)
+                    return Task.FromException<IPAddress[]>(
+                        new SocketException((int)SocketError.HostNotFound));
+                return Task.FromResult(cached.Addresses);
+            }
+            DnsCache.TryRemove(host, out _);
+        }
+        return DnsInFlight.GetOrAdd(host, _ => ResolveAndCacheAsync(host));
+    }
+
+    private static async Task<IPAddress[]> ResolveAndCacheAsync(string host)
+    {
+        try
+        {
+            var addresses = await ResolveHostAsync(host);
+            DnsCache[host] = new DnsAnswer(addresses, DateTimeOffset.UtcNow.AddSeconds(120), Negative: false);
+            return addresses;
+        }
+        catch
+        {
+            DnsCache[host] = new DnsAnswer([], DateTimeOffset.UtcNow.AddSeconds(15), Negative: true);
+            throw;
+        }
+        finally
+        {
+            DnsInFlight.TryRemove(host, out _);
+        }
+    }
+
+    /// <summary>
+    /// Лестница разрешения имён для прямого маршрута — с забегом на старте.
+    /// Системный резолвер и DoH стартуют ОДНОВРЕМЕННО: на здоровой машине
+    /// система отвечает мгновенно и DoH тихо завершается вхолостую; когда
+    /// локальный DNS перехвачен или душится VPN-фильтром, DoH вырывается
+    /// вперёд, не выжидая двухсекундного окна первого этажа. Следующие
+    /// этажи (TCP53 → UDP53 → DoH фильтра → медленный системный) идут
+    /// последовательно, как раньше.
     /// </summary>
     private static async Task<IPAddress[]> ResolveHostAsync(string host)
     {
         if (IPAddress.TryParse(host, out var literal)) return [literal];
+
+        var dohTask = ResolveViaDohAsync(host);
         try
         {
             using var window = new CancellationTokenSource(TimeSpan.FromSeconds(2));
@@ -391,7 +450,7 @@ public static class ChainRouterService
             if (all.Length > 0) return all;
         }
         catch (Exception ex) { RouterDebugLog("dns system fail: " + ex.GetType().Name); }
-        var viaDoh = await ResolveViaDohAsync(host);
+        var viaDoh = await dohTask;
         if (viaDoh.Length > 0)
         {
             CrashReportService.AddBreadcrumb("chain-router", "dns-via-doh");
