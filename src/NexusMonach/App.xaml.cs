@@ -299,6 +299,15 @@ public partial class App : Application
                         $"Nexus обновлён до версии {updated}.",
                         VoiceAnnouncementPriority.Important);
                 }
+                // Обновление не встало: Guardian откатился на текущую версию —
+                // честно сообщаем, браузер работает, проверка повторится.
+                else if (GuardianRuntime.UpdateFailedVersion is { Length: > 0 } failed)
+                {
+                    CrashReportService.AddBreadcrumb("startup", "update-failed-rollback-" + failed);
+                    VoiceAssistantService.Announce(
+                        $"Обновление до версии {failed} не удалось. Откатился на текущую, работаю как есть.",
+                        VoiceAnnouncementPriority.Important);
+                }
                 VoiceAssistantService.Announce(
                     GuardianRuntime.IsSafeMode
                         ? "Nexus запущен в безопасном режиме."
@@ -361,6 +370,10 @@ public partial class App : Application
                     Services.EgressCanaryService.Start();
                     // Контроль места на системном диске: голоду диска — голосом.
                     Services.DiskSpaceWatchdog.Start();
+                    // Стартовый самотест механизмов: статусы дописываются в
+                    // общий отчёт Guardian startup-health, проблемы — голосом;
+                    // запуск браузера самотест никогда не блокирует.
+                    Services.StartupSelfTestService.Start();
                 }
             }
             if (smokeSelfTest)

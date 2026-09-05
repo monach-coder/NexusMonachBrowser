@@ -177,16 +177,47 @@ internal static class Program
             return 2;
         }
 
-        if (IntegrityVerifier.UsesEmbeddedTrust &&
-            SilentUpdateCoordinator.TryLaunchPendingApply(root, GuardianRoot, relaunch: true))
-            return 0;
-
         GuardianSplash? splash = null;
         try
         {
+            // ЗАКОН СТАРТА: верификация ВСЕГДА первая, до любой ветки — включая
+            // применение накопленного обновления. Прецедент 04–05.09: pending-ветка
+            // стояла до Verify, лаунчер завершался, ни разу не проверив установку,
+            // а браузер запускался апликатором без сплэша, сессии, проверки
+            // обновлений и краш-мониторинга — тихая подмена осталась бы незамеченной.
             var integrity = VerifyWithSplash(root, full, ref splash);
             WriteIntegrityIncident(integrity);
-            if (!integrity.CanLaunch)
+
+            // Стартовый отчёт самодиагностики: локальные проверки механизмов
+            // (WebView2, диск, права записи, состояние обновления) — в
+            // Guardian\Reports и кратким статусом браузеру. Пишется при любом
+            // исходе запуска, включая блокировку.
+            var health = StartupHealthCheck.Run(root, GuardianRoot, integrity);
+
+            var pendingReady = IntegrityVerifier.UsesEmbeddedTrust &&
+                SilentUpdateCoordinator.IsPendingReady(root, GuardianRoot);
+            var action = DecideLaunch(integrity, pendingReady);
+            LogLauncherEvent("launch-decision",
+                $"integrity={integrity.CompactStatus}; pending={pendingReady}; " +
+                $"action={action}; health={health.Compact}");
+
+            if (action == LaunchAction.ApplyPendingUpdate)
+            {
+                splash?.SetStatus(integrity.CanLaunch
+                    ? "Применяю обновление" : "Восстанавливаю обновлением");
+                splash?.SetDetail("браузер перезапустится сам");
+                if (SilentUpdateCoordinator.TryLaunchPendingApply(root, GuardianRoot, relaunch: true))
+                {
+                    splash?.CloseGraceful();
+                    return 0;
+                }
+                // Стейджинг умер между проверкой и запуском апликатора —
+                // пересчитываем решение уже без него.
+                action = DecideLaunch(integrity, pendingReady: false);
+                LogLauncherEvent("launch-decision", $"apply-fallback: action={action}");
+            }
+
+            if (action == LaunchAction.Block)
             {
                 splash?.CloseGraceful();
                 splash = null;
@@ -260,6 +291,7 @@ internal static class Program
             info.Environment["NEXUS_INTEGRITY_STATUS"] = integrity.CompactStatus;
             info.Environment["NEXUS_SAFE_MODE"] = safeMode ? "1" : "0";
             info.Environment["NEXUS_DISABLE_GPU"] = disableGpuOnly ? "1" : "0";
+            info.Environment["NEXUS_STARTUP_HEALTH"] = health.Compact;
 
             var browserStartedUtc = DateTime.UtcNow;
             using var process = Process.Start(info) ?? throw new InvalidOperationException("Windows не создал процесс браузера.");
@@ -286,6 +318,22 @@ internal static class Program
             splash?.CloseGraceful();
         }
     }
+
+    /// <summary>
+    /// Решение о запуске после верификации (чистая функция для тестов).
+    /// Браузер запускается только при целостности, подтверждённой Verify.
+    /// Валидный pending применяется и при нарушенной целостности — это
+    /// самолечение: подписанное обновление заменит повреждённые файлы.
+    /// Без лечения и без целостности запуск запрещён.
+    /// </summary>
+    internal static LaunchAction DecideLaunch(IntegrityResult integrity, bool pendingReady) =>
+        (integrity.CanLaunch, pendingReady) switch
+        {
+            (true, true) => LaunchAction.ApplyPendingUpdate,
+            (true, false) => LaunchAction.LaunchBrowser,
+            (false, true) => LaunchAction.ApplyPendingUpdate,
+            (false, false) => LaunchAction.Block
+        };
 
     /// <summary>
     /// Проверка целостности идёт до запуска браузера и занимает десятки секунд

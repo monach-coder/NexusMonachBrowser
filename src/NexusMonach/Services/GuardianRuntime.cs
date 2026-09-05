@@ -17,5 +17,20 @@ public static class GuardianRuntime
     public static string? UpdatedToVersion =>
         Environment.GetEnvironmentVariable("NEXUS_UPDATED_VERSION");
 
+    /// <summary>
+    /// Версия, обновление до которой НЕ встало: Guardian откатился на
+    /// текущую версию и просит честно об этом сказать.
+    /// </summary>
+    public static string? UpdateFailedVersion =>
+        Environment.GetEnvironmentVariable("NEXUS_UPDATE_FAILED");
+
+    /// <summary>
+    /// Краткий вердикт стартовой самодиагностики Guardian («ok»,
+    /// «warn:disk,webview2», «fail:integrity») — из последнего отчёта
+    /// Guardian\Reports\startup-health-*.json.
+    /// </summary>
+    public static string StartupHealth { get; } =
+        Environment.GetEnvironmentVariable("NEXUS_STARTUP_HEALTH") ?? "unknown";
+
     public static bool IsGuardianLaunch => !string.IsNullOrWhiteSpace(SessionId);
 }

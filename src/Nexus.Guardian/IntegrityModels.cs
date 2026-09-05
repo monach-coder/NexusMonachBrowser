@@ -77,4 +77,29 @@ internal sealed class PendingGuardianUpdate
     public string StagingDirectory { get; set; } = string.Empty;
     public string TargetDirectory { get; set; } = string.Empty;
     public DateTimeOffset CreatedUtc { get; set; }
+
+    /// <summary>
+    /// Число неудачных попыток применения. Превысив лимит, апликатор выносит
+    /// pending в карантин и запускает браузер на текущей версии — вечная
+    /// петля «старт → апликатор → падение» (прецедент 04–05.09) исключена.
+    /// </summary>
+    public int Attempts { get; set; }
+    public DateTimeOffset? LastAttemptUtc { get; set; }
+    public string? LastError { get; set; }
+}
+
+/// <summary>Действие лаунчера после верификации целостности.</summary>
+internal enum LaunchAction
+{
+    /// <summary>Обычный запуск браузера.</summary>
+    LaunchBrowser,
+
+    /// <summary>
+    /// Применить накопленное обновление (апликатор); при нарушенной
+    /// целостности — самолечение: обновление заменит битые файлы.
+    /// </summary>
+    ApplyPendingUpdate,
+
+    /// <summary>Запуск запрещён: целостность нарушена, лечения нет.</summary>
+    Block
 }

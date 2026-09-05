@@ -27,6 +27,121 @@ public partial class GuardianCenterWindow : Window
 
     private GuardianReportSnapshot? SelectedReport => ReportsList.SelectedItem as GuardianReportSnapshot;
 
+    private static string StartupHealthReportsRoot => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "NexusMonach", "Guardian", "Reports");
+
+    private static string? LatestStartupHealthReport()
+    {
+        return Directory.Exists(StartupHealthReportsRoot)
+            ? Directory.GetFiles(StartupHealthReportsRoot, "startup-health-*.json")
+                .OrderByDescending(x => x, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault()
+            : null;
+    }
+
+    /// <summary>
+    /// Карточка «Самодиагностика старта»: вердикт и замечания последнего
+    /// запуска из отчёта Guardian (плюс браузерные проверки, если браузер
+    /// успел их дописать). env-сводка GuardianRuntime показывает вердикт
+    /// текущей сессии, файл — последней.
+    /// </summary>
+    private void RefreshSelfTestStatus()
+    {
+        string verdict;
+        string detail;
+        var brush = (System.Windows.Media.Brush)FindResource("AccentBrush");
+        try
+        {
+            var report = LatestStartupHealthReport();
+            if (report is null)
+            {
+                verdict = "Отчётов самодиагностики пока нет";
+                detail = "Появится после первого запуска через NexusMonach.exe версии 2.9.54+.";
+            }
+            else
+            {
+                using var document = JsonDocument.Parse(File.ReadAllText(report));
+                var root = document.RootElement;
+                var problems = new List<string>();
+                foreach (var section in new[] { "checks", "browserChecks" })
+                {
+                    if (!root.TryGetProperty(section, out var checks)) continue;
+                    foreach (var check in checks.EnumerateArray())
+                    {
+                        var status = check.TryGetProperty("status", out var statusValue)
+                            ? statusValue.GetString() : "ok";
+                        if (status is null or "ok") continue;
+                        var id = check.TryGetProperty("id", out var idValue) ? idValue.GetString() : "?";
+                        problems.Add($"{id}: {status}");
+                    }
+                }
+
+                var fileVerdict = root.TryGetProperty("verdict", out var verdictValue)
+                    ? verdictValue.GetString() : null;
+                verdict = fileVerdict switch
+                {
+                    "ok" => "Все механизмы в норме",
+                    "warn" => $"Замечания: {problems.Count}",
+                    "fail" => $"Сбои: {problems.Count}",
+                    _ => "Вердикт неизвестен"
+                };
+                detail = problems.Count > 0
+                    ? string.Join("; ", problems) + $" · отчёт {Path.GetFileName(report)}"
+                    : "Проблем не найдено · " + Path.GetFileName(report);
+                if (fileVerdict == "fail") brush = System.Windows.Media.Brushes.IndianRed;
+                else if (problems.Count > 0) brush = System.Windows.Media.Brushes.DarkOrange;
+            }
+
+            // Вердикт текущей сессии отличается от последнего отчёта на диске —
+            // не прячем: пользователь должен видеть обе картины.
+            var current = GuardianRuntime.StartupHealth;
+            if (current is not ("ok" or "unknown") && !verdict.Contains(current, StringComparison.Ordinal))
+                detail += $" · эта сессия: {current}";
+        }
+        catch (Exception ex)
+        {
+            verdict = "Отчёт не читается";
+            detail = ex.Message;
+            brush = System.Windows.Media.Brushes.DarkOrange;
+        }
+        SelfTestStatusText.Text = verdict;
+        SelfTestStatusText.Foreground = brush;
+        SelfTestDetailText.Text = detail;
+    }
+
+    /// <summary>
+    /// Показ полного отчёта самодиагностики в панели деталей. Нарочно без
+    /// запуска внешних процессов: путь до отчёта не должен попадать в
+    /// аргументы командной строки ни в каком виде.
+    /// </summary>
+    private void SelfTestOpen_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var report = LatestStartupHealthReport();
+            if (report is null)
+            {
+                GlassDialogWindow.Show(this,
+                    "Отчётов самодиагностики пока нет: они появляются при каждом запуске через NexusMonach.exe (2.9.54+).",
+                    "Nexus Guardian", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            _showingSledopytJournal = false;
+            ReportsList.SelectedItem = null;
+            DetailsBox.Text = "ОТЧЁТ САМОДИАГНОСТИКИ · " + report + Environment.NewLine +
+                              new string('─', 60) + Environment.NewLine +
+                              File.ReadAllText(report);
+            DetailsBox.ScrollToHome();
+        }
+        catch (Exception ex)
+        {
+            CrashReportService.RecordNonFatal("guardian", "self-test-open", ex);
+            GlassDialogWindow.Show(this, "Не удалось прочитать отчёт:\n\n" + ex.Message,
+                "Nexus Guardian", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
     private void RefreshReports()
     {
         var selectedPath = SelectedReport?.FilePath;
@@ -45,7 +160,8 @@ public partial class GuardianCenterWindow : Window
         ReportsList.SelectedItem = _reports.FirstOrDefault(x =>
             string.Equals(x.FilePath, selectedPath, StringComparison.OrdinalIgnoreCase)) ?? _reports.FirstOrDefault();
         if (ReportsList.SelectedItem is null)
-            DetailsBox.Text = "Локальных рапортов пока нет.\n\nНажмите «Создать тестовый рапорт», чтобы проверить весь локальный путь Guardian без аварийного завершения браузера.";
+            DetailsBox.Text = "Локальных рапоротов пока нет.\n\nНажмите «Создать тестовый рапорт», чтобы проверить весь локальный путь Guardian без аварийного завершения браузера.";
+        RefreshSelfTestStatus();
     }
 
     private static string DescribeIntegrity(string status) => status switch

@@ -78,7 +78,27 @@ internal static class SilentUpdateCoordinator
         if (TryReadPending(guardianRoot, out _)) return false; // применится обычным путём
         progress?.Invoke("Проверяю обновления…");
         timeline?.Invoke(new UpdateProgress("Проверяю обновления…", -1, string.Empty));
-        await CheckAndStageAsync(applicationRoot, guardianRoot, cancellationToken, timeline);
+        // Молчаливый отказ проверки — худший исход для диагностики (прецедент
+        // 05.09 14:03: проверка умерла до скачивания, никто не узнал почему).
+        // Причина обязана попасть в прогресс-файл и на сплэш.
+        try
+        {
+            await CheckAndStageAsync(applicationRoot, guardianRoot, cancellationToken, timeline);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            timeline?.Invoke(new UpdateProgress("Проверка не успела за бюджет старта", -1,
+                "догонит фоновая проверка"));
+            WriteSplashProgress(guardianRoot, "проверка прервана стартом", -1,
+                "бюджет старта исчерпан — догонит фоновая", done: true, found: false, null);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            timeline?.Invoke(new UpdateProgress("Обновление не проверено", -1, ex.Message));
+            WriteSplashProgress(guardianRoot, "ошибка проверки", -1, ex.Message, done: true, found: false, null);
+            return false;
+        }
         if (!TryReadPending(guardianRoot, out var pending) || pending is null)
         {
             timeline?.Invoke(new UpdateProgress("Версия актуальна", -1, string.Empty));
@@ -286,6 +306,28 @@ internal static class SilentUpdateCoordinator
         return 0;
     }
 
+    /// <summary>
+    /// Дешёвая проверка наличия применимого pending для решения о запуске
+    /// (без полного хеширования staging — его делает апликатор). Лаунчер
+    /// вызывает до DecideLaunch, чтобы решить: стартовать браузер, применить
+    /// накопленное или лечить установку обновлением.
+    /// </summary>
+    public static bool IsPendingReady(string applicationRoot, string guardianRoot)
+    {
+        try
+        {
+            applicationRoot = NormalizeDirectory(applicationRoot);
+            if (!TryReadPending(guardianRoot, out var pending) || pending is null ||
+                !NormalizeDirectory(pending.TargetDirectory).Equals(applicationRoot,
+                    StringComparison.OrdinalIgnoreCase)) return false;
+            var staging = NormalizeDirectory(pending.StagingDirectory);
+            return IsChildOf(Path.Combine(guardianRoot, "Updates"), staging) &&
+                   File.Exists(Path.Combine(staging, "NexusMonach.exe")) &&
+                   File.Exists(Path.Combine(staging, IntegrityVerifier.ManifestName));
+        }
+        catch { return false; }
+    }
+
     public static bool TryLaunchPendingApply(string applicationRoot, string guardianRoot, bool relaunch)
     {
         try
@@ -316,6 +358,16 @@ internal static class SilentUpdateCoordinator
         catch { return false; }
     }
 
+    /// <summary>
+    /// Решение после неудачной попытки применения: первые две попытки —
+    /// ретрай тем же путём (занятый файл мог освободиться), третья —
+    /// карантин pending и запуск браузера на текущей версии.
+    /// </summary>
+    internal enum ApplyFailureAction { Retry, Quarantine }
+
+    internal static ApplyFailureAction DecideApplyFailure(int attempts) =>
+        attempts >= 3 ? ApplyFailureAction.Quarantine : ApplyFailureAction.Retry;
+
     public static int ApplyPendingUpdate(string guardianRoot, int parentProcessId, bool relaunch)
     {
         if (!TryReadPending(guardianRoot, out var pending) || pending is null) return 2;
@@ -326,12 +378,24 @@ internal static class SilentUpdateCoordinator
             !IsChildOf(Path.Combine(guardianRoot, "Updates"), staging)) return 3;
         if (IntegrityVerifier.Verify(staging, full: true).State != IntegrityState.Verified) return 4;
 
+        // Счётчик попыток переживает процесс: ретраи ограничены, петля
+        // «старт → апликатор → падение» (прецедент 04–05.09) исключена.
+        var attempt = pending.Attempts + 1;
+        pending.Attempts = attempt;
+        pending.LastAttemptUtc = DateTimeOffset.UtcNow;
+        WritePendingAtomically(guardianRoot, pending);
+
+        var rollbackRoot = Path.Combine(guardianRoot, "Updates", "rollback");
         try
         {
             if (parentProcessId > 0)
                 try { Process.GetProcessById(parentProcessId).WaitForExit(30_000); }
                 catch (ArgumentException) { }
 
+            // До первого изменённого файла в target обязана существовать
+            // копия для отката: провал посреди применения больше не оставляет
+            // наполовину обновлённую установку без пути назад.
+            CreateRollback(staging, target, rollbackRoot);
             ApplyVerifiedDirectory(staging, target);
             var result = IntegrityVerifier.Verify(target, full: true);
             if (result.State != IntegrityState.Verified)
@@ -353,6 +417,7 @@ internal static class SilentUpdateCoordinator
             File.Delete(PendingPath(guardianRoot));
             // Каталог staging больше не нужен: обновление применено и проверено.
             try { Directory.Delete(staging, recursive: true); } catch { }
+            DeleteRollback(rollbackRoot);
             if (relaunch)
             {
                 // Перезапуск с меткой версии: браузер голосом сообщит
@@ -369,17 +434,141 @@ internal static class SilentUpdateCoordinator
         }
         catch (Exception ex)
         {
-            // Молчаливый отказ обновления — худший исход для диагностики:
-            // причина обязана остаться на диске для следующего рапорта.
-            try
-            {
-                File.WriteAllText(Path.Combine(guardianRoot, "Updates", "apply-error.log"),
-                    DateTimeOffset.UtcNow.ToString("O") + " " + ex + Environment.NewLine,
-                    new UTF8Encoding(false));
-            }
+            // Причина обязана остаться на диске: append-only, с номером попытки
+            // и версией (раньше WriteAllText стирал историю ошибок применения).
+            AppendApplyError(guardianRoot, attempt, pending.Version, ex);
+            pending.LastError = ex.Message.Length > 500 ? ex.Message[..500] : ex.Message;
+            WritePendingAtomically(guardianRoot, pending);
+
+            // Закон самолечения: сначала рабочее состояние текущей версии,
+            // затем запуск браузера; обновление повторится (до трёх попыток).
+            var restored = TryRestoreRollback(rollbackRoot, target);
+            var working = false;
+            try { working = restored && IntegrityVerifier.Verify(target, full: true).CanLaunch; }
             catch { }
+
+            if (DecideApplyFailure(attempt) == ApplyFailureAction.Quarantine)
+            {
+                QuarantinePending(guardianRoot, pending);
+                DeleteRollback(rollbackRoot);
+            }
+
+            if (working && relaunch)
+            {
+                // Браузер стартует на откаченной старой версии и честно
+                // сообщает о неудачном обновлении; проверка повторится позже.
+                var relaunchInfo = new ProcessStartInfo(Path.Combine(target, "NexusMonach.exe"))
+                {
+                    UseShellExecute = false,
+                    WorkingDirectory = target
+                };
+                relaunchInfo.Environment["NEXUS_UPDATE_FAILED"] = pending.Version;
+                Process.Start(relaunchInfo)?.Dispose();
+                return 7; // обновление не встало, откат выполнен
+            }
             return 5;
         }
+    }
+
+    /// <summary>
+    /// Копия заменяемых файлов текущей установки в Updates\rollback\: каждый
+    /// файл манифеста обновления, существующий в target, плюс контрольные
+    /// файлы Guardian. Провал подготовки отката прерывает применение ДО
+    /// изменения первого файла.
+    /// </summary>
+    internal static void CreateRollback(string staging, string target, string rollbackRoot)
+    {
+        var newManifest = ReadManifest(staging);
+        if (Directory.Exists(rollbackRoot))
+            Directory.Delete(rollbackRoot, recursive: true);
+        Directory.CreateDirectory(rollbackRoot);
+
+        foreach (var entry in newManifest.Files)
+        {
+            if (entry.Pending) continue;
+            var relative = entry.Path.Replace('/', Path.DirectorySeparatorChar);
+            var source = Path.Combine(target, relative);
+            if (!File.Exists(source)) continue;
+            var backup = Path.Combine(rollbackRoot, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(backup)!);
+            File.Copy(source, backup, overwrite: true);
+        }
+
+        foreach (var control in new[]
+                 {
+                     IntegrityVerifier.ManifestName, IntegrityVerifier.SignatureName,
+                     IntegrityVerifier.PublicKeyName, "portable.flag"
+                 })
+        {
+            var source = Path.Combine(target, control);
+            if (File.Exists(source)) File.Copy(source, Path.Combine(rollbackRoot, control), overwrite: true);
+        }
+
+        File.WriteAllText(Path.Combine(rollbackRoot, "rollback-info.json"), JsonSerializer.Serialize(new
+        {
+            schema = 1,
+            createdUtc = DateTimeOffset.UtcNow,
+            pendingVersion = ReadManifest(staging).Version
+        }, JsonOptions));
+    }
+
+    /// <summary>Восстанавливает файлы из rollback поверх target. true — если скопирован хотя бы один.</summary>
+    internal static bool TryRestoreRollback(string rollbackRoot, string target)
+    {
+        try
+        {
+            if (!Directory.Exists(rollbackRoot)) return false;
+            var restored = 0;
+            foreach (var file in Directory.EnumerateFiles(rollbackRoot, "*",
+                         SearchOption.AllDirectories))
+            {
+                if (file.EndsWith("rollback-info.json", StringComparison.OrdinalIgnoreCase)) continue;
+                var relative = Path.GetRelativePath(rollbackRoot, file);
+                var destination = Path.Combine(target, relative);
+                if (!IsChildOf(target, Path.GetFullPath(destination))) continue;
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.Copy(file, destination, overwrite: true);
+                restored++;
+            }
+            return restored > 0;
+        }
+        catch { return false; }
+    }
+
+    private static void DeleteRollback(string rollbackRoot)
+    {
+        try { if (Directory.Exists(rollbackRoot)) Directory.Delete(rollbackRoot, recursive: true); }
+        catch { /* остаток отката не должен ломать запуск */ }
+    }
+
+    /// <summary>
+    /// Выносит неисправный pending в pending-update.rejected.json: петля
+    /// повторных применений прерывается, следующая проверка обновлений
+    /// начнёт заново со свежим стейджингом.
+    /// </summary>
+    internal static void QuarantinePending(string guardianRoot, PendingGuardianUpdate pending)
+    {
+        try
+        {
+            var rejected = Path.Combine(Path.GetDirectoryName(PendingPath(guardianRoot))!,
+                "pending-update.rejected.json");
+            File.WriteAllText(rejected, JsonSerializer.Serialize(pending, JsonOptions),
+                new UTF8Encoding(false));
+            File.Delete(PendingPath(guardianRoot));
+        }
+        catch { /* если не вынеслось — проверка обновлений перепишет pending */ }
+    }
+
+    internal static void AppendApplyError(string guardianRoot, int attempt, string version, Exception ex)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(guardianRoot, "Updates"));
+            File.AppendAllText(Path.Combine(guardianRoot, "Updates", "apply-error.log"),
+                $"{DateTimeOffset.UtcNow:O} attempt={attempt} version={version}: {ex}{Environment.NewLine}",
+                new UTF8Encoding(false));
+        }
+        catch { }
     }
 
     internal static void ExtractArchiveSafely(string archivePath, string destination)
@@ -501,8 +690,23 @@ internal static class SilentUpdateCoordinator
         var temporary = destination + ".nexus-new-" + Guid.NewGuid().ToString("N");
         try
         {
-            File.Copy(source, temporary, overwrite: true);
-            File.Move(temporary, destination, overwrite: true);
+            // Кратковременно занятый файл (антивирус, индексатор поиска —
+            // прецедент UnauthorizedAccessException 04.09) лечится коротким
+            // ретраем с паузой, а не падением всего применения.
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    File.Copy(source, temporary, overwrite: true);
+                    File.Move(temporary, destination, overwrite: true);
+                    return;
+                }
+                catch (Exception ex) when (attempt < 3 &&
+                                           ex is IOException or UnauthorizedAccessException)
+                {
+                    Thread.Sleep(TimeSpan.FromSeconds(2 * attempt));
+                }
+            }
         }
         finally { try { if (File.Exists(temporary)) File.Delete(temporary); } catch { } }
     }

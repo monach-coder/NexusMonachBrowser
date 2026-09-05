@@ -25,6 +25,7 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
@@ -78,6 +79,31 @@
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="1.2*" />
+                    <ColumnDefinition Width="2*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="САМОДИАГНОСТИКА СТАРТА" FontSize="10" Foreground="{StaticResource MutedTextBrush}" />
+                    <TextBlock x:Name="SelfTestStatusText" FontSize="14" FontWeight="SemiBold"
+                               Margin="0,4,12,0" TextWrapping="Wrap" />
+                </StackPanel>
+                <StackPanel Grid.Column="1">
+                    <TextBlock Text="ЗАМЕЧАНИЯ ПОСЛЕДНЕГО ЗАПУСКА" FontSize="10" Foreground="{StaticResource MutedTextBrush}" />
+                    <TextBlock x:Name="SelfTestDetailText" FontSize="12" Margin="0,4,12,0"
+                               TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" />
+                </StackPanel>
+                <StackPanel Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <Button x:Name="SelfTestOpenButton" Content="Показать отчёт" Style="{StaticResource GuardianButton}"
+                            Margin="0" Click="SelfTestOpen_Click" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="3" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
+                BorderThickness="1" CornerRadius="12" Padding="14,11" Margin="0,0,0,16">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1.2*" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
@@ -104,7 +130,7 @@
             </Grid>
         </Border>
 
-        <Grid Grid.Row="3">
+        <Grid Grid.Row="4">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="330" />
                 <ColumnDefinition Width="12" />
@@ -144,7 +170,7 @@
             </Border>
         </Grid>
 
-        <DockPanel Grid.Row="4" Margin="0,16,0,0" LastChildFill="False">
+        <DockPanel Grid.Row="5" Margin="0,16,0,0" LastChildFill="False">
             <WrapPanel DockPanel.Dock="Left">
                 <Button Content="Создать тестовый рапорт" Style="{StaticResource GuardianButton}"
                         Click="CreateTestReport_Click" />
