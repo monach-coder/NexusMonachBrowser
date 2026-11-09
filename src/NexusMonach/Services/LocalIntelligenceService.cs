@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using NexusMonach.Models;
@@ -151,22 +152,28 @@ public static class LocalIntelligenceService
         Func<IReadOnlyList<TranslationSegment>, Task>? batchTranslated = null)
     {
         if (segments.Count == 0) return [];
-        var result = new Dictionary<string, TranslationSegment>(StringComparer.Ordinal);
+        var result = new ConcurrentDictionary<string, TranslationSegment>(StringComparer.Ordinal);
         foreach (var known in LocalTranslationDictionary.TranslateKnown(segments))
             result[known.Id] = known;
 
         if (!AiModelCatalog.TranslationReady)
             throw new InvalidOperationException(AiModelCatalog.MissingTranslationRuntimeMessage);
 
-        // OPUS remains resident in one Node/ONNX process. It returns structured
-        // segments and cannot leak a chat banner or prompt into the page DOM.
+        // OPUS держит два резидентных Node/ONNX воркера (см. TranslationService):
+        // пакеты страницы переводятся параллельно, а структурированный ответ
+        // по-прежнему не может протащить служебный текст в DOM.
         var pending = segments.Where(x => !result.ContainsKey(x.Id) && !LooksRussian(x.Text)).ToArray();
-        foreach (var group in pending.Chunk(12))
+        var groups = pending.Chunk(12).ToArray();
+        await Parallel.ForEachAsync(groups, new ParallelOptions
+        {
+            MaxDegreeOfParallelism = 2,
+            CancellationToken = cancellationToken
+        }, async (group, groupToken) =>
         {
             var completedBatch = new List<TranslationSegment>();
             try
             {
-                var translatedItems = await TranslationService.TranslateSegmentsAsync(group, false, cancellationToken);
+                var translatedItems = await TranslationService.TranslateSegmentsAsync(group, false, groupToken);
                 var sourceById = group.ToDictionary(x => x.Id, StringComparer.Ordinal);
                 foreach (var item in translatedItems)
                     if (sourceById.TryGetValue(item.Id, out var source) && !string.IsNullOrWhiteSpace(item.Text))
@@ -193,10 +200,10 @@ public static class LocalIntelligenceService
 
             // Missing nodes remain original. A later pass benefits from the
             // in-memory phrase cache without corrupting the current page.
-        }
+        });
 
-        return segments.Where(x => result.ContainsKey(x.Id) &&
-                                   !result[x.Id].Text.Equals(x.Text, StringComparison.Ordinal))
+        return segments.Where(x => result.TryGetValue(x.Id, out var ready) &&
+                                   !ready.Text.Equals(x.Text, StringComparison.Ordinal))
             .Select(x => result[x.Id]).ToArray();
     }
 

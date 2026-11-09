@@ -93,25 +93,34 @@ internal static class TrackDubbingComposer
         if (utterances.Count == 0) return [];
         progress?.Report($"реплик оригинала: {utterances.Count}");
 
-        // 2. Перевод целыми предложениями, батчами с контекстом.
+        // 2. Перевод целыми предложениями, батчами с контекстом. Пакеты идут
+        //    параллельно на двух OPUS-воркерах — минутное окно озвучки больше
+        //    не ждёт четыре последовательных круга перевода.
         var translations = new string?[utterances.Count];
-        for (var offset = 0; offset < utterances.Count; offset += 12)
+        var batchOffsets = Enumerable.Range(0, (utterances.Count + 11) / 12)
+            .Select(index => index * 12).ToArray();
+        var translatedCount = 0;
+        await Parallel.ForEachAsync(batchOffsets, new ParallelOptions
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            MaxDegreeOfParallelism = 2,
+            CancellationToken = cancellationToken
+        }, async (offset, batchToken) =>
+        {
             var batch = utterances.Skip(offset).Take(12).ToList();
-            progress?.Report($"перевод {offset + 1}–{offset + batch.Count}");
             var request = batch.Select((item, index) => new TranslationSegment
             {
                 Id = (offset + index).ToString(),
                 Text = item.Text,
                 Language = "en"
             }).ToArray();
-            var translated = await TranslationService.TranslateSegmentsAsync(request, true, cancellationToken);
+            var translated = await TranslationService.TranslateSegmentsAsync(request, true, batchToken);
             foreach (var item in translated)
                 if (int.TryParse(item.Id, out var index) &&
                     index >= 0 && index < translations.Length)
                     translations[index] = item.Text;
-        }
+            var done = Interlocked.Add(ref translatedCount, batch.Count);
+            progress?.Report($"переведено {Math.Min(done, utterances.Count)} / {utterances.Count}");
+        });
 
         // 3. Синтез + подгон под слот.
         var result = new List<TrackDubbedPhrase>();

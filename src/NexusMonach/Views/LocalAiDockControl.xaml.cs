@@ -83,6 +83,15 @@ public partial class LocalAiDockControl : UserControl
         IReadOnlyList<TranslationSegment> interactiveSegments = [];
         try
         {
+            // Прогрев двух OPUS-воркеров идёт параллельно с DOM-захватом:
+            // холодный старт ONNX больше не стоит между пользователем и
+            // первым переведённым фрагментом.
+            var warmupCancellation = _cancellation.Token;
+            _ = Task.Run(async () =>
+            {
+                try { await TranslationService.WarmUpForLiveVideoAsync(false, warmupCancellation); }
+                catch { /* Первый реальный запрос сам поднимет воркеров. */ }
+            });
             articleSegments = await tab.CaptureTranslationSegmentsAsync();
             interactiveSegments = await tab.CaptureInteractiveTranslationSegmentsAsync();
             _cancellation.CancelAfter(PageNarrationPolicy.SelectOperationTimeout(
@@ -92,18 +101,23 @@ public partial class LocalAiDockControl : UserControl
                     "На странице не найдено основное содержание или элементы интерфейса для перевода.");
             await tab.BeginInPageTranslationAsync(articleSegments.Count + interactiveSegments.Count);
 
+            // Статья переводится целиком и параллельно (пакеты по 12 на двух
+            // OPUS-воркерах), пока интерфейс обрабатывается отдельно. Озвучка
+            // всё равно идёт строго в порядке чтения.
+            var articleTranslation = LocalIntelligenceService.TranslateSegmentsAsync(
+                articleSegments, _cancellation.Token);
+
             // В DOM попадают только подписи полей, кнопки, меню и подсказки.
             // Значения input/textarea и содержимое статьи этот путь не меняет.
-            foreach (var group in interactiveSegments.Chunk(12))
-            {
-                _cancellation.Token.ThrowIfCancellationRequested();
-                var translated = await LocalIntelligenceService.TranslateSegmentsAsync(
-                    group, _cancellation.Token);
-                translatedControls += await tab.ApplyInteractiveTranslationSegmentsAsync(
-                    translated, translatedControls, interactiveSegments.Count);
-            }
+            var translatedInterface = await LocalIntelligenceService.TranslateSegmentsAsync(
+                interactiveSegments, _cancellation.Token);
+            translatedControls = await tab.ApplyInteractiveTranslationSegmentsAsync(
+                translatedInterface, 0, interactiveSegments.Count);
             await tab.UpdateSpokenPageTranslationStatusAsync(
                 spokenFragments, articleSegments.Count, translatedControls);
+
+            var translatedArticleById = (await articleTranslation)
+                .ToDictionary(item => item.Id, StringComparer.Ordinal);
 
             // Основная статья переводится в памяти и отдаётся только женскому
             // голосу. Меню, реклама, боковые панели и формы были исключены ещё
@@ -111,10 +125,7 @@ public partial class LocalAiDockControl : UserControl
             foreach (var group in articleSegments.Chunk(8))
             {
                 _cancellation.Token.ThrowIfCancellationRequested();
-                var translated = await LocalIntelligenceService.TranslateSegmentsAsync(
-                    group, _cancellation.Token);
-                var translatedById = translated.ToDictionary(item => item.Id, StringComparer.Ordinal);
-                var narration = group.Select(item => translatedById.TryGetValue(item.Id, out var ready)
+                var narration = group.Select(item => translatedArticleById.TryGetValue(item.Id, out var ready)
                         ? ready.Text
                         : ContainsCyrillic(item.Text) ? item.Text : string.Empty)
                     .Where(text => !string.IsNullOrWhiteSpace(text))

@@ -57,6 +57,13 @@ internal sealed class TrackDubbingSession : IDisposable
             await _tab.PrepareVideoForAnalysisAsync();
             await _tab.EnableVideoDubbingMixAsync();
             await _tab.SetBufferingVeilAsync(true, "Ищу отдельную аудиодорожку…");
+
+            // Whisper и OPUS греются ПАРАЛЛЕЛЬНО с поиском и скачиванием
+            // дорожки: раньше их холодный старт оплачивался внутри первого
+            // окна композиции и съедал половину буферного бюджета.
+            var coreWarmup = Task.WhenAll(
+                WhisperService.WarmUpAsync(WhisperLane.Dubbing, token),
+                TranslationService.WarmUpForLiveVideoAsync(false, token));
             await VideoDubbingVoiceService.WarmUpAsync(token);
 
             // Ищем URL дорожки: сначала мгновенно, потом короткий прогон.
@@ -71,12 +78,49 @@ internal sealed class TrackDubbingSession : IDisposable
             _tap = string.IsNullOrWhiteSpace(trackUrl)
                 ? null
                 : await OnlineAudioTrackTap.StartAsync(trackUrl, referer, token);
-            var decoded = _tap is null ? null : await _tap.DecodeAllAsync(token);
+
+            // Дорожка докачивается фрагментами: первый скачанный префикс
+            // MediaFoundation часто не может декодировать (moov ещё не полон).
+            // Раньше это мгновенно уронило сеанс в живой режим — пользователь
+            // видел «не сработало». Ждём дозагрузку до 18 с, пока загрузка
+            // реально идёт, и лишь потом откатываемся.
+            byte[]? decoded = null;
+            if (_tap is not null)
+            {
+                var downloadedBefore = _tap.DownloadedBytes;
+                var lastProgressAt = DateTimeOffset.UtcNow;
+                var decodeDeadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(18);
+                while (!token.IsCancellationRequested)
+                {
+                    decoded = await _tap.DecodeAllAsync(token);
+                    if (decoded is not null || _tap.DownloadFinished) break;
+                    var now = DateTimeOffset.UtcNow;
+                    if (_tap.DownloadedBytes != downloadedBefore)
+                    {
+                        downloadedBefore = _tap.DownloadedBytes;
+                        lastProgressAt = now;
+                    }
+                    if (now >= decodeDeadline ||
+                        now - lastProgressAt > TimeSpan.FromSeconds(6)) break;
+                    await _tab.SetBufferingVeilAsync(true,
+                        "Ищу отдельную аудиодорожку…\nдекодирую скачанное");
+                    try { await Task.Delay(1200, token); }
+                    catch (OperationCanceledException) { break; }
+                }
+            }
             if (decoded is null)
             {
                 await CleanupFallbackAsync();
                 await fallbackToLive();
                 return TrackDubbingOutcome.FallbackToLive;
+            }
+
+            // Модели должны быть готовы к первому окну композиции; сбой
+            // прогрева не отменяет сеанс — композер повторит вызовы сам.
+            try { await coreWarmup; }
+            catch (Exception ex)
+            {
+                CrashReportService.RecordNonFatal("video-translation", "track-warmup", ex);
             }
 
             _player = new PrecomputedDubbingPlayer();
