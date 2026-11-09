@@ -55,19 +55,11 @@ public static class WhisperService
 
     public static void PrepareInBackground()
     {
+        // Только статус доступности. Сервер с моделью больше не поднимается при
+        // запуске браузера: загрузка происходит лениво при первой голосовой
+        // команде или переводе видео через EnsureServerStartedAsync.
         Status = IsReady ? "Whisper готов" : "Whisper отсутствует в автономном комплекте";
         LastError = IsReady ? null : AiModelCatalog.MissingSpeechRuntimeMessage;
-        if (IsReady && AiModelCatalog.WhisperServer is not null)
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(2));
-                    using var budget = new CancellationTokenSource(TimeSpan.FromMinutes(2));
-                    await WarmUpAsync(WhisperLane.Commands, budget.Token);
-                }
-                catch { /* Пользователь увидит точную ошибку при запуске перевода. */ }
-            });
     }
 
     public static Task EnsureInstalledAsync(IProgress<string>? progress = null,

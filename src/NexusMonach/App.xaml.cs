@@ -328,8 +328,6 @@ public partial class App : Application
                             () =>
                             {
                                 WhisperService.PrepareInBackground();
-                                TranslationService.WarmUpInBackground();
-                                LocalAiService.WarmUpInBackground();
                             }))
                     {
                         CrashReportService.AddBreadcrumb("startup", "ai-warmup-deferred-until-fetch");
@@ -337,8 +335,6 @@ public partial class App : Application
                     else
                     {
                         WhisperService.PrepareInBackground();
-                        TranslationService.WarmUpInBackground();
-                        LocalAiService.WarmUpInBackground();
                     }
                     _ = Task.Run(RussianStressDictionary.WarmUp);
                     // Осторожный режим: пробуем вернуть полный режим сами.
