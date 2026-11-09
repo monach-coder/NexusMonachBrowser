@@ -14,7 +14,7 @@
     <Product>Nexus Monach Browser</Product>
     <Description>Лёгкий приватный браузер на базе WebView2.</Description>
     <Deterministic>true</Deterministic>
-    <PublishReadyToRun>false</PublishReadyToRun>
+    <PublishReadyToRun>true</PublishReadyToRun>
   </PropertyGroup>
 
   <ItemGroup>
