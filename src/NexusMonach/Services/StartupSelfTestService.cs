@@ -63,21 +63,6 @@ public static class StartupSelfTestService
 
         try
         {
-            var mode = SettingsService.Current.PortShieldMode;
-            var active = PortShieldService.IsSessionShieldActive;
-            checks.Add(new BrowserCheck("port-shield",
-                mode == PortShieldMode.Off || active ? "ok" : "warn",
-                mode == PortShieldMode.Off ? "выключен в настройках"
-                    : active ? "правила применены"
-                    : "правила не применены"));
-        }
-        catch (Exception ex)
-        {
-            checks.Add(new BrowserCheck("port-shield", "warn", ex.Message));
-        }
-
-        try
-        {
             var engine = VoiceAssistantService.EngineStatus;
             checks.Add(new BrowserCheck("voice",
                 string.IsNullOrWhiteSpace(engine) ? "warn" : "ok",

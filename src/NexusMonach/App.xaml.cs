@@ -237,11 +237,8 @@ public partial class App : Application
                     firstRunSettings.Theme = themePicker.ResultTheme;
                     firstRunSettings.ThemeMode = themePicker.ResultMode;
                     firstRunSettings.NeuralVoiceProfile = themePicker.ResultVoice;
-                    // Мастер безопасности: порт-щит, Дозор, релейный мост.
-                    firstRunSettings.PortShieldMode = themePicker.ResultPortShield;
+                    // Мастер безопасности: Дозор.
                     firstRunSettings.NetworkWatchdogEnabled = themePicker.ResultWatchdog;
-                    firstRunSettings.TorRelayEnabled = themePicker.ResultRelay;
-                    firstRunSettings.TorRelayAcknowledged = themePicker.ResultRelay;
                     firstRunSettings.ThemeSelectionCompleted = true;
                     await SettingsService.SaveAsync(firstRunSettings);
                     splash.Show();
@@ -341,8 +338,6 @@ public partial class App : Application
                     GpuRecoveryService.StartIfCautiousMode();
                     // Недостающие AI-модели подтягиваются по сети в фоне.
                     Services.OnlinePack.AiPackFetchService.StartBackgroundFetch();
-                    // Порт-щит: скан и автозакрытие утекающих портов на сессию.
-                    Services.PortShieldService.StartAsync(SettingsService.Current);
                     // Скан VPN на машине: Tor в Режиме Следа оборачивается в
                     // найденный туннель; результат слышен и виден в логах.
                     _ = Task.Run(ReportVpnState);
@@ -445,8 +440,6 @@ public partial class App : Application
         Services.NetworkGovernor.Stop();
         // Контроль места засыпает вместе с браузером.
         Services.DiskSpaceWatchdog.Stop();
-        // Правила порт-щита живут только пока работает браузер.
-        Services.PortShieldService.RemoveSessionShield();
         CrashReportService.MarkCleanExit();
         base.OnExit(e);
     }
@@ -505,7 +498,7 @@ public partial class App : Application
                 try
                 {
                     var current = SettingsService.Current;
-                    if (current.TorInChain || current.TorRelayEnabled || current.TrailModeEnabled)
+                    if (current.TorInChain || current.TrailModeEnabled)
                     {
                         await Services.Tor.TorBridgeManager.RestartWithBridgesAsync(current);
                         Ui.Post(() => Services.VoiceAssistantService.Announce(
@@ -519,8 +512,8 @@ public partial class App : Application
                 }
             });
 
-        if (settings.TorInChain || settings.TorRelayEnabled || settings.TrailModeEnabled)
-            await Views.MainWindow.StartTorAndRelayOnceAsync();
+        if (settings.TorInChain || settings.TrailModeEnabled)
+            await Views.MainWindow.StartTorOnceAsync();
     }
 
     private static async Task ProcessCrashQueueAsync(Window owner)

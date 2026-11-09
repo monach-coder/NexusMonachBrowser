@@ -48,16 +48,14 @@ public static class TorBridgeManager
     }
 
     /// <summary>
-    /// Генерирует полный torrc на основе пользовательских мостов, релейного
-    /// моста и выбранного транспорта. Файл кладётся во временную папку —
-    /// основной torrc не трогаем. upstreamSocksPort оборачивает весь трафик
-    /// Тора в транспорт (Xray): без обёртки VPN или сервером прямой выход
-    /// в сеть у Тора обычно заблокирован.
+    /// Генерирует полный torrc на основе пользовательских мостов и выбранного
+    /// транспорта. Файл кладётся во временную папку — основной torrc не
+    /// трогаем. upstreamSocksPort оборачивает весь трафик Тора в транспорт
+    /// (Xray): без обёртки VPN или сервером прямой выход в сеть у Тора
+    /// обычно заблокирован.
     /// </summary>
     public static string GenerateTorrc(
-        List<ParsedBridge> bridges, int socksPort, bool relayEnabled = false,
-        string relayNickname = "", int relayOrPort = TorRelayService.DefaultOrPort,
-        int relayObfs4Port = TorRelayService.DefaultObfs4Port, int? upstreamSocksPort = null)
+        List<ParsedBridge> bridges, int socksPort, int? upstreamSocksPort = null)
     {
         var lines = new List<string>
         {
@@ -123,15 +121,11 @@ public static class TorBridgeManager
             }
         }
 
-        // Релейный мост: эта копия браузера помогает цензурным пользователям.
-        lines.AddRange(TorRelayService.BuildRelayLines(
-            relayEnabled, relayNickname, relayOrPort, relayObfs4Port));
-
         return string.Join(Environment.NewLine, lines) + Environment.NewLine;
     }
 
     /// <summary>
-    /// Запускает Tor с мостами и релеем из настроек. Перезапускает, если Tor
+    /// Запускает Tor с мостами из настроек. Перезапускает, если Tor
     /// уже работает с другим конфигом. Сгенерированный torrc передаётся
     /// процессу явно — основной torrc пользователя не используется.
     /// Прямого выхода у Тора нет: при поднятом транспорте (Xray) весь его
@@ -160,10 +154,7 @@ public static class TorBridgeManager
         var wrapPort = Services.Vless.VlessRuntime.IsRunning
             ? Services.Vless.VlessRuntime.SocksPort
             : (int?)null;
-        var torrcContent = GenerateTorrc(
-            bridges, TorService.SocksPort,
-            settings.TorRelayEnabled, settings.TorRelayNickname,
-            settings.TorRelayOrPort, settings.TorRelayObfs4Port, wrapPort);
+        var torrcContent = GenerateTorrc(bridges, TorService.SocksPort, wrapPort);
 
         // Записываем torrc во временную папку и стартуем Тор именно с ним.
         var dataDir = Path.Combine(Path.GetTempPath(), "nexus-tor-data");

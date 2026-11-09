@@ -162,21 +162,8 @@ public sealed class BrowserSettings
     /// модели не подтягиваются (полностью офлайн-режим).
     /// </summary>
     public string AiPackManifestUrl { get; set; } = string.Empty;
-    /// <summary>
-    /// Порт-щит. По умолчанию — тихие уведомления: автозакрытие требует UAC
-    /// и на первом запуске пугает; включается осознанно в настройках.
-    /// </summary>
-    public PortShieldMode PortShieldMode { get; set; } = PortShieldMode.NotifyOnly;
-    /// <summary>Релейный мост Tor: эта копия браузера помогает цензурным пользователям.
-    /// По умолчанию выключен — включение осознанное, в настройках или мастере первого запуска.</summary>
-    public bool TorRelayEnabled { get; set; }
-    /// <summary>Пользователь видел предупреждение о мосте и подтвердил осознанно.</summary>
-    public bool TorRelayAcknowledged { get; set; }
     /// <summary>Сетевой Дозор: ловушки, обман сканеров и стражи ARP/DNS при старте.</summary>
     public bool NetworkWatchdogEnabled { get; set; } = true;
-    public string TorRelayNickname { get; set; } = string.Empty;
-    public int TorRelayOrPort { get; set; } = Services.Tor.TorRelayService.DefaultOrPort;
-    public int TorRelayObfs4Port { get; set; } = Services.Tor.TorRelayService.DefaultObfs4Port;
     public bool InitialProtectionSetupShown { get; set; }
     public BrowserTheme Theme { get; set; } = BrowserTheme.MonachAqua;
     public BrowserThemeMode ThemeMode { get; set; } = BrowserThemeMode.Dark;
@@ -236,13 +223,7 @@ public sealed class BrowserSettings
         CrashReportEndpoint = CrashReportEndpoint,
         GitHubRepository = GitHubRepository,
         AiPackManifestUrl = AiPackManifestUrl,
-        PortShieldMode = PortShieldMode,
-        TorRelayEnabled = TorRelayEnabled,
-        TorRelayAcknowledged = TorRelayAcknowledged,
         NetworkWatchdogEnabled = NetworkWatchdogEnabled,
-        TorRelayNickname = TorRelayNickname,
-        TorRelayOrPort = TorRelayOrPort,
-        TorRelayObfs4Port = TorRelayObfs4Port,
         InitialProtectionSetupShown = InitialProtectionSetupShown,
         Theme = Theme,
         ThemeMode = ThemeMode,

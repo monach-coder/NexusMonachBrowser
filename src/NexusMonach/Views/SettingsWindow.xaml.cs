@@ -159,10 +159,6 @@ public partial class SettingsWindow : Window
         }
     }
 
-    /// <summary>
-    /// Прозрачность UAC: показываем ровно тот скрипт, который выполнит
-    /// порт-щит при повышении прав, с пояснением каждой строки.
-    /// </summary>
     /// <summary>Галка панели «Приватность и защита»: применяется сразу,
     /// без сохранения остальной формы.</summary>
     private async void PrivacyDockToggle_Changed(object sender, RoutedEventArgs e)
@@ -172,26 +168,6 @@ public partial class SettingsWindow : Window
         settings.ShowPrivacyMonitor = PrivacyDockCheck.IsChecked == true;
         await SettingsService.SaveAsync(settings);
         Views.MainWindow.ApplyPrivacyDockVisibility(settings.ShowPrivacyMonitor);
-    }
-
-    private void PreviewShieldScript_Click(object sender, RoutedEventArgs e)
-    {
-        var script = Services.PortShieldService.BuildRuleScript(
-            Services.PortShieldService.AutoClosedLeaks.ToList(), add: true);
-        var explained = string.Join(Environment.NewLine, script.TrimEnd().Split('\n')
-            .Select(line => line.TrimStart())
-            .Select(line => line.StartsWith("New-NetFirewallRule", StringComparison.Ordinal)
-                ? line + "   ← создать правило блокировки"
-                : line.StartsWith("Remove-NetFirewallRule", StringComparison.Ordinal)
-                    ? line + "   ← снять предыдущее правило (идемпотентность)"
-                    : line));
-        GlassDialogWindow.Show(this,
-            "Этот скрипт выполняется при включённом режиме «Авто» — один раз за сессию, скрыто (conhost --headless), виден только стандартный диалог UAC:\n\n" +
-            explained +
-            "\n\nПорты: 5353 mDNS, 1900 SSDP, 137–139 NetBIOS — утечки локальной сети. " +
-            "Пользовательские службы (RDP, SMB, VNC) скрипт не трогает.",
-            "Порт-щит · предпросмотр скрипта UAC",
-            MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
 
@@ -215,7 +191,6 @@ public partial class SettingsWindow : Window
             ["Compatibility"] = (CompatibilitySection, "Совместимость и функции"),
             ["Guardian"] = (GuardianSection, "Nexus Guardian"),
             ["Network"] = (NetworkSection, "Сеть, прокси и DNS"),
-            ["Monitor"] = (MonitorSection, "Privacy Dock"),
             ["Passkeys"] = (PasskeysSection, "Passkeys и Windows Hello")
         };
         foreach (var item in sections.Values)

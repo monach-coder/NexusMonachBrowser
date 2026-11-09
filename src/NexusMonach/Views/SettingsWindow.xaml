@@ -62,7 +62,6 @@
                     <TreeViewItem Header="Защита">
                         <TreeViewItem Header="Приватность" Tag="Privacy" />
                         <TreeViewItem Header="Сеть, прокси и DNS" Tag="Network" />
-                        <TreeViewItem Header="Privacy Dock" Tag="Monitor" />
                     </TreeViewItem>
                     <TreeViewItem Header="Данные и доступ">
                         <TreeViewItem Header="Nexus Guardian" Tag="Guardian" />
@@ -270,22 +269,6 @@
                             </StackPanel>
                         </Border>
                     </StackPanel>
-                </ScrollViewer>
-
-                <ScrollViewer x:Name="MonitorSection" Margin="0,46,0,0" Visibility="Collapsed"
-                              VerticalScrollBarVisibility="Auto">
-                    <Border Style="{StaticResource SettingsCard}">
-                        <StackPanel>
-                            <TextBlock Text="Порт-щит · диагностика"
-                                       FontSize="15" FontWeight="SemiBold" />
-                            <TextBlock Text="Порт-щит сканирует машину при каждом запуске и закрывает утекающие порты локальной сети (mDNS, SSDP, NetBIOS) правилами файрвола на время сессии. Пользовательские службы (RDP, SMB, VNC) не трогаются. Режим порт-щита переключается в панели «Приватность и защита»."
-                                       TextWrapping="Wrap" Margin="0,8,0,10" FontSize="11"
-                                       Foreground="{StaticResource MutedTextBrush}" />
-                            <Button Content="Показать скрипт закрытия портов (UAC)"
-                                    Style="{StaticResource ActionButton}" HorizontalAlignment="Left"
-                                    Click="PreviewShieldScript_Click" />
-                        </StackPanel>
-                    </Border>
                 </ScrollViewer>
 
                 <ScrollViewer x:Name="PasskeysSection" Margin="0,46,0,0" Visibility="Collapsed"

@@ -205,11 +205,6 @@
                     FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}"
                     ToolTip="Nexus Следопыт: найти, проверить и сравнить информацию" Click="ShoppingAgentTop_Click" />
 
-            <Button Grid.Column="8" Content="&gt;_" Style="{StaticResource IconButton}"
-                    FontFamily="Cascadia Mono, Consolas" FontSize="12" FontWeight="SemiBold"
-                    Foreground="{StaticResource AccentBrush}" ToolTip="SSH-терминал Linux"
-                    Click="SshTerminal_Click" />
-
             <Button x:Name="PlannerButton" Grid.Column="11" Content="План" Style="{StaticResource IconButton}"
                     FontFamily="Segoe UI" FontSize="11" FontWeight="SemiBold"
                     Foreground="{StaticResource AccentBrush}" ToolTip="Планировщик задач и защищённый обмен (вертикальная панель)"
@@ -252,7 +247,6 @@
                         <MenuItem x:Name="ExtensionsMenuItem" Header="Расширения" Click="ShowExtensions_Click" />
                         <MenuItem Header="Инструменты разработчика Chromium" InputGestureText="F12 / Ctrl+Shift+I"
                                   Click="ShowDeveloperTools_Click" />
-                        <MenuItem Header="SSH-терминал Linux" Click="SshTerminal_Click" />
                         <MenuItem Header="Сетевой Дозор · активная защита" Click="ShowNetworkWatchdog_Click" />
                         <MenuItem Header="Nexus Guardian · локальные рапорты" Click="ShowGuardianCenter_Click" />
                         <MenuItem Header="Настройки" Click="ShowSettings_Click" />
@@ -284,9 +278,6 @@
             </Border>
             <views:LocalAiDockControl x:Name="LocalAiDock" Grid.Column="1" Visibility="Collapsed"
                                       HorizontalAlignment="Right" VerticalAlignment="Stretch" />
-            <views:SshTerminalDockControl x:Name="SshTerminalDock" Grid.Column="1" Visibility="Collapsed"
-                                          HorizontalAlignment="Right" VerticalAlignment="Stretch"
-                                          CloseRequested="SshTerminal_CloseRequested" />
             <!-- Вертикальная панель планировщика: задачи + защищённый обмен.
                  Скрыта по умолчанию, кнопка «План» на панели инструментов. -->
             <views:PlannerDockControl x:Name="PlannerDock" Grid.Column="1" Visibility="Collapsed"

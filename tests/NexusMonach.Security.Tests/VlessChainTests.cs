@@ -96,7 +96,7 @@ public sealed class VlessChainTests
     public void Torrc_WithUpstream_WrapsTorInTransport()
     {
         var torrc = TorBridgeManager.GenerateTorrc(
-            bridges: [], socksPort: 9051, relayEnabled: false, upstreamSocksPort: 9155);
+            bridges: [], socksPort: 9051, upstreamSocksPort: 9155);
         Assert.Contains("Socks5Proxy 127.0.0.1:9155", torrc, StringComparison.Ordinal);
     }
 
@@ -104,7 +104,7 @@ public sealed class VlessChainTests
     public void Torrc_WithoutUpstream_NoWrapLine()
     {
         var torrc = TorBridgeManager.GenerateTorrc(
-            bridges: [], socksPort: 9051, relayEnabled: false);
+            bridges: [], socksPort: 9051);
         Assert.DoesNotContain("Socks5Proxy", torrc, StringComparison.Ordinal);
     }
 

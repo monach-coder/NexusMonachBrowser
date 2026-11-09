@@ -20,7 +20,7 @@ internal readonly record struct ArpRow(
 ///      полный снимок ARP-таблицы атакуемого интерфейса — видно, кто
 ///      ещё объявляется в сети.
 ///   2. Закрепляет статическую ARP-запись шлюза (исходный MAC) через
-///      единый скрытый механизм PortShieldService — подмена перестаёт
+///      единый скрытый механизм ElevatedScriptRunner — подмена перестаёт
 ///      действовать до перезагрузки.
 ///   3. Оповещает один раз на комбинацию (шлюз, старый→новый MAC),
 ///      а не спамит каждые пять секунд.
@@ -113,7 +113,7 @@ internal static class ArpGuard
 
     /// <summary>
     /// Закрепляет шлюз за исходным MAC: исполнение делегируется единому
-    /// механизму PortShieldService.RunElevatedScript (conhost --headless).
+    /// механизму ElevatedScriptRunner (conhost --headless).
     /// Статическая запись не перезаписывается ARP-ответами атакующего.
     /// </summary>
     private static bool TryPinGateway(string interfaceName, string gateway, string mac)
@@ -121,7 +121,7 @@ internal static class ArpGuard
         if (Interlocked.Exchange(ref _pinAttempted, 1) != 0) return false;
         try
         {
-            return PortShieldService.RunElevatedScript(
+            return ElevatedScriptRunner.RunAsync(
                 BuildPinScript(interfaceName, gateway, FormatMac(mac)), "nexus-arp-pin").Result;
         }
         catch

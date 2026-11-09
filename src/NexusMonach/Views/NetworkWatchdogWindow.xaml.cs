@@ -68,23 +68,16 @@ public partial class NetworkWatchdogWindow : Window
 
             var dangerous = results.Count(r => r.Severity == 2);
             var warnings = results.Count(r => r.Severity == 1);
-            var shieldOn = Services.PortShieldService.IsSessionShieldActive;
-            var shieldLine = shieldOn
-                ? "Порт-щит: АКТИВЕН — mDNS/SSDP/NetBIOS закрыты файрволом на сессию, IP не утекает."
-                : "Порт-щит: не активен (включите режим «Авто» в настройках — утечки закроются сами).";
             ScanSummary.Text =
-                shieldLine + "\n" +
                 (dangerous > 0
                     ? $"Службы удалённого доступа/файлообмена: {dangerous}. Браузер их НЕ закрывает, чтобы не сломать твой доступ — отключите ненужные вручную (RDP, SMB, VNC). "
                     : "Опасных служб не найдено. ") +
-                $"Утечки LAN: {warnings} (порт-щит закрывает их автоматически).";
+                $"Открытых LAN-утечек (mDNS/SSDP/NetBIOS): {warnings}.";
 
             // Голосовой итог — фирменная озвучка уведомлений браузера.
             var spoken = dangerous > 0
-                ? $"Сканирование завершено. Служб удалённого доступа: {dangerous} — браузер их не трогает, отключите ненужные вручную. Порт-щит активен."
-                : shieldOn
-                    ? "Сканирование завершено. Утечки локальной сети закрыты порт-щитом."
-                    : $"Сканирование завершено. Открытых слушателей: {results.Count}. Порт-щит не активен.";
+                ? $"Сканирование завершено. Служб удалённого доступа: {dangerous} — браузер их не трогает, отключите ненужные вручную."
+                : $"Сканирование завершено. Открытых слушателей: {results.Count}.";
             Services.VoiceAssistantService.Announce(spoken,
                 Services.VoiceAnnouncementPriority.Important);
         }

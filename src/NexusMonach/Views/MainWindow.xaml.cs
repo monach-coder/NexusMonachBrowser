@@ -462,28 +462,23 @@ public partial class MainWindow : Window
         return Task.CompletedTask;
     }
 
-    private static int _torRelayStarted;
+    private static int _torAutostarted;
     private Action? _sledopytBadgeArmed;
 
     /// <summary>
-    /// Автостарт Тора один раз на сессию — с обёрткой (транспорт или VPN),
-    /// мостами пользователя и релейным мостом. Вызывается из сетевой цепочки
-    /// App после подъёма транспорта: torrc генерируется под фактическое
-    /// состояние туннеля.
+    /// Автостарт Тора один раз на сессию — с обёрткой (транспорт или VPN)
+    /// и мостами пользователя. Вызывается из сетевой цепочки App после
+    /// подъёма транспорта: torrc генерируется под фактическое состояние
+    /// туннеля.
     /// </summary>
-    internal static async Task StartTorAndRelayOnceAsync()
+    internal static async Task StartTorOnceAsync()
     {
-        if (Interlocked.Exchange(ref _torRelayStarted, 1) != 0) return;
+        if (Interlocked.Exchange(ref _torAutostarted, 1) != 0) return;
         if (Services.Tor.TorService.IsRunning)
             return; // Уже поднят общесессионным автостартом из App.
         try
         {
             var settings = SettingsService.Current;
-            if (string.IsNullOrWhiteSpace(settings.TorRelayNickname))
-            {
-                settings.TorRelayNickname = Services.Tor.TorRelayService.DefaultNickname();
-                await SettingsService.SaveAsync(settings);
-            }
             var state = await Services.Tor.TorBridgeManager.RestartWithBridgesAsync(settings);
             CrashReportService.AddBreadcrumb("tor", "chain-autostart-" + state);
             if (state == Services.Tor.TorState.Failed) return;
@@ -498,11 +493,6 @@ public partial class MainWindow : Window
             else if (chain.TorInChain)
                 Ui.Post(() => Services.VoiceAssistantService.Announce(
                     "Анонимный слой ждёт туннель: сервер или системный туннель. Браузер работает с максимальной защитой, но IP реальный.",
-                    Services.VoiceAnnouncementPriority.Important));
-
-            if (settings.TorRelayEnabled)
-                Ui.Post(() => Services.VoiceAssistantService.Announce(
-                    "Релейный мост запущен. Ваш браузер помогает пользователям цензурных сетей.",
                     Services.VoiceAnnouncementPriority.Important));
         }
         catch (Exception ex)
@@ -576,7 +566,6 @@ public partial class MainWindow : Window
             // на сайте, ему не мешаем. Окно — только по кнопке.
             Dispatcher.Invoke(() =>
             {
-                SshTerminalDock.Visibility = Visibility.Collapsed;
                 LocalAiDock.BeginBackgroundResearch(tab, query, silent: true);
             });
             var pageText = await tab.GetReadablePageTextAsync();
@@ -1123,7 +1112,6 @@ public partial class MainWindow : Window
     {
         var tab = ActiveTab;
         if (tab?.Core is null) return;
-        SshTerminalDock.Visibility = Visibility.Collapsed;
         // Тихий результат Следопыта ждёт здесь: сбрасываем индикатор
         // и показываем накопленное без вторжения в browsing.
         ResetSledopytBadge();
@@ -1325,7 +1313,6 @@ public partial class MainWindow : Window
                 break;
             }
             case VoiceCommandKind.OpenSledopyt when activeTab?.Core is not null:
-                SshTerminalDock.Visibility = Visibility.Collapsed;
                 await LocalAiDock.ShowForTabAsync(activeTab); break;
             case VoiceCommandKind.Search:
                 AddressBox.Text = command.Argument;
@@ -1362,18 +1349,6 @@ public partial class MainWindow : Window
         try { await operation(); }
         finally { if (resume && !_closing) StartHandsFreeIfEnabled(); }
     }
-
-    private void SshTerminal_Click(object sender, RoutedEventArgs e)
-    {
-        LocalAiDock.Visibility = Visibility.Collapsed;
-        SshTerminalDock.Visibility = SshTerminalDock.Visibility == Visibility.Visible
-            ? Visibility.Collapsed : Visibility.Visible;
-        if (SshTerminalDock.Visibility == Visibility.Visible)
-            SshTerminalDock.FocusTarget();
-    }
-
-    private void SshTerminal_CloseRequested(object? sender, EventArgs e) =>
-        SshTerminalDock.Visibility = Visibility.Collapsed;
 
     private void ShowDeveloperTools_Click(object sender, RoutedEventArgs e) =>
         ActiveTab?.Core?.OpenDevToolsWindow();
@@ -1725,7 +1700,6 @@ public partial class MainWindow : Window
         LocalAiDock.StopVideoTranslation();
         _voiceListenCancellation?.Cancel();
         StopHandsFree();
-        SshTerminalDock.Disconnect();
         foreach (var research in _tabResearch.Values)
         {
             research.NexusSearch?.Cancel();

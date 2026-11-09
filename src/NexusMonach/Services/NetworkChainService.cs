@@ -199,7 +199,7 @@ public static class NetworkChainService
     /// транспорта, чтобы torrc подхватил или сбросил Socks5Proxy.
     /// </summary>
     public static Task RewrapTorAsync(BrowserSettings settings) =>
-        settings.TorInChain || settings.TorRelayEnabled || settings.TrailModeEnabled
+        settings.TorInChain || settings.TrailModeEnabled
             ? Tor.TorBridgeManager.RestartWithBridgesAsync(settings)
             : Task.CompletedTask;
 

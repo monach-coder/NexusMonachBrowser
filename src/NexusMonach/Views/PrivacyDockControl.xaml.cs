@@ -46,12 +46,6 @@ public partial class PrivacyDockControl : UserControl
 
     private void Control_Loaded(object sender, RoutedEventArgs e)
     {
-        PortShieldCombo.ItemsSource = new Choice<Services.PortShieldMode>[]
-        {
-            new("Порт-щит: авто (один UAC)", Services.PortShieldMode.Auto),
-            new("Порт-щит: только уведомлять", Services.PortShieldMode.NotifyOnly),
-            new("Порт-щит: выключен", Services.PortShieldMode.Off)
-        };
         LoadState();
         StartRefresh();
     }
@@ -86,14 +80,7 @@ public partial class PrivacyDockControl : UserControl
         ProxyKindCombo.SelectedIndex = settings.ProxyKind == ProxyKind.Http ? 1 : 0;
         TrailModeCheck.IsChecked = settings.TrailModeEnabled;
         WatchdogCheck.IsChecked = settings.NetworkWatchdogEnabled;
-        RelayCheck.IsChecked = settings.TorRelayEnabled;
         WebRtcLeakCheck.IsChecked = settings.PreventWebRtcIpLeak;
-        PortShieldCombo.SelectedIndex = settings.PortShieldMode switch
-        {
-            Services.PortShieldMode.Auto => 0,
-            Services.PortShieldMode.Off => 2,
-            _ => 1
-        };
         _suppressEvents = false;
         RefreshChain();
     }
@@ -203,54 +190,11 @@ public partial class PrivacyDockControl : UserControl
             Services.VoiceAnnouncementPriority.Important);
     }
 
-    private async void Relay_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_suppressEvents) return;
-        var settings = SettingsService.Current;
-        var enable = RelayCheck.IsChecked == true;
-
-        // Включение моста — осознанное решение: человек должен понимать,
-        // что увидит провайдер и когда мост реально полезен.
-        if (enable && !settings.TorRelayAcknowledged)
-        {
-            var answer = GlassDialogWindow.Show(Window.GetWindow(this),
-                "Вы включаете релейный мост — эта копия браузера станет точкой входа в анонимную сеть для людей из цензурных сетей.\n\n" +
-                "Что нужно знать:\n" +
-                "• Провайдер увидит трафик анонимной сети с вашей машины (вы НЕ выходной узел — чужой трафик через вас не проходит наружу).\n" +
-                "• Без проброса портов 9101–9102 на роутере мост бесполезен для других, но трафик виден. Порт-проброс делается в админке роутера.\n" +
-                "• В отдельных странах сам факт работы моста — серая зона. Решайте сами.\n\n" +
-                "Включить мост?",
-                "Релейный мост", MessageBoxButton.YesNo, MessageBoxImage.Question);
-            if (answer != MessageBoxResult.Yes)
-            {
-                _suppressEvents = true;
-                RelayCheck.IsChecked = false;
-                _suppressEvents = false;
-                return;
-            }
-            settings.TorRelayAcknowledged = true;
-        }
-
-        settings.TorRelayEnabled = enable;
-        if (enable && string.IsNullOrWhiteSpace(settings.TorRelayNickname))
-            settings.TorRelayNickname = Services.Tor.TorRelayService.DefaultNickname();
-        await SettingsService.SaveAsync(settings);
-    }
-
     private async void WebRtc_Changed(object sender, RoutedEventArgs e)
     {
         if (_suppressEvents) return;
         var settings = SettingsService.Current;
         settings.PreventWebRtcIpLeak = WebRtcLeakCheck.IsChecked == true;
-        await SettingsService.SaveAsync(settings);
-    }
-
-    private async void PortShield_Changed(object sender, SelectionChangedEventArgs e)
-    {
-        if (_suppressEvents || PortShieldCombo.SelectedItem is not Choice<Services.PortShieldMode> choice)
-            return;
-        var settings = SettingsService.Current;
-        settings.PortShieldMode = choice.Value;
         await SettingsService.SaveAsync(settings);
     }
 
