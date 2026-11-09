@@ -35,3 +35,4 @@ src/NexusMonach/xray/*.log
 *.key
 .mimosa/
 src/Nexus.Setup/integrity-public-key.pem
+dist-fast/
