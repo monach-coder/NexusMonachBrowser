@@ -51,7 +51,10 @@ public static class KnowledgeGraphService
         await SemanticGate.WaitAsync(cancellationToken);
         try
         {
-            semantics = await LocalIntelligenceService.AnalyzePageAsync(title, url, text, cancellationToken);
+            // Автоматическая индексация при навигации не запускает LLM: раньше она
+            // поднимала llama-server с Qwen через 5 секунд после каждой открытой страницы.
+            // Модель по-прежнему используется в явных исследованиях (RecordResearchAsync).
+            semantics = LocalIntelligenceService.AnalyzePageHeuristic(title, url, text);
             embedding = await NexusFabricRuntime.EmbedSemanticsAsync(
                 title + "\n" + semantics.Summary + "\n" + text[..Math.Min(text.Length, 12_000)], cancellationToken);
         }

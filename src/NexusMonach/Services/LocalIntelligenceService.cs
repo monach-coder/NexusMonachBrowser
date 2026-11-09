@@ -35,6 +35,12 @@ public static class LocalIntelligenceService
         catch { return fallback; }
     }
 
+    /// <summary>Дешёвый разбор страницы без запуска языковой модели —
+    /// для автоматической фоновой индексации графа знаний.</summary>
+    public static PageSemantics AnalyzePageHeuristic(string title, string url, string text) =>
+        new(string.IsNullOrWhiteSpace(title) ? url : title,
+            ExtractKeywords(title + " " + text, 8));
+
     public static async Task<IReadOnlyList<SmartCapsule>> BuildCapsulesAsync(
         IReadOnlyList<(string Title, string Url)> tabs, CancellationToken cancellationToken = default)
     {
