@@ -768,7 +768,7 @@ public partial class MainWindow : Window
 
     private void RefreshLocalPorts()
     {
-        if (DateTime.UtcNow - _localPortsUpdatedUtc < TimeSpan.FromSeconds(5)) return;
+        if (DateTime.UtcNow - _localPortsUpdatedUtc < TimeSpan.FromSeconds(30)) return;
         try
         {
             _localPortDetails = WindowsPortService.GetListeningPorts().ToArray();
@@ -1646,7 +1646,21 @@ public partial class MainWindow : Window
         _downloadBytesPerSecond = snapshot.DownloadBytesPerSecond;
         _uploadBytesPerSecond = snapshot.UploadBytesPerSecond;
         _pingMilliseconds = snapshot.PingMilliseconds;
-        SyncUi();
+        UpdateNetworkReadouts();
+    }
+
+    private void UpdateNetworkReadouts()
+    {
+        if (ActiveTab is null) return;
+        RefreshLocalPorts();
+        TopologyLocalPortsText.Text = _localPortsAvailable
+            ? $"TCP {_localTcpPorts.Length} · UDP {_localUdpPorts.Length}"
+            : "Нет доступа";
+        TopologyRateText.Text =
+            $"↓ {FormatRate(_downloadBytesPerSecond)} · ↑ {FormatRate(_uploadBytesPerSecond)}";
+        TopologyRateText.Foreground = RateBrush(Math.Max(_downloadBytesPerSecond, _uploadBytesPerSecond));
+        TopologyPingText.Text = $"PING {(_pingMilliseconds is null ? "—" : _pingMilliseconds + " мс")}";
+        TopologyPingText.Foreground = PingBrush(_pingMilliseconds);
     }
 
     private static string FormatRate(double bytesPerSecond)
@@ -1656,24 +1670,38 @@ public partial class MainWindow : Window
         return $"{bytesPerSecond:0} Б/с";
     }
 
+    private static readonly Brush RateIdleBrush = FrozenBrush(145, 162, 180);
+    private static readonly Brush RateExcellentBrush = FrozenBrush(56, 217, 150);
+    private static readonly Brush RateGoodBrush = FrozenBrush(155, 225, 93);
+    private static readonly Brush RateMediumBrush = FrozenBrush(218, 185, 106);
+    private static readonly Brush RateSlowBrush = FrozenBrush(228, 123, 53);
+    private static readonly Brush RateBadBrush = FrozenBrush(140, 47, 75);
+
+    private static Brush FrozenBrush(byte r, byte g, byte b)
+    {
+        var brush = new SolidColorBrush(Color.FromRgb(r, g, b));
+        brush.Freeze();
+        return brush;
+    }
+
     private static Brush RateBrush(double bytesPerSecond) => bytesPerSecond switch
     {
-        <= 1 => new SolidColorBrush(Color.FromRgb(145, 162, 180)),
-        >= 5 * 1024 * 1024 => new SolidColorBrush(Color.FromRgb(56, 217, 150)),
-        >= 1024 * 1024 => new SolidColorBrush(Color.FromRgb(155, 225, 93)),
-        >= 256 * 1024 => new SolidColorBrush(Color.FromRgb(218, 185, 106)),
-        >= 64 * 1024 => new SolidColorBrush(Color.FromRgb(228, 123, 53)),
-        _ => new SolidColorBrush(Color.FromRgb(140, 47, 75))
+        <= 1 => RateIdleBrush,
+        >= 5 * 1024 * 1024 => RateExcellentBrush,
+        >= 1024 * 1024 => RateGoodBrush,
+        >= 256 * 1024 => RateMediumBrush,
+        >= 64 * 1024 => RateSlowBrush,
+        _ => RateBadBrush
     };
 
     private static Brush PingBrush(long? ping) => ping switch
     {
-        null => new SolidColorBrush(Color.FromRgb(140, 47, 75)),
-        <= 40 => new SolidColorBrush(Color.FromRgb(56, 217, 150)),
-        <= 80 => new SolidColorBrush(Color.FromRgb(155, 225, 93)),
-        <= 150 => new SolidColorBrush(Color.FromRgb(218, 185, 106)),
-        <= 250 => new SolidColorBrush(Color.FromRgb(228, 123, 53)),
-        _ => new SolidColorBrush(Color.FromRgb(140, 47, 75))
+        null => RateBadBrush,
+        <= 40 => RateExcellentBrush,
+        <= 80 => RateGoodBrush,
+        <= 150 => RateMediumBrush,
+        <= 250 => RateSlowBrush,
+        _ => RateBadBrush
     };
 
     private async void Window_Closing(object? sender, CancelEventArgs e)
