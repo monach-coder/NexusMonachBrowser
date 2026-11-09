@@ -96,10 +96,11 @@ public static class BrowserEnvironment
 
     public static async Task ClearEphemeralBrowsingDataAsync()
     {
+        // Дисковый HTTP-кэш намеренно сохраняется: его очистка превращала каждый
+        // запуск браузера в холодный и заметно замедлял повторное открытие сайтов.
         const CoreWebView2BrowsingDataKinds ephemeral =
             CoreWebView2BrowsingDataKinds.BrowsingHistory |
-            CoreWebView2BrowsingDataKinds.DownloadHistory |
-            CoreWebView2BrowsingDataKinds.DiskCache;
+            CoreWebView2BrowsingDataKinds.DownloadHistory;
         await ClearProfilesAsync(ephemeral, TimeSpan.FromSeconds(4));
     }
 
