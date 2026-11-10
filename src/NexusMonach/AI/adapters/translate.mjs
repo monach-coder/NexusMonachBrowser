@@ -1,3 +1,4 @@
+import os from 'node:os';
 import readline from 'node:readline';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +11,13 @@ const { pipeline, env } = require(path.join(here, '..', 'node_modules', '@huggin
 env.allowRemoteModels = false;
 env.allowLocalModels = true;
 env.useBrowserCache = false;
+
+// Полное логическое число потоков (напр. 18 = 9 физических ядер x HT)
+// ЗАМЕДЛЯЕТ Marian примерно на 30%: intra-op потоки дерутся за одни и те же
+// физические ядра. Половина логических = физические ядра: быстрее и остаётся
+// воздух для браузера, whisper и TTS. Замер: 8x12 фрагментов 61 с -> 43 с.
+const intraOpThreads = Math.max(2, Math.floor(os.cpus().length / 2));
+const sessionOptions = { intraOpNumThreads: intraOpThreads, interOpNumThreads: 1 };
 
 const multilingualToEnglishPath = path.resolve(process.argv[2]);
 const englishToRussianPath = path.resolve(process.argv[3]);
@@ -41,6 +49,7 @@ async function getMultilingualToEnglish() {
   multilingualToEnglish ??= await pipeline('translation', multilingualToEnglishPath, {
     dtype: 'q8',
     local_files_only: true,
+    session_options: sessionOptions,
   });
   return multilingualToEnglish;
 }
@@ -49,6 +58,7 @@ async function getEnglishToRussian() {
   englishToRussian ??= await pipeline('translation', englishToRussianPath, {
     dtype: 'q8',
     local_files_only: true,
+    session_options: sessionOptions,
   });
   return englishToRussian;
 }
@@ -57,6 +67,7 @@ async function getKoreanToEnglish() {
   koreanToEnglish ??= await pipeline('translation', koreanToEnglishPath, {
     dtype: 'q8',
     local_files_only: true,
+    session_options: sessionOptions,
   });
   return koreanToEnglish;
 }

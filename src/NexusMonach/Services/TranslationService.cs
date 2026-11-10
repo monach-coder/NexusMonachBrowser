@@ -15,11 +15,12 @@ public static class TranslationService
 {
     private sealed record TranslationReply(string Id, List<TranslationSegment>? Items, string? Error);
 
-    // Два резидентных воркера: страница из сотни DOM-фрагментов переводится
-    // двумя Node/ONNX процессами параллельно (почти ×2 к скорости), а память
-    // остаётся ограниченной — каждый воркер держит те же три компактных
-    // OPUS-маршрута (~350 МБ моделей на диске, q8).
-    private const int MaxWorkers = 2;
+    // Один резидентный воркер. Замер на 18-ядерной машине (8 пакетов по 12
+    // фрагментов): один воркер — 61 с, два воркера — 66 с: ONNX и так занимает
+    // все физические ядра, второй процесс добавляет только +350 МБ памяти.
+    // Реальный прирост (-29%, 61 -> 43 с) даёт ограничение intraOpNumThreads
+    // в translate.mjs. Пул сохранён на случай смены бэкенда: вернуть 2.
+    private const int MaxWorkers = 1;
     private static readonly object Sync = new();
     private static readonly SemaphoreSlim Slots = new(MaxWorkers, MaxWorkers);
     private static readonly ConcurrentQueue<Process> Idle = new();
